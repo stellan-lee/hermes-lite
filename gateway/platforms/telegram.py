@@ -107,6 +107,26 @@ _TELEGRAM_IMAGE_EXT_TO_MIME = {
 
 MAX_COMMANDS_PER_SCOPE = 30
 
+_CLARIFY_APPROVE_LABELS = {"approve", "approved", "yes", "allow", "accept", "confirm", "ok"}
+_CLARIFY_DENY_LABELS = {"deny", "denied", "no", "reject", "decline", "cancel"}
+
+
+def _telegram_clarify_decision_indices(choices: Optional[list]) -> Optional[tuple[int, int]]:
+    """Return approve/deny choice indexes for a two-choice decision prompt.
+
+    The generic clarify UI offers an "Other" button because most choices are
+    preference questions. A binary approval prompt should not offer that escape
+    hatch: the agent is blocked waiting for an explicit approve/deny decision.
+    """
+    if not choices or len(choices) != 2:
+        return None
+    normalized = [str(choice).strip().lower() for choice in choices]
+    if normalized[0] in _CLARIFY_APPROVE_LABELS and normalized[1] in _CLARIFY_DENY_LABELS:
+        return (0, 1)
+    if normalized[1] in _CLARIFY_APPROVE_LABELS and normalized[0] in _CLARIFY_DENY_LABELS:
+        return (1, 0)
+    return None
+
 
 def check_telegram_requirements() -> bool:
     """Check if Telegram dependencies are available.
@@ -2793,7 +2813,9 @@ class TelegramAdapter(BasePlatformAdapter):
             text = f"❓ {_html.escape(question)}"
             thread_id = self._metadata_thread_id(metadata)
 
-            if choices:
+            decision_indices = _telegram_clarify_decision_indices(choices)
+
+            if choices and decision_indices is None:
                 # Render full option text in the message body so mobile
                 # users can read long choices that would be truncated in
                 # inline button labels.  Buttons keep short numeric labels
@@ -2814,20 +2836,33 @@ class TelegramAdapter(BasePlatformAdapter):
             if choices:
                 # Telegram caps callback_data at 64 bytes; keep "cl:<id>:<idx>"
                 # short.
-                rows = []
-                for idx in range(len(choices)):
+                if decision_indices is not None:
+                    approve_idx, deny_idx = decision_indices
+                    rows = [[
+                        InlineKeyboardButton(
+                            "✅ Approve",
+                            callback_data=f"cl:{clarify_id}:{approve_idx}",
+                        ),
+                        InlineKeyboardButton(
+                            "❌ Deny",
+                            callback_data=f"cl:{clarify_id}:{deny_idx}",
+                        ),
+                    ]]
+                else:
+                    rows = []
+                    for idx in range(len(choices)):
+                        rows.append([
+                            InlineKeyboardButton(
+                                str(idx + 1),
+                                callback_data=f"cl:{clarify_id}:{idx}",
+                            )
+                        ])
                     rows.append([
                         InlineKeyboardButton(
-                            str(idx + 1),
-                            callback_data=f"cl:{clarify_id}:{idx}",
+                            "✏️ Other (type answer)",
+                            callback_data=f"cl:{clarify_id}:other",
                         )
                     ])
-                rows.append([
-                    InlineKeyboardButton(
-                        "✏️ Other (type answer)",
-                        callback_data=f"cl:{clarify_id}:other",
-                    )
-                ])
                 kwargs["reply_markup"] = InlineKeyboardMarkup(rows)
 
             reply_to_id = self._reply_to_message_id_for_send(None, metadata)
@@ -3517,10 +3552,38 @@ class TelegramAdapter(BasePlatformAdapter):
                     logger.error("[%s] resolve_gateway_clarify failed: %s", self.name, exc)
                     resolved = False
 
-                await query.answer(text=f"✓ {resolved_text[:60]}")
+                decision_indices = None
+                question_text = query.message.text or ""
+                try:
+                    if entry and entry.choices:
+                        decision_indices = _telegram_clarify_decision_indices(entry.choices)
+                except Exception:
+                    decision_indices = None
+
+                if decision_indices is not None:
+                    approve_idx, deny_idx = decision_indices
+                    if idx == approve_idx:
+                        label = "✅ Approved"
+                    elif idx == deny_idx:
+                        label = "❌ Denied"
+                    else:
+                        label = f"✓ {resolved_text[:60]}"
+                    edit_text = (
+                        f"{_html.escape(question_text)}\n\n"
+                        f"<b>{_html.escape(label)}</b> by {_html.escape(user_display)}"
+                    )
+                    answer_text = label
+                else:
+                    edit_text = (
+                        f"❓ {_html.escape(question_text)}\n\n"
+                        f"<b>{_html.escape(user_display)}:</b> {_html.escape(resolved_text)}"
+                    )
+                    answer_text = f"✓ {resolved_text[:60]}"
+
+                await query.answer(text=answer_text)
                 try:
                     await query.edit_message_text(
-                        text=f"❓ {_html.escape(query.message.text or '')}\n\n<b>{_html.escape(user_display)}:</b> {_html.escape(resolved_text)}",
+                        text=edit_text,
                         parse_mode=ParseMode.HTML,
                         reply_markup=None,
                     )
