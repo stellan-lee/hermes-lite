@@ -133,6 +133,40 @@ class TestTelegramSendClarify:
         assert adapter._clarify_state["cid2"] == "sk2"
 
     @pytest.mark.asyncio
+    async def test_approve_deny_choices_render_two_button_card(self):
+        adapter = _make_adapter()
+        mock_msg = MagicMock()
+        mock_msg.message_id = 104
+        adapter._bot.send_message = AsyncMock(return_value=mock_msg)
+
+        def _button(text, callback_data):
+            return {"text": text, "callback_data": callback_data}
+
+        def _markup(rows):
+            return {"rows": rows}
+
+        with patch("gateway.platforms.telegram.InlineKeyboardButton", _button), \
+             patch("gateway.platforms.telegram.InlineKeyboardMarkup", _markup):
+            result = await adapter.send_clarify(
+                chat_id="12345",
+                question="Approve this decision?",
+                choices=["Approve", "Deny"],
+                clarify_id="cidDecision",
+                session_key="sk-decision",
+            )
+
+        assert result.success is True
+        kwargs = adapter._bot.send_message.call_args[1]
+        assert "Approve this decision?" in kwargs["text"]
+        assert "1. Approve" not in kwargs["text"]
+        markup = kwargs["reply_markup"]
+        assert markup["rows"] == [[
+            {"text": "✅ Approve", "callback_data": "cl:cidDecision:0"},
+            {"text": "❌ Deny", "callback_data": "cl:cidDecision:1"},
+        ]]
+        assert adapter._clarify_state["cidDecision"] == "sk-decision"
+
+    @pytest.mark.asyncio
     async def test_not_connected(self):
         adapter = _make_adapter()
         adapter._bot = None
@@ -241,6 +275,46 @@ class TestTelegramClarifyCallback:
         assert entry.event.is_set()
         query.answer.assert_called_once()
         query.edit_message_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_approve_deny_choice_edits_card_to_selected_result(self):
+        from tools import clarify_gateway as cm
+
+        adapter = _make_adapter()
+        cm.register("cidDecision", "sk-decision", "Approve this decision?", ["Approve", "Deny"])
+        adapter._clarify_state["cidDecision"] = "sk-decision"
+
+        query = AsyncMock()
+        query.data = "cl:cidDecision:0"
+        query.message = MagicMock()
+        query.message.chat_id = 12345
+        query.message.text = "❓ Approve this decision?"
+        query.from_user = MagicMock()
+        query.from_user.id = "777"
+        query.from_user.first_name = "Tester"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = MagicMock()
+        update.callback_query = query
+        context = MagicMock()
+
+        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "*"}, clear=False):
+            await adapter._handle_callback_query(update, context)
+
+        with cm._lock:
+            entry = cm._entries.get("cidDecision")
+        assert entry is not None
+        assert entry.response == "Approve"
+        assert entry.event.is_set()
+        query.answer.assert_called_once()
+        assert "Approved" in query.answer.call_args[1]["text"]
+        query.edit_message_text.assert_called_once()
+        edit_kwargs = query.edit_message_text.call_args[1]
+        assert "Approved" in edit_kwargs["text"]
+        assert "Tester" in edit_kwargs["text"]
+        assert "Deny" not in edit_kwargs["text"]
+        assert edit_kwargs["reply_markup"] is None
 
     @pytest.mark.asyncio
     async def test_other_button_flips_to_text_mode(self):
