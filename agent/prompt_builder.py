@@ -163,6 +163,15 @@ SESSION_SEARCH_GUIDANCE = (
     "asking them to repeat themselves."
 )
 
+CLARIFY_GUIDANCE = (
+    "When you need a response from the user before continuing and the clarify "
+    "tool is available, call clarify instead of asking in plain text. If the "
+    "user explicitly asks you to use clarify, ask a decision, or present an "
+    "approval/deny choice, your next assistant message must call clarify. For "
+    "a binary human approval decision, call clarify with exactly "
+    "choices=[\"Approve\", \"Deny\"]."
+)
+
 SKILLS_GUIDANCE = (
     "After completing a complex task (5+ tool calls), fixing a tricky error, "
     "or discovering a non-trivial workflow, save the approach as a "

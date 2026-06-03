@@ -1147,6 +1147,44 @@ class TestBuildSystemPrompt:
         assert mock_skills.call_args.kwargs["available_toolsets"] == {"web", "skills"}
 
 
+class TestClarifyGuidance:
+    """Tests for clarify-specific prompt steering."""
+
+    def _make_agent(self, tools):
+        with (
+            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs(*tools)),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+        ):
+            a = AIAgent(
+                model="anthropic/claude-sonnet-4",
+                api_key="test-key-1234567890",
+                base_url="https://openrouter.ai/api/v1",
+                quiet_mode=True,
+                skip_context_files=True,
+                skip_memory=True,
+            )
+            a.client = MagicMock()
+            return a
+
+    def test_injects_when_clarify_tool_available(self):
+        from agent.prompt_builder import CLARIFY_GUIDANCE
+
+        agent = self._make_agent(["clarify"])
+        prompt = agent._build_system_prompt()
+
+        assert CLARIFY_GUIDANCE in prompt
+        assert 'choices=["Approve", "Deny"]' in prompt
+
+    def test_skips_when_clarify_tool_absent(self):
+        from agent.prompt_builder import CLARIFY_GUIDANCE
+
+        agent = self._make_agent(["terminal"])
+        prompt = agent._build_system_prompt()
+
+        assert CLARIFY_GUIDANCE not in prompt
+
+
 class TestToolUseEnforcementConfig:
     """Tests for the agent.tool_use_enforcement config option."""
 
