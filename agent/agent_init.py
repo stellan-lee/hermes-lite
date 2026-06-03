@@ -1058,6 +1058,10 @@ def init_agent(
     agent._memory_recall_query_recent_turns = 6
     agent._memory_recall_query_max_recent_chars = 1200
     agent._memory_recall_query_max_chars = 1800
+    agent._memory_multi_query_recall_enabled = False
+    agent._memory_multi_query_recall_max_queries = 4
+    agent._memory_multi_query_recall_max_total_chars = 6000
+    agent._memory_multi_query_recall_per_query_timeout_ms = 3000
     agent._memory_nudge_interval = 10
     agent._turns_since_memory = 0
     agent._iters_since_skill = 0
@@ -1080,6 +1084,18 @@ def init_agent(
             )
             agent._memory_recall_query_max_chars = int(
                 mem_config.get("recall_query_max_chars", 1800) or 1800
+            )
+            agent._memory_multi_query_recall_enabled = bool(
+                mem_config.get("multi_query_recall_enabled", False)
+            )
+            agent._memory_multi_query_recall_max_queries = int(
+                mem_config.get("multi_query_recall_max_queries", 4) or 4
+            )
+            agent._memory_multi_query_recall_max_total_chars = int(
+                mem_config.get("multi_query_recall_max_total_chars", 6000) or 6000
+            )
+            agent._memory_multi_query_recall_per_query_timeout_ms = int(
+                mem_config.get("multi_query_recall_per_query_timeout_ms", 3000) or 3000
             )
             agent._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
             if agent._memory_enabled or agent._user_profile_enabled:

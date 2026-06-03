@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -14,6 +14,10 @@ class RecallQueryPlan:
     intent: str | None
     entities: list[str]
     used_recent_context: bool
+    # Deterministic, priority-ordered recall subqueries for multi-query
+    # recall. Always recall-only — never persisted, never logged raw.
+    # Empty when the original query is empty.
+    subqueries: list[str] = field(default_factory=list)
 
 
 _MEMORY_CONTEXT_RE = re.compile(
@@ -73,6 +77,17 @@ _INTENT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
 )
 
+# Maps each ``_INTENT_RULES`` label to a focused, recall-friendly suffix used
+# to build the intent-specific subquery ("<topic> <suffix>"). Keys MUST stay
+# in sync with the labels above — ``test_every_intent_label_has_subquery_suffix``
+# fails loudly if a label is added/renamed without updating this table.
+_INTENT_SUBQUERY_SUFFIX: dict[str, str] = {
+    "previous decision / final agreed approach": "previous decision final agreed approach",
+    "implementation detail / constraints": "implementation details constraints code path",
+    "user preference": "user preference style format",
+    "task status / open todo": "task status todo open question next step",
+}
+
 
 def build_recall_query_plan(
     original_user_message: object,
@@ -81,17 +96,27 @@ def build_recall_query_plan(
     max_recent_turns: int = 6,
     max_recent_chars: int = 1200,
     max_query_chars: int = 1800,
+    max_queries: int = 4,
+    max_subquery_chars: int | None = None,
 ) -> RecallQueryPlan:
-    """Build one local, deterministic recall query from current user input."""
+    """Build one local, deterministic recall query from current user input.
+
+    Also derives a small, priority-ordered list of recall ``subqueries`` for
+    multi-query recall. ``max_subquery_chars`` defaults to ``max_query_chars``.
+    """
     original_query = _clean_text(
         original_user_message if isinstance(original_user_message, str) else ""
     )
     max_recent_turns = max(0, int(max_recent_turns or 0))
     max_recent_chars = max(0, int(max_recent_chars or 0))
     max_query_chars = max(1, int(max_query_chars or 1))
+    max_queries = max(1, int(max_queries or 1))
+    if max_subquery_chars is None:
+        max_subquery_chars = max_query_chars
+    max_subquery_chars = max(1, int(max_subquery_chars or 1))
 
     if not original_query:
-        return RecallQueryPlan("", "", None, [], False)
+        return RecallQueryPlan("", "", None, [], False, [])
 
     intent = _detect_intent(original_query)
     recent_lines = _recent_context_lines(
@@ -104,12 +129,16 @@ def build_recall_query_plan(
     entities = _extract_entities(original_query + "\n" + recent_text)
 
     if not intent and not recent_lines and not entities:
+        recall_query = _limit_text(original_query, max_query_chars)
         return RecallQueryPlan(
             original_query,
-            _limit_text(original_query, max_query_chars),
+            recall_query,
             None,
             [],
             False,
+            _build_subqueries(
+                original_query, recall_query, None, [], max_queries, max_subquery_chars
+            ),
         )
 
     parts = ["Original question:", original_query]
@@ -130,7 +159,78 @@ def build_recall_query_plan(
         intent=intent,
         entities=entities,
         used_recent_context=bool(recent_lines),
+        subqueries=_build_subqueries(
+            original_query, recall_query, intent, entities, max_queries, max_subquery_chars
+        ),
     )
+
+
+def _build_subqueries(
+    original_query: str,
+    recall_query: str,
+    intent: str | None,
+    entities: list[str],
+    max_queries: int,
+    max_subquery_chars: int,
+) -> list[str]:
+    """Derive priority-ordered recall subqueries (deterministic, recall-only).
+
+    Order: original query, PR2 enriched query, intent-specific query,
+    entity-heavy query. Each is bounded, normalized-duplicate subqueries are
+    dropped (priority order preserved), and the list is capped at
+    ``max_queries``. All inputs are already sanitized by the builder, so no
+    system/developer/tool/memory-context content can leak in here.
+    """
+    candidates: list[str] = []
+
+    # 1. Original (cleaned) user query — always, when non-empty.
+    if original_query:
+        candidates.append(original_query)
+
+    # 2. PR2 enriched recall query — only when it differs from the original.
+    if recall_query and recall_query != original_query:
+        candidates.append(recall_query)
+
+    topic = _subquery_topic(entities, original_query)
+
+    # 3. Intent-specific query — only when an intent is detected and it adds a
+    #    focused suffix on top of a topic.
+    if intent and topic:
+        suffix = _INTENT_SUBQUERY_SUFFIX.get(intent)
+        if suffix:
+            candidates.append(f"{topic} {suffix}")
+
+    # 4. Entity-heavy query — only when there are enough entities to make a
+    #    distinct, focused lookup worthwhile.
+    if len(entities) >= 2:
+        candidates.append(" ".join(entities[:8]))
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        bounded = _limit_text(candidate.strip(), max_subquery_chars) if candidate else ""
+        if not bounded:
+            continue
+        key = _normalize_for_dedupe(bounded)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(bounded)
+        if len(out) >= max_queries:
+            break
+    return out
+
+
+def _subquery_topic(entities: list[str], original_query: str) -> str:
+    """Pick a short topic string for intent subqueries (entities, else query)."""
+    if entities:
+        return " ".join(entities[:6])
+    return original_query
+
+
+def _normalize_for_dedupe(text: str) -> str:
+    """Whitespace-collapsed, casefolded key for subquery duplicate detection."""
+    return _WHITESPACE_RE.sub(" ", text).strip().casefold()
 
 
 def _clean_text(value: Any) -> str:

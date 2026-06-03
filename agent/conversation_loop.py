@@ -33,6 +33,7 @@ from agent.error_classifier import FailoverReason, classify_api_error
 from agent.iteration_budget import IterationBudget
 from agent.memory_manager import build_memory_context_block
 from agent.memory_prefetch import short_hash
+from agent.memory_recall_merge import merge_recall_results
 from agent.memory_recall_query import build_recall_query_plan
 from agent.message_sanitization import (
     _repair_tool_call_arguments,
@@ -348,6 +349,88 @@ def _get_continuation_prompt(is_partial_stub: bool, dropped_tools: Optional[List
             "length limit. Continue exactly where you left off. Do not "
             "restart or repeat prior text. Finish the answer directly.]"
         )
+
+
+def _recall_one_subquery(manager, subquery: str, sid: str) -> str:
+    """Queue-then-prefetch a single subquery synchronously.
+
+    Queue and prefetch use the *identical* subquery and the same session id,
+    so the provider's keyed cache (PR1) only returns a result that was queued
+    for this exact subquery/scope.
+    """
+    manager.queue_prefetch_all(subquery, session_id=sid)
+    return manager.prefetch_all(subquery, session_id=sid) or ""
+
+
+def _recall_multi_query(agent, raw_query: str, sid: str, recent_messages) -> str:
+    """Deterministic multi-query recall: plan → per-subquery retrieve → merge.
+
+    Builds the subquery plan via the recall query builder (always, regardless
+    of ``recall_query_builder_enabled`` — multi-query implies the builder),
+    retrieves each subquery with queue-then-prefetch *per subquery* (never
+    queue-all-then-prefetch-all, which would clobber the provider's single
+    result slot), then merges/dedupes into one block.
+
+    Combined with PR1's keyed caches, doing queue+prefetch synchronously per
+    subquery guarantees a result queued for subquery A is never injected for
+    subquery B. Subqueries are recall-only: never persisted, never logged raw.
+    """
+    plan = build_recall_query_plan(
+        raw_query,
+        recent_messages=recent_messages,
+        max_recent_turns=getattr(agent, "_memory_recall_query_recent_turns", 6),
+        max_recent_chars=getattr(agent, "_memory_recall_query_max_recent_chars", 1200),
+        max_query_chars=getattr(agent, "_memory_recall_query_max_chars", 1800),
+        max_queries=getattr(agent, "_memory_multi_query_recall_max_queries", 4),
+    )
+    subqueries = plan.subqueries
+    if not subqueries:
+        return ""
+
+    timeout_ms = int(
+        getattr(agent, "_memory_multi_query_recall_per_query_timeout_ms", 3000) or 0
+    )
+    manager = agent._memory_manager
+    results: list[str] = []
+    sub_meta: list[str] = []
+    for idx, subquery in enumerate(subqueries):
+        started = time.monotonic()
+        try:
+            result = _recall_one_subquery(manager, subquery, sid)
+        except Exception:
+            result = ""
+        latency_ms = int((time.monotonic() - started) * 1000)
+        sub_meta.append(
+            "q%d:hash=%s qlen=%d rlen=%d lat_ms=%d"
+            % (idx, short_hash(subquery), len(subquery), len(result), latency_ms)
+        )
+        if result and result.strip():
+            results.append(result)
+        # Cooperative ceiling: providers already self-bound each prefetch; if a
+        # subquery still reaches the per-query budget, stop issuing more rather
+        # than compounding latency across the remaining subqueries.
+        if timeout_ms > 0 and latency_ms >= timeout_ms:
+            break
+
+    merged = merge_recall_results(
+        results,
+        max_total_chars=getattr(
+            agent, "_memory_multi_query_recall_max_total_chars", 6000
+        ),
+    )
+    logger.debug(
+        "memory multi-query recall: enabled=True planned=%d retrieved=%d [%s] "
+        "raw_total=%d final=%d removed_chars=%d removed_sections=%d injected=%s",
+        len(subqueries),
+        len(results),
+        "; ".join(sub_meta),
+        merged.raw_chars,
+        merged.final_chars,
+        merged.removed_chars,
+        max(0, merged.input_sections - merged.output_sections),
+        bool(merged.text),
+    )
+    return merged.text
 
 
 def run_conversation(
@@ -782,45 +865,57 @@ def run_conversation(
                 else ""
             )
             _sid = getattr(agent, "session_id", "") or ""
-            _recall_query = _raw_query
-            _recall_plan = None
-            _builder_enabled = bool(
-                getattr(agent, "_memory_recall_query_builder_enabled", False)
+            _multi_query_enabled = bool(
+                getattr(agent, "_memory_multi_query_recall_enabled", False)
             )
-            if _builder_enabled and _raw_query:
-                _recall_plan = build_recall_query_plan(
-                    _raw_query,
-                    recent_messages=messages,
-                    max_recent_turns=getattr(
-                        agent, "_memory_recall_query_recent_turns", 6
-                    ),
-                    max_recent_chars=getattr(
-                        agent, "_memory_recall_query_max_recent_chars", 1200
-                    ),
-                    max_query_chars=getattr(
-                        agent, "_memory_recall_query_max_chars", 1800
-                    ),
+            if _multi_query_enabled and _raw_query:
+                # Multi-query recall: expand into a deterministic subquery plan
+                # and retrieve each subquery safely (queue-then-prefetch per
+                # subquery), then merge/dedupe into one memory-context block.
+                _ext_prefetch_cache = _recall_multi_query(
+                    agent, _raw_query, _sid, messages
                 )
-                _recall_query = _recall_plan.recall_query or _raw_query
-            if _raw_query or _recall_query:
-                logger.debug(
-                    "memory recall query builder: enabled=%s raw_hash=%s recall_hash=%s "
-                    "raw_len=%d recall_len=%d intent=%s entity_count=%d used_recent_context=%s",
-                    _builder_enabled,
-                    short_hash(_raw_query),
-                    short_hash(_recall_query),
-                    len(_raw_query),
-                    len(_recall_query),
-                    getattr(_recall_plan, "intent", None) or "",
-                    len(getattr(_recall_plan, "entities", []) or []),
-                    bool(getattr(_recall_plan, "used_recent_context", False)),
+            else:
+                # Single-query recall (PR1 raw query / PR2 enriched query).
+                _recall_query = _raw_query
+                _recall_plan = None
+                _builder_enabled = bool(
+                    getattr(agent, "_memory_recall_query_builder_enabled", False)
                 )
-            if _recall_query:
-                agent._memory_manager.queue_prefetch_all(_recall_query, session_id=_sid)
-                _ext_prefetch_cache = agent._memory_manager.prefetch_all(
-                    _recall_query,
-                    session_id=_sid,
-                ) or ""
+                if _builder_enabled and _raw_query:
+                    _recall_plan = build_recall_query_plan(
+                        _raw_query,
+                        recent_messages=messages,
+                        max_recent_turns=getattr(
+                            agent, "_memory_recall_query_recent_turns", 6
+                        ),
+                        max_recent_chars=getattr(
+                            agent, "_memory_recall_query_max_recent_chars", 1200
+                        ),
+                        max_query_chars=getattr(
+                            agent, "_memory_recall_query_max_chars", 1800
+                        ),
+                    )
+                    _recall_query = _recall_plan.recall_query or _raw_query
+                if _raw_query or _recall_query:
+                    logger.debug(
+                        "memory recall query builder: enabled=%s raw_hash=%s recall_hash=%s "
+                        "raw_len=%d recall_len=%d intent=%s entity_count=%d used_recent_context=%s",
+                        _builder_enabled,
+                        short_hash(_raw_query),
+                        short_hash(_recall_query),
+                        len(_raw_query),
+                        len(_recall_query),
+                        getattr(_recall_plan, "intent", None) or "",
+                        len(getattr(_recall_plan, "entities", []) or []),
+                        bool(getattr(_recall_plan, "used_recent_context", False)),
+                    )
+                if _recall_query:
+                    agent._memory_manager.queue_prefetch_all(_recall_query, session_id=_sid)
+                    _ext_prefetch_cache = agent._memory_manager.prefetch_all(
+                        _recall_query,
+                        session_id=_sid,
+                    ) or ""
         except Exception:
             pass
 

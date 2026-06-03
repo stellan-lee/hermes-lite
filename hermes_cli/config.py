@@ -1531,6 +1531,19 @@ DEFAULT_CONFIG = {
         "recall_query_recent_turns": 6,
         "recall_query_max_recent_chars": 1200,
         "recall_query_max_chars": 1800,
+        # Opt-in multi-query recall: expand the current turn into a small,
+        # deterministic list of subqueries, retrieve memory for each (keyed
+        # per query/scope, queue-then-prefetch per subquery), then merge and
+        # dedupe into a single injected memory-context block. Default off.
+        # NOTE: when enabled this always builds the subquery plan via the
+        # recall query builder, regardless of ``recall_query_builder_enabled``.
+        "multi_query_recall_enabled": False,
+        "multi_query_recall_max_queries": 4,
+        "multi_query_recall_max_total_chars": 6000,
+        # Per-subquery time budget. Each provider already self-bounds its own
+        # prefetch (~3s internal join); this is a cooperative ceiling — once a
+        # subquery takes at least this long, no further subqueries are issued.
+        "multi_query_recall_per_query_timeout_ms": 3000,
     },
 
     # Subagent delegation — override the provider:model used by delegate_task

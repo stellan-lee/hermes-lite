@@ -6105,3 +6105,175 @@ class TestMemoryRecallQueryBuilderIntegration:
         assert "Visible topic" in query
         assert "secret recalled text" not in query
         assert "memory-context" not in query
+
+
+class TestMemoryMultiQueryRecallIntegration:
+    DECISION_PROMPT = (
+        'what did we decide about Telegram approval cards and "compact mode"?'
+    )
+
+    def _setup(self, agent, *, prefetch_return=None, prefetch_side_effect=None):
+        agent.client.chat.completions.create.return_value = _mock_response("done")
+        agent._cached_system_prompt = "test system prompt"
+        agent._memory_manager = MagicMock()
+        agent._memory_manager.build_system_prompt.return_value = ""
+        if prefetch_side_effect is not None:
+            agent._memory_manager.prefetch_all.side_effect = prefetch_side_effect
+        else:
+            agent._memory_manager.prefetch_all.return_value = prefetch_return or ""
+        agent.session_id = "session-123"
+        agent._memory_multi_query_recall_enabled = True
+        agent._memory_multi_query_recall_max_queries = 4
+        agent._memory_multi_query_recall_max_total_chars = 6000
+        agent._memory_multi_query_recall_per_query_timeout_ms = 3000
+
+    def _run(self, agent, msg, history=None):
+        return agent.run_conversation(msg, conversation_history=history)
+
+    def _api_user_content(self, agent):
+        kwargs = agent.client.chat.completions.create.call_args.kwargs
+        users = [m for m in kwargs["messages"] if m.get("role") == "user"]
+        return users[-1]["content"]
+
+    # -- behavior matrix: disabled paths preserve PR1/PR2 --------------------
+
+    def test_multi_off_builder_off_preserves_raw_single_query(self, agent):
+        agent.client.chat.completions.create.return_value = _mock_response("done")
+        agent._cached_system_prompt = "test system prompt"
+        agent._memory_manager = MagicMock()
+        agent._memory_manager.build_system_prompt.return_value = ""
+        agent._memory_manager.prefetch_all.return_value = ""
+        agent.session_id = "session-123"
+        agent._memory_multi_query_recall_enabled = False
+        agent._memory_recall_query_builder_enabled = False
+
+        self._run(agent, "and the mobile version?")
+
+        agent._memory_manager.queue_prefetch_all.assert_called_once_with(
+            "and the mobile version?", session_id="session-123"
+        )
+        agent._memory_manager.prefetch_all.assert_called_once_with(
+            "and the mobile version?", session_id="session-123"
+        )
+
+    def test_multi_off_builder_on_preserves_enriched_single_query(self, agent):
+        agent.client.chat.completions.create.return_value = _mock_response("done")
+        agent._cached_system_prompt = "test system prompt"
+        agent._memory_manager = MagicMock()
+        agent._memory_manager.build_system_prompt.return_value = ""
+        agent._memory_manager.prefetch_all.return_value = ""
+        agent.session_id = "session-123"
+        agent._memory_multi_query_recall_enabled = False
+        agent._memory_recall_query_builder_enabled = True
+        history = [
+            {"role": "user", "content": "what did we decide about Telegram approval cards?"},
+            {"role": "assistant", "content": "We decided compact inline buttons."},
+        ]
+
+        self._run(agent, "and the mobile version?", history)
+
+        # Exactly one enriched query, not the multi-query loop.
+        agent._memory_manager.queue_prefetch_all.assert_called_once()
+        agent._memory_manager.prefetch_all.assert_called_once()
+        queued = agent._memory_manager.queue_prefetch_all.call_args.args[0]
+        assert queued != "and the mobile version?"
+        assert "and the mobile version?" in queued
+        assert "Telegram approval cards" in queued
+
+    # -- multi-query ON ------------------------------------------------------
+
+    def test_multi_query_calls_queue_then_prefetch_once_per_subquery(self, agent):
+        self._setup(agent, prefetch_return="")
+
+        self._run(agent, self.DECISION_PROMPT)
+
+        queue_calls = agent._memory_manager.queue_prefetch_all.call_args_list
+        prefetch_calls = agent._memory_manager.prefetch_all.call_args_list
+        # Multi-query actually expanded into more than one subquery.
+        assert len(queue_calls) >= 2
+        # queue/prefetch run in lockstep, once each per subquery.
+        assert len(queue_calls) == len(prefetch_calls)
+        queued = [c.args[0] for c in queue_calls]
+        prefetched = [c.args[0] for c in prefetch_calls]
+        assert queued == prefetched  # identical subquery per iteration
+        # Each subquery is queried exactly once.
+        assert len(queued) == len(set(queued))
+        # session_id threaded to every call.
+        for call in queue_calls + prefetch_calls:
+            assert call.kwargs == {"session_id": "session-123"}
+        # First subquery is the raw user message.
+        assert queued[0] == self.DECISION_PROMPT
+        # Calls must strictly interleave queue→prefetch per subquery (NOT
+        # queue-all-then-prefetch-all, which would clobber the single slot).
+        ordered = [
+            name
+            for (name, _a, _k) in agent._memory_manager.mock_calls
+            if name in ("queue_prefetch_all", "prefetch_all")
+        ]
+        assert ordered == ["queue_prefetch_all", "prefetch_all"] * len(queued)
+
+    def test_per_query_timeout_stops_early_but_injects_collected(self, agent):
+        import time as _time
+
+        def _slow(query, *, session_id=""):
+            _time.sleep(0.02)
+            return "- slow but collected"
+
+        self._setup(agent, prefetch_side_effect=_slow)
+        # Tiny budget: the first (slow) subquery trips the cooperative ceiling.
+        agent._memory_multi_query_recall_per_query_timeout_ms = 5
+
+        self._run(agent, self.DECISION_PROMPT)
+
+        # Loop stops after the first subquery exceeds its time budget.
+        assert agent._memory_manager.queue_prefetch_all.call_count == 1
+        assert agent._memory_manager.prefetch_all.call_count == 1
+        # The already-collected result is still injected.
+        content = self._api_user_content(agent)
+        assert "- slow but collected" in content
+
+    def test_duplicate_results_across_subqueries_injected_once(self, agent):
+        self._setup(agent, prefetch_return="- remembered fact about cards")
+
+        self._run(agent, self.DECISION_PROMPT)
+
+        content = self._api_user_content(agent)
+        assert "<memory-context>" in content
+        assert content.count("- remembered fact about cards") == 1
+
+    def test_no_injection_when_all_subqueries_empty(self, agent):
+        self._setup(agent, prefetch_return="")
+
+        self._run(agent, self.DECISION_PROMPT)
+
+        content = self._api_user_content(agent)
+        assert "<memory-context>" not in content
+
+    def test_first_subquery_miss_second_hit_still_injects(self, agent):
+        calls = {"n": 0}
+
+        def _se(query, *, session_id=""):
+            calls["n"] += 1
+            return "- late hit" if calls["n"] == 2 else ""
+
+        self._setup(agent, prefetch_side_effect=_se)
+
+        self._run(agent, self.DECISION_PROMPT)
+
+        content = self._api_user_content(agent)
+        assert "<memory-context>" in content
+        assert "- late hit" in content
+
+    def test_api_user_message_not_replaced_by_subqueries(self, agent):
+        self._setup(agent, prefetch_return="- remembered")
+
+        result = self._run(agent, self.DECISION_PROMPT)
+
+        content = self._api_user_content(agent)
+        assert content.startswith(self.DECISION_PROMPT)
+        # The enriched recall query must not leak into the API user message.
+        assert "Original question:" not in content
+        assert "Recall intent:" not in content
+        assert "<memory-context>" in content
+        # The persisted user message stays exactly the raw input.
+        assert result["messages"][-2]["content"] == self.DECISION_PROMPT
