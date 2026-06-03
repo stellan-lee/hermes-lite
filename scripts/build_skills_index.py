@@ -13,7 +13,9 @@ Usage:
     # CI (set GITHUB_TOKEN as secret)
     GITHUB_TOKEN=ghp_... python scripts/build_skills_index.py
 
-Output: website/static/api/skills-index.json
+Output: hermes_cli/data/skills-index.json — the snapshot bundled with the
+package and used by tools/skills_hub.py as the offline fallback. Commit the
+regenerated file when the skills index changes.
 """
 
 import json
@@ -45,7 +47,7 @@ from tools.skills_hub import (
 )
 import httpx
 
-OUTPUT_PATH = os.path.join(REPO_ROOT, "website", "static", "api", "skills-index.json")
+OUTPUT_PATH = os.path.join(REPO_ROOT, "hermes_cli", "data", "skills-index.json")
 INDEX_VERSION = 1
 
 

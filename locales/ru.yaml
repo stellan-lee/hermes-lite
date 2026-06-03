@@ -144,12 +144,6 @@ gateway:
     invalid_days:          "Недействительное значение --days: {value}"
     error:                 "Ошибка при формировании аналитики: {error}"
 
-  kanban:
-    error_prefix:          "⚠ ошибка kanban: {error}"
-    subscribed_suffix:     "(подписка оформлена — вы получите уведомление, когда {task_id} завершится или будет заблокирован)"
-    truncated_suffix:      "… (сокращено; используйте `hermes kanban …` в терминале для полного вывода)"
-    no_output:             "(нет вывода)"
-
   personality:
     none_configured:       "В `{path}/config.yaml` не настроено ни одной личности"
     header:                "🎭 **Доступные личности**\n"

@@ -144,12 +144,6 @@ gateway:
     invalid_days:          "Érvénytelen --days érték: {value}"
     error:                 "Hiba a betekintések generálásakor: {error}"
 
-  kanban:
-    error_prefix:          "⚠ kanban hiba: {error}"
-    subscribed_suffix:     "(feliratkozva — értesítést kapsz, ha a {task_id} befejeződik vagy elakad)"
-    truncated_suffix:      "… (csonkítva; használd a `hermes kanban …` parancsot a terminálban a teljes kimenethez)"
-    no_output:             "(nincs kimenet)"
-
   personality:
     none_configured:       "Nincs személyiség beállítva itt: `{path}/config.yaml`"
     header:                "🎭 **Elérhető személyiségek**\n"

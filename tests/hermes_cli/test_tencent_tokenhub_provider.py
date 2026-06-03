@@ -433,13 +433,13 @@ class TestTencentTokenhubCLIDispatch:
 
 
 class TestTencentTokenhubModelCatalogJSON:
-    """Verify tencent/hy3-preview:free and tencent/hy3-preview are present in the website model-catalog.json."""
+    """Verify tencent/hy3-preview:free and tencent/hy3-preview are present in the bundled model-catalog.json."""
 
     def test_in_model_catalog_json(self):
         catalog_path = os.path.join(
             os.path.dirname(__file__),
             "..", "..",
-            "website", "static", "api", "model-catalog.json",
+            "hermes_cli", "data", "model-catalog.json",
         )
         if not os.path.isfile(catalog_path):
             pytest.skip("model-catalog.json not found in workspace")

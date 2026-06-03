@@ -2,12 +2,12 @@
 
 When ``PRAGMA journal_mode=WAL`` raises ``OperationalError("locking protocol")``
 (SQLITE_PROTOCOL — typical on NFS/SMB), Hermes must fall back to
-``journal_mode=DELETE`` so ``state.db`` / ``kanban.db`` remain usable.
+``journal_mode=DELETE`` so SQLite-backed state remains usable.
 
 Without this fallback, users on NFS-mounted ``HERMES_HOME`` silently lose
-``/resume``, ``/title``, ``/history``, ``/branch``, session search, and the
-kanban dispatcher — because ``SessionDB()`` init propagates the error and
-every caller swallows it, leaving ``_session_db = None``.
+``/resume``, ``/title``, ``/history``, ``/branch``, and session search because
+``SessionDB()`` init propagates the error and every caller swallows it,
+leaving ``_session_db = None``.
 
 See: https://www.sqlite.org/wal.html — "WAL does not work over a network
 filesystem".
@@ -197,11 +197,9 @@ class TestApplyWalWithFallback:
     def test_warning_deduplicated_per_db_label(self, tmp_path, caplog):
         """Repeated calls with the same db_label log exactly ONE warning.
 
-        Prevents log spam when NFS users run kanban (which opens a fresh
-        connection on every operation — see hermes_cli/kanban_db.py).
-        Regression guard: the fix for #22032 ran apply_wal_with_fallback()
-        on every kb.connect() call; without dedup, errors.log fills with
-        hundreds of identical warnings per hour.
+        Prevents log spam when callers open a fresh connection for each
+        operation. Without dedup, errors.log fills with hundreds of
+        identical warnings per hour.
         """
         with caplog.at_level("WARNING", logger="hermes_state"):
             # Three separate connections to "the same DB" via the same label
@@ -231,15 +229,15 @@ class TestApplyWalWithFallback:
             conn1.close()
 
             conn2, _ = _open_blocking(tmp_path / "b.db", isolation_level=None)
-            apply_wal_with_fallback(conn2, db_label="kanban.db")
+            apply_wal_with_fallback(conn2, db_label="history.db")
             conn2.close()
 
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
         labels_warned = {
-            lbl for r in warnings for lbl in ("state.db", "kanban.db")
+            lbl for r in warnings for lbl in ("state.db", "history.db")
             if lbl in r.getMessage()
         }
-        assert labels_warned == {"state.db", "kanban.db"}, (
+        assert labels_warned == {"state.db", "history.db"}, (
             f"Each db_label should warn once; got {labels_warned}"
         )
 

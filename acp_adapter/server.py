@@ -1446,10 +1446,9 @@ class HermesACPAgent(acp.Agent):
             previous_interactive = os.environ.get("HERMES_INTERACTIVE")
             os.environ["HERMES_INTERACTIVE"] = "1"
             # Propagate the originating ACP session id to tools that want to
-            # tag side-effects with it (e.g. ``kanban_create`` stamps it on
-            # the new task so clients can render a per-session board). Save
-            # and restore around the agent call so a re-used executor thread
-            # never leaks one session's id into the next session's tools.
+            # tag side-effects with it. Save and restore around the agent call
+            # so a re-used executor thread never leaks one session's id into
+            # the next session's tools.
             previous_session_id = os.environ.get("HERMES_SESSION_ID")
             os.environ["HERMES_SESSION_ID"] = session_id
             try:

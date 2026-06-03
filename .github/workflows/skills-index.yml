@@ -12,8 +12,7 @@ on:
       - '.github/workflows/skills-index.yml'
 
 permissions:
-  contents: read
-  actions: write   # to trigger deploy-site.yml on schedule
+  contents: write   # to commit the regenerated bundled index
 
 jobs:
   build-index:
@@ -35,22 +34,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/build_skills_index.py
 
-      - name: Upload index artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: skills-index
-          path: website/static/api/skills-index.json
-          retention-days: 7
-
-  # Re-trigger the docs deploy so the refreshed index lands on the live site.
-  # The deploy itself is owned by deploy-site.yml (which crawls and deploys
-  # everything in one pipeline); we just kick it on a schedule.
-  trigger-deploy:
-    needs: build-index
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger Deploy Site workflow
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run deploy-site.yml --repo ${{ github.repository }}
+      # The index is bundled in-repo (hermes_cli/data/skills-index.json) and
+      # read by tools/skills_hub.py as the offline fallback. Commit it back
+      # when the regenerated file changes.
+      - name: Commit regenerated index
+        run: |
+          if git diff --quiet -- hermes_cli/data/skills-index.json; then
+            echo "skills index unchanged — nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add hermes_cli/data/skills-index.json
+          git commit -m "chore: refresh bundled skills index"
+          git push

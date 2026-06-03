@@ -1,8 +1,8 @@
 """Unit tests for _print_loopback_ssh_hint() in hermes_cli/auth.py.
 
-The helper exists to warn users that loopback OAuth flows (xAI Grok OAuth,
-Spotify) don't work over SSH unless they set up an `ssh -L` port forward
-between their laptop's browser and the remote host's loopback listener.
+The helper exists to warn users that loopback OAuth flows don't work over SSH
+unless they set up an `ssh -L` port forward between their laptop's browser and
+the remote host's loopback listener.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ def test_loopback_ssh_hint_silent_for_malformed_uri(monkeypatch):
 def test_loopback_ssh_hint_works_without_provider_docs_url(monkeypatch):
     monkeypatch.setattr(auth_mod, "_is_remote_session", lambda: True)
     out = _cap(lambda: auth_mod._print_loopback_ssh_hint(
-        "http://127.0.0.1:43827/spotify/callback"
+        "http://127.0.0.1:43827/callback"
     ))
     assert "ssh -N -L 43827:127.0.0.1:43827" in out
     # Generic SSH guide is always present even without a provider-specific URL

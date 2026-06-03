@@ -81,7 +81,7 @@ MAX_STDERR_BYTES = 10_000    # 10 KB
 #
 # NB: the broad "HERMES_" prefix was deliberately removed (#27303) — it leaked
 # HERMES_*-named config that lacks a secret substring (e.g. HERMES_BASE_URL,
-# HERMES_KANBAN_DB, HERMES_*_WEBHOOK).  The child only needs the few
+# HERMES_*_WEBHOOK).  The child only needs the few
 # location/profile vars in _HERMES_CHILD_ALLOWED below; HERMES_RPC_SOCKET /
 # HERMES_RPC_DIR / TZ / HOME are injected explicitly after scrubbing.
 _SAFE_ENV_PREFIXES = ("PATH", "HOME", "USER", "LANG", "LC_", "TERM",
@@ -161,7 +161,7 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
     # Non-secret HERMES_* vars dropped by the tightened allowlist (#27303). The
     # broad "HERMES_" prefix used to pass these through; now only the
     # operational set does. The drop is intentional (those vars can carry
-    # config like HERMES_KANBAN_DB / HERMES_BASE_URL), but a sandbox script
+    # config like HERMES_BASE_URL), but a sandbox script
     # that imports a repo module reading one at import time would otherwise see
     # it silently unset. Surface the drop once so the behavior change is
     # diagnosable and points at the env_passthrough opt-in escape hatch.

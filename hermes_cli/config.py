@@ -105,7 +105,7 @@ _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 #
 # IMPORTANT: ``HERMES_*`` overall is NOT blocked. Many legitimate
 # integration credentials follow that prefix (HERMES_GEMINI_CLIENT_ID,
-# HERMES_LANGFUSE_PUBLIC_KEY, HERMES_SPOTIFY_CLIENT_ID, ...). The
+# HERMES_LANGFUSE_PUBLIC_KEY, HERMES_QWEN_BASE_URL, ...). The
 # denylist is name-by-name on purpose so the gate stays narrow and
 # doesn't accidentally break provider setup wizards.
 #
@@ -129,7 +129,7 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_SHELL",
     # Hermes runtime location — never via dashboard env writer.
     # NOT a HERMES_* blanket: integration credentials (HERMES_GEMINI_*,
-    # HERMES_LANGFUSE_*, HERMES_SPOTIFY_*, ...) ARE allowed.
+    # HERMES_LANGFUSE_*, HERMES_QWEN_*, ...) ARE allowed.
     "HERMES_HOME", "HERMES_PROFILE", "HERMES_CONFIG", "HERMES_ENV",
 })
 
@@ -613,8 +613,8 @@ def _secure_dir(path):
 
     Also applies ``HERMES_UID``/``HERMES_GID``-based ownership when those env
     vars are set (#34107 — Docker deployments need this so profile subdirs
-    created at runtime by kanban workers don't land as root:root and block
-    subsequent uid-mapped workers).
+    created at runtime don't land as root:root and block subsequent
+    uid-mapped workers).
     """
     if is_managed():
         return
@@ -1210,32 +1210,6 @@ DEFAULT_CONFIG = {
             "base_url": "",
             "api_key": "",
             "timeout": 30,
-            "extra_body": {},
-        },
-        # Triage specifier — flesh out a rough one-liner in the Kanban
-        # Triage column into a concrete spec, then promote it to ``todo``.
-        # Invoked by ``hermes kanban specify`` (single id or --all). Set a
-        # cheap, capable model here (gemini-flash works well); the main
-        # model is overkill for short spec expansion.
-        "triage_specifier": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 120,
-            "extra_body": {},
-        },
-        # Kanban decomposer — decomposes a triage task into a graph of
-        # child tasks routed to specialist profiles by description.
-        # Invoked by ``hermes kanban decompose`` and the kanban
-        # auto-decompose dispatcher tick. Returns a JSON task graph;
-        # uses more tokens than the specifier so allow more headroom.
-        "kanban_decomposer": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 180,
             "extra_body": {},
         },
         # Profile describer — auto-generates a 1-2 sentence description
@@ -1869,67 +1843,6 @@ DEFAULT_CONFIG = {
         # 1 = serial (pre-v0.9 behaviour).
         # Also overridable via HERMES_CRON_MAX_PARALLEL env var.
         "max_parallel_jobs": None,
-    },
-
-    # Kanban multi-agent coordination — controls the dispatcher loop that
-    # spawns workers for ready tasks. The dispatcher ticks every N seconds
-    # (default 60), reclaims stale claims, promotes dependency-satisfied
-    # todos to ready, and fires `hermes -p <assignee> chat -q ...` for
-    # each claimable ready task. One dispatcher per profile is sufficient;
-    # running more than one on the same kanban.db will race for claims.
-    "kanban": {
-        # Run the dispatcher inside the gateway process. On by default —
-        # the cost is ~300µs every `dispatch_interval_seconds` when idle,
-        # and gateway is the supervisor users already have. Set to false
-        # only if you run the dispatcher as a separate systemd unit or
-        # don't want the gateway to spawn workers.
-        "dispatch_in_gateway": True,
-        # Seconds between dispatcher ticks (idle or not). Lower = snappier
-        # pickup of newly-ready tasks; higher = less SQL pressure.
-        "dispatch_interval_seconds": 60,
-        # Auto-block after this many consecutive non-success attempts for the
-        # same task/profile (spawn_failed, timed_out, or crashed). Reassignment
-        # resets the streak for the new profile.
-        "failure_limit": 2,
-        # Worker stdout/stderr logs rotate at spawn time. Defaults preserve
-        # the historical 2 MiB + one-backup behavior; long-running workers can
-        # raise these to keep more early failure evidence.
-        "worker_log_rotate_bytes": 2 * 1024 * 1024,
-        "worker_log_backup_count": 1,
-        # Profile that decomposes tasks in the Triage column. When unset,
-        # falls back to the default profile (the one `hermes` launches with
-        # no -p flag). Set this to a dedicated 'orchestrator' profile if you
-        # want decomposition to use a different model/skills from your main
-        # working profile.
-        "orchestrator_profile": "",
-        # Where a child task lands if the orchestrator can't match an
-        # assignee to any installed profile. When unset, falls back to the
-        # default profile. A task never ends up with assignee=None.
-        "default_assignee": "",
-        # Per-profile concurrency cap (#21582). When set to a positive int,
-        # no single profile can have more than N workers running at once,
-        # even if the global max_in_progress / max_spawn caps would allow
-        # it. Tasks blocked this way defer to the next dispatcher tick.
-        # Unset (None) means "no per-profile cap" — backward-compatible
-        # with existing installs. Useful for fan-out workflows that would
-        # otherwise saturate one profile's local model / API quota /
-        # browser pool while leaving other profiles idle.
-        "max_in_progress_per_profile": None,
-        # When true, the kanban dispatcher auto-runs the decomposer on
-        # tasks that land in Triage (every dispatcher tick). When false,
-        # decomposition is manual via `hermes kanban decompose <id>` or
-        # the dashboard's Decompose button.
-        "auto_decompose": True,
-        # Max triage tasks to decompose per dispatcher tick. Prevents a
-        # large bulk-load of triage tasks from spending a burst of aux
-        # LLM calls in one tick. Excess tasks defer to the next tick.
-        "auto_decompose_per_tick": 3,
-        # Stale detection: running tasks that have exceeded this many
-        # seconds without a heartbeat (since ``last_heartbeat_at``) are
-        # auto-reclaimed to ``ready`` on the next dispatcher tick. The
-        # worker process (if still running host-locally) is terminated
-        # before the reclaim.  0 disables stale detection entirely.
-        "dispatch_stale_timeout_seconds": 14400,
     },
 
     # execute_code settings — controls the tool used for programmatic tool calls.

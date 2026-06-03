@@ -176,10 +176,9 @@ google = [
   "google-auth-httplib2==0.3.1",
 ]
 youtube = [
-  # Required by skills/media/youtube-content and
-  # optional-skills/productivity/memento-flashcards (youtube_quiz.py).
-  # Without this declaration uv sync omits the package and both skills fail
-  # at first invocation with ModuleNotFoundError (issue #22243).
+  # Required by skills/media/youtube-content. Without this declaration uv sync
+  # omits the package and the skill fails at first invocation with
+  # ModuleNotFoundError (issue #22243).
   "youtube-transcript-api==1.2.4",
 ]
 # `hermes dashboard` (localhost SPA + API).  Not in core to keep the default install lean.
@@ -230,7 +229,7 @@ hermes-acp = "acp_adapter.entry:main"
 py-modules = ["run_agent", "model_tools", "toolsets", "batch_runner", "trajectory_compressor", "toolset_distributions", "cli", "hermes_bootstrap", "hermes_constants", "hermes_state", "hermes_time", "hermes_logging", "utils", "mcp_serve"]
 
 [tool.setuptools.package-data]
-hermes_cli = ["web_dist/**/*", "tui_dist/**/*", "scripts/install.sh", "scripts/install.ps1"]
+hermes_cli = ["web_dist/**/*", "tui_dist/**/*", "scripts/install.sh", "scripts/install.ps1", "data/*.json"]
 gateway = ["assets/**/*"]
 plugins = [
   "*/dashboard/manifest.json",

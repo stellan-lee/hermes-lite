@@ -181,10 +181,6 @@ class TestFallbackChain:
     """
 
     PRIMARY = "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
-    FALLBACK = (
-        "https://raw.githubusercontent.com/NousResearch/hermes-agent"
-        "/main/website/static/api/model-catalog.json"
-    )
 
     def test_uses_primary_when_it_succeeds(self, isolated_home):
         from hermes_cli import model_catalog
@@ -200,22 +196,6 @@ class TestFallbackChain:
         assert result is not None
         assert calls == [self.PRIMARY], "fallback URLs must not be touched on primary success"
 
-    def test_falls_through_to_raw_github_on_primary_failure(self, isolated_home):
-        from hermes_cli import model_catalog
-        calls: list[str] = []
-
-        def fake_fetch(url, timeout):
-            calls.append(url)
-            if url == self.PRIMARY:
-                return None  # simulate Vercel 403
-            return _valid_manifest()
-
-        with patch.object(model_catalog, "_fetch_manifest", side_effect=fake_fetch):
-            result = model_catalog._fetch_manifest_with_fallback(self.PRIMARY, 5.0)
-
-        assert result is not None
-        assert calls == [self.PRIMARY, self.FALLBACK]
-
     def test_returns_none_when_all_urls_fail(self, isolated_home):
         from hermes_cli import model_catalog
 
@@ -226,34 +206,18 @@ class TestFallbackChain:
         # Primary + every fallback URL was attempted exactly once.
         assert fetch.call_count == 1 + len(model_catalog.DEFAULT_CATALOG_FALLBACK_URLS)
 
-    def test_dedupes_when_primary_equals_fallback(self, isolated_home):
-        """Operator who configured ``model_catalog.url`` to the raw GitHub URL
-        should not get a duplicate fetch from the fallback list."""
-        from hermes_cli import model_catalog
-
-        with patch.object(model_catalog, "_fetch_manifest", return_value=None) as fetch:
-            model_catalog._fetch_manifest_with_fallback(self.FALLBACK, 5.0)
-
-        assert fetch.call_count == 1, f"expected 1 call, got {fetch.call_count}"
-
-    def test_get_catalog_uses_fallback_chain(self, isolated_home):
-        """End-to-end: ``get_catalog`` routes through the fallback helper so
-        a primary URL failure transparently produces a working catalog."""
+    def test_get_catalog_falls_back_to_bundled_snapshot(self, isolated_home):
+        """End-to-end: when the network fetch fails and no disk cache exists,
+        ``get_catalog`` falls back to the package-bundled snapshot so the
+        picker keeps working offline."""
         from hermes_cli import model_catalog
         manifest = _valid_manifest()
-        calls: list[str] = []
 
-        def fake_fetch(url, timeout):
-            calls.append(url)
-            if url == self.PRIMARY:
-                return None
-            return manifest
-
-        with patch.object(model_catalog, "_fetch_manifest", side_effect=fake_fetch):
+        with patch.object(model_catalog, "_fetch_manifest", return_value=None), \
+             patch.object(model_catalog, "_read_bundled_catalog", return_value=manifest):
             result = model_catalog.get_catalog(force_refresh=True)
 
         assert result == manifest
-        assert self.FALLBACK in calls
 
 
 class TestCuratedAccessors:
@@ -426,10 +390,10 @@ class TestIntegrationWithModelsModule:
 
 # -----------------------------------------------------------------------------
 # Drift guard — prevent the in-repo curated lists from going out of sync with
-# the docs-hosted manifest at website/static/api/model-catalog.json.
+# the bundled manifest at hermes_cli/data/model-catalog.json.
 #
 # History: qwen/qwen3.6-plus was added to _PROVIDER_MODELS["nous"] in commit
-# 9dd6e5510 but website/static/api/model-catalog.json was not regenerated for
+# 9dd6e5510 but the bundled model-catalog.json was not regenerated for
 # weeks, so free-tier users on a new install fetched a stale manifest and the
 # free-tier picker showed "No free models currently available." even though
 # the Portal was serving qwen/qwen3.6-plus as free. CI must catch this.
@@ -450,11 +414,11 @@ class TestManifestMatchesInRepoLists:
         """``scripts/build_model_catalog.py`` output must match the committed file.
 
         If this fails, run ``python scripts/build_model_catalog.py`` and
-        commit the regenerated ``website/static/api/model-catalog.json``.
+        commit the regenerated ``hermes_cli/data/model-catalog.json``.
         """
         # Resolve the repo root from this test file's location.
         repo_root = Path(__file__).resolve().parents[2]
-        manifest_path = repo_root / "website" / "static" / "api" / "model-catalog.json"
+        manifest_path = repo_root / "hermes_cli" / "data" / "model-catalog.json"
 
         if not manifest_path.exists():
             pytest.skip(f"manifest missing at {manifest_path}")
@@ -472,8 +436,8 @@ class TestManifestMatchesInRepoLists:
             actual = json.load(fh)
 
         assert self._strip_volatile(actual) == self._strip_volatile(expected), (
-            "website/static/api/model-catalog.json is out of sync with "
+            "hermes_cli/data/model-catalog.json is out of sync with "
             "_PROVIDER_MODELS['nous'] / OPENROUTER_MODELS. "
             "Run: python scripts/build_model_catalog.py && "
-            "git add website/static/api/model-catalog.json"
+            "git add hermes_cli/data/model-catalog.json"
         )

@@ -144,12 +144,6 @@ gateway:
     invalid_days:          "Geçersiz --days değeri: {value}"
     error:                 "Analiz oluşturulurken hata: {error}"
 
-  kanban:
-    error_prefix:          "⚠ kanban hatası: {error}"
-    subscribed_suffix:     "(abone olundu — {task_id} tamamlandığında veya engellendiğinde bildirim alacaksınız)"
-    truncated_suffix:      "… (kısaltıldı; tam çıktı için terminalinizde `hermes kanban …` komutunu kullanın)"
-    no_output:             "(çıktı yok)"
-
   personality:
     none_configured:       "`{path}/config.yaml` içinde yapılandırılmış kişilik yok"
     header:                "🎭 **Mevcut Kişilikler**\n"

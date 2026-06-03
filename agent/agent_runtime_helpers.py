@@ -2299,8 +2299,7 @@ def force_close_tcp_sockets(client: Any) -> int:
         future operations on that Python object fail safely.
       * BUT the SSL wrapper (``ssl.SSLSocket``'s underlying OpenSSL ``BIO``)
         caches the raw integer FD. Once ``os.close(fd)`` runs, the kernel may
-        immediately recycle that integer to the next ``open()`` call — e.g.
-        the kanban dispatcher opening ``kanban.db``.
+        immediately recycle that integer to the next ``open()`` call.
       * The owning worker thread then unwinds httpx, the SSL layer flushes a
         pending TLS record, and the encrypted bytes get written into the
         wrong file (issue #29507: 24-byte TLS application-data record

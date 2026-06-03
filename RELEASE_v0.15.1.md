@@ -3,7 +3,7 @@
 **Release Date:** May 29, 2026
 **Since v0.15.0:** 28 commits · 21 merged PRs · hotfix release · 9 contributors
 
-> **The Patch Release.** A same-day hotfix for v0.15.0. Headline fix: the dashboard infinite-reload loop that hit anyone running v0.15.0 in loopback mode (Docker, hosted Hermes, fresh installs). A handful of other v0.15.0 follow-ups go along for the ride — kanban worker SIGTERM, `/model` picker unification, `/yolo` session bypass, the full 19,932-entry skills.sh catalog, `.md` media delivery restoration, gateway probe-stepdown safety, web-URL redaction passthrough, kanban worker vision on referenced images, hindsight observation-default. Docker users get an explicit `--insecure` opt-in env var (no more bind-host inference), MCP server bare-command PATH resolution, and arm64 PR-build cache fixes.
+> **The Patch Release.** A same-day hotfix for v0.15.0. Headline fix: the dashboard infinite-reload loop that hit anyone running v0.15.0 in loopback mode (Docker, hosted Hermes, fresh installs). A handful of other v0.15.0 follow-ups go along for the ride — `/model` picker unification, `/yolo` session bypass, the full 19,932-entry skills.sh catalog, `.md` media delivery restoration, gateway probe-stepdown safety, web-URL redaction passthrough, hindsight observation-default. Docker users get an explicit `--insecure` opt-in env var (no more bind-host inference), MCP server bare-command PATH resolution, and arm64 PR-build cache fixes.
 
 ---
 
@@ -16,8 +16,6 @@
 - **MCP bare command resolution under Docker** — MCP servers configured with bare commands (`npx`, `npm`, `node`) now resolve against `/usr/local/bin` so they actually launch inside the Docker image where those binaries live. v0.15.0 left these failing silently in containers when the agent's effective PATH didn't include the Node toolchain location. ([#34186](https://github.com/NousResearch/hermes-agent/pull/34186) — @benbarclay)
 
 - **Skills page sidebar / source pills restored** — A stale `useMemo` dependency in the new dashboard skills page collapsed the source pills and category sidebar to "All" only. Fixed; both surfaces now reflect the live catalog state. ([#34194](https://github.com/NousResearch/hermes-agent/pull/34194))
-
-- **Kanban worker can be killed again** — `SIGTERM` on a kanban worker was being absorbed by an intermediate process and the worker stayed running. Closes [#28181](https://github.com/NousResearch/hermes-agent/issues/28181). ([#34045](https://github.com/NousResearch/hermes-agent/pull/34045))
 
 - **Full skills.sh catalog (858 → 19,932 entries)** — The skills hub page was pulling a partial paginated catalog. The fetch now walks the sitemap, so all 19,932 skills.sh entries surface in the picker instead of just the first 858. ([#34025](https://github.com/NousResearch/hermes-agent/pull/34025))
 
@@ -39,11 +37,6 @@
 ### MCP
 
 - **Bare `npx`/`npm`/`node` resolve against `/usr/local/bin`** for Docker compatibility ([#34186](https://github.com/NousResearch/hermes-agent/pull/34186) — @benbarclay)
-
-### Kanban
-
-- **Worker SIGTERM actually terminates the process** ([#34045](https://github.com/NousResearch/hermes-agent/pull/34045))
-- **Workers receive images referenced in task bodies** for vision-capable models ([#34210](https://github.com/NousResearch/hermes-agent/pull/34210))
 
 ### Gateway
 

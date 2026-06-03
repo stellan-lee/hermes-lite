@@ -77,7 +77,6 @@ const CATEGORY_ICONS: Record<
   auxiliary: Wrench,
   bedrock: Cloud,
   curator: Sparkles,
-  kanban: LayoutDashboard,
   model_catalog: BookOpen,
   openrouter: Route,
   sessions: History,
