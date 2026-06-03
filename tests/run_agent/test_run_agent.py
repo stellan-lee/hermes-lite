@@ -5971,3 +5971,28 @@ class TestMemoryProviderTurnStart:
         # The extracted body uses ``agent.X`` rather than ``self.X``;
         # assert the extracted-form spelling directly.
         assert "on_turn_start(agent._user_turn_count" in src
+
+    def test_current_turn_prefetch_uses_session_id_and_current_query_queue(self):
+        """Current-turn recall must be keyed by the active query and session."""
+        import inspect
+        from agent.conversation_loop import run_conversation as _rc
+
+        src = inspect.getsource(_rc)
+        idx_query = src.index('_query = original_user_message if isinstance(original_user_message, str) else ""')
+        idx_sid = src.index('_sid = getattr(agent, "session_id", "") or ""', idx_query)
+        idx_queue = src.index(".queue_prefetch_all(_query, session_id=_sid)", idx_sid)
+        idx_prefetch = src.index(".prefetch_all(", idx_queue)
+        prefetch_call = src[idx_prefetch:idx_prefetch + 140]
+
+        assert idx_query < idx_sid < idx_queue < idx_prefetch
+        assert "session_id=_sid" in prefetch_call
+
+    def test_empty_external_memory_does_not_inject_memory_context(self):
+        """The API-call injection path must stay gated on non-empty recall."""
+        import inspect
+        from agent.conversation_loop import run_conversation as _rc
+
+        src = inspect.getsource(_rc)
+        idx_gate = src.index("if _ext_prefetch_cache:")
+        idx_build = src.index("build_memory_context_block(_ext_prefetch_cache)", idx_gate)
+        assert idx_gate < idx_build

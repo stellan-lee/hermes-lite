@@ -6,6 +6,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from agent.memory_prefetch import make_prefetch_entry, prefetch_entry_result
 from plugins.memory.honcho.session import (
     HonchoSession,
     HonchoSessionManager,
@@ -902,7 +903,7 @@ def _settle_prewarm(provider):
     if provider._prefetch_thread:
         provider._prefetch_thread.join(timeout=3.0)
     with provider._prefetch_lock:
-        provider._prefetch_result = ""
+        provider._prefetch_result = None
         provider._prefetch_result_fired_at = -999
     provider._prefetch_thread = None
     provider._prefetch_thread_started_at = 0.0
@@ -1298,6 +1299,11 @@ class TestSessionStartDialecticPrewarm:
     """Session-start prewarm fires a depth-aware dialectic whose result is
     consumed by turn 1 — no duplicate .chat() and no dead-cache orphaning."""
 
+    _PREWARM_QUERY = (
+        "Summarize what you know about this user. "
+        "Focus on preferences, current projects, and working style."
+    )
+
     @staticmethod
     def _make_provider(cfg_extra=None, dialectic_result="prewarm synthesis"):
         from unittest.mock import patch, MagicMock
@@ -1327,23 +1333,32 @@ class TestSessionStartDialecticPrewarm:
         if p._prefetch_thread:
             p._prefetch_thread.join(timeout=3.0)
         with p._prefetch_lock:
-            assert p._prefetch_result == "prewarm synthesis"
+            assert prefetch_entry_result(p._prefetch_result) == "prewarm synthesis"
         assert p._last_dialectic_turn == 0
 
-    def test_turn1_consumes_prewarm_without_duplicate_dialectic(self):
-        """With prewarm result already in _prefetch_result, turn 1 prefetch
-        should NOT fire another dialectic."""
+    def test_turn1_does_not_inject_generic_prewarm_for_unrelated_query(self):
+        """Generic startup prewarm must not be injected into unrelated user queries."""
         p = self._make_provider()
         if p._prefetch_thread:
             p._prefetch_thread.join(timeout=3.0)
         p._manager.dialectic_query.reset_mock()
-        p._session_key = "test-prewarm"
         p._base_context_cache = ""
         p._turn_count = 1
 
         result = p.prefetch("hello world")
+        assert "prewarm synthesis" not in result
+        assert p._manager.dialectic_query.call_count == 0
+
+    def test_same_query_can_consume_keyed_prewarm_without_duplicate_dialectic(self):
+        p = self._make_provider()
+        if p._prefetch_thread:
+            p._prefetch_thread.join(timeout=3.0)
+        p._manager.dialectic_query.reset_mock()
+        p._base_context_cache = ""
+        p._turn_count = 1
+
+        result = p.prefetch(self._PREWARM_QUERY, session_id="test-prewarm")
         assert "prewarm synthesis" in result
-        # The sync first-turn path must NOT have fired another .chat()
         assert p._manager.dialectic_query.call_count == 0
 
     def test_turn1_falls_back_to_sync_when_prewarm_missing(self):
@@ -1353,7 +1368,7 @@ class TestSessionStartDialecticPrewarm:
         if p._prefetch_thread:
             p._prefetch_thread.join(timeout=3.0)
         with p._prefetch_lock:
-            assert p._prefetch_result == ""  # prewarm landed nothing
+            assert p._prefetch_result is None  # prewarm landed nothing
         # Switch dialectic_query to return something on the sync first-turn call
         p._manager.dialectic_query.return_value = "sync recovery"
         p._manager.dialectic_query.reset_mock()
@@ -1427,7 +1442,12 @@ class TestDialecticLiveness:
         p._session_key = "test"
         p._base_context_cache = "base ctx"
         with p._prefetch_lock:
-            p._prefetch_result = "ancient synthesis"
+            p._prefetch_result = make_prefetch_entry(
+                "ancient synthesis",
+                "what's new",
+                effective_scope=p._session_key,
+                fired_at=1,
+            )
             p._prefetch_result_fired_at = 1
         # cadence=2, multiplier=2 → stale after 4 turns since fire
         p._turn_count = 10
@@ -1437,7 +1457,7 @@ class TestDialecticLiveness:
         assert "ancient synthesis" not in result, "stale pending must be discarded"
         # Cache slot cleared
         with p._prefetch_lock:
-            assert p._prefetch_result == ""
+            assert p._prefetch_result is None
             assert p._prefetch_result_fired_at == -999
 
     def test_fresh_pending_result_is_kept(self):
@@ -1446,7 +1466,12 @@ class TestDialecticLiveness:
         p._session_key = "test"
         p._base_context_cache = ""
         with p._prefetch_lock:
-            p._prefetch_result = "recent synthesis"
+            p._prefetch_result = make_prefetch_entry(
+                "recent synthesis",
+                "what's new",
+                effective_scope=p._session_key,
+                fired_at=8,
+            )
             p._prefetch_result_fired_at = 8
         p._turn_count = 9  # 1 turn since fire, well within cadence × 2 = 6
         p._last_dialectic_turn = 8
@@ -1594,15 +1619,15 @@ class TestDialecticLifecycleSmoke:
 
         self._await_thread(provider)
         with provider._prefetch_lock:
-            assert provider._prefetch_result.startswith("prewarm"), \
+            assert prefetch_entry_result(provider._prefetch_result).startswith("prewarm"), \
                 "session-start prewarm must land in _prefetch_result"
         assert provider._last_dialectic_turn == 0, "prewarm marks turn 0"
         assert mgr.dialectic_query.call_count == 1
 
-        # ---- turn 1: consume prewarm, no duplicate dialectic ----
+        # ---- turn 1: unrelated user query does not consume generic prewarm ----
         provider.on_turn_start(1, "hey")
         inject1 = provider.prefetch("hey")
-        assert "prewarm" in inject1, "turn 1 must surface prewarm"
+        assert "prewarm" not in inject1, "generic prewarm must not surface for unrelated query"
         provider.sync_turn("hey", "hi there")
         provider.queue_prefetch("hey")  # cadence gate: (1-0)<3 → skip
         self._await_thread(provider)

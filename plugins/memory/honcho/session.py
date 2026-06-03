@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import queue
 import re
 import logging
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
+from agent.memory_prefetch import make_prefetch_entry, prefetch_entry_matches, prefetch_entry_result
 from plugins.memory.honcho.client import get_honcho_client
 
 if TYPE_CHECKING:
@@ -670,26 +672,37 @@ class HonchoSessionManager:
         def _run():
             result = self.get_prefetch_context(session_key, user_message)
             if result:
-                self.set_context_result(session_key, result)
+                self.set_context_result(session_key, result, query=user_message or "")
 
         t = threading.Thread(target=_run, name="honcho-context-prefetch", daemon=True)
         t.start()
 
-    def set_context_result(self, session_key: str, result: dict[str, str]) -> None:
+    def set_context_result(self, session_key: str, result: dict[str, str], *, query: str = "") -> None:
         """Store a prefetched context result in a thread-safe way."""
         if not result:
             return
         with self._prefetch_cache_lock:
-            self._context_cache[session_key] = result
+            self._context_cache[session_key] = make_prefetch_entry(
+                json.dumps(result, sort_keys=True),
+                query,
+                effective_scope=session_key,
+            )
 
-    def pop_context_result(self, session_key: str) -> dict[str, str]:
+    def pop_context_result(self, session_key: str, *, query: str = "") -> dict[str, str]:
         """
         Return and clear the cached context result for this session.
 
         Returns empty dict if no result is ready yet (first turn).
         """
         with self._prefetch_cache_lock:
-            return self._context_cache.pop(session_key, {})
+            entry = self._context_cache.pop(session_key, {})
+        if not prefetch_entry_matches(entry, query, effective_scope=session_key):
+            return {}
+        try:
+            result = json.loads(prefetch_entry_result(entry))
+        except Exception:
+            return {}
+        return result if isinstance(result, dict) else {}
 
     def get_prefetch_context(self, session_key: str, user_message: str | None = None) -> dict[str, str]:
         """

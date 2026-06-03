@@ -40,6 +40,12 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from agent.memory_prefetch import (
+    make_prefetch_entry,
+    make_prefetch_key,
+    prefetch_entry_matches,
+    prefetch_entry_result,
+)
 from agent.memory_provider import MemoryProvider
 from hermes_constants import get_hermes_home
 from tools.registry import tool_error
@@ -545,7 +551,7 @@ class HindsightMemoryProvider(MemoryProvider):
         self._client = None
         self._timeout = _DEFAULT_TIMEOUT
         self._idle_timeout = _DEFAULT_IDLE_TIMEOUT
-        self._prefetch_result = ""
+        self._prefetch_result: Any = None
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread = None
         # Single-writer model for retain. sync_turn() enqueues; the writer
@@ -1302,13 +1308,25 @@ class HindsightMemoryProvider(MemoryProvider):
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             logger.debug("Prefetch: waiting for background thread to complete")
             self._prefetch_thread.join(timeout=3.0)
+        scope = self._prefetch_scope(session_id)
+        key = make_prefetch_key(query, session_id=session_id, effective_scope=scope)
         with self._prefetch_lock:
-            result = self._prefetch_result
-            self._prefetch_result = ""
+            entry = self._prefetch_result
+            self._prefetch_result = None
+        if not prefetch_entry_matches(entry, query, session_id=session_id, effective_scope=scope):
+            logger.debug(
+                "Prefetch: cache mismatch (query_hash=%s, session_present=%s)",
+                key["query_hash"], bool(session_id),
+            )
+            return ""
+        result = prefetch_entry_result(entry)
         if not result:
             logger.debug("Prefetch: no results available")
             return ""
-        logger.debug("Prefetch: returning %d chars of context", len(result))
+        logger.debug(
+            "Prefetch: returning %d chars of context (query_hash=%s, session_hash=%s)",
+            len(result), key["query_hash"], key["session_hash"],
+        )
         header = self._recall_prompt_preamble or (
             "# Hindsight Memory (persistent cross-session context)\n"
             "Use this to answer questions about the user and prior sessions. "
@@ -1329,6 +1347,7 @@ class HindsightMemoryProvider(MemoryProvider):
         # Truncate query to max chars
         if self._recall_max_input_chars and len(query) > self._recall_max_input_chars:
             query = query[:self._recall_max_input_chars]
+        scope = self._prefetch_scope(session_id)
 
         def _run():
             try:
@@ -1354,12 +1373,36 @@ class HindsightMemoryProvider(MemoryProvider):
                     text = "\n".join(f"- {r.text}" for r in resp.results if r.text) if resp.results else ""
                 if text:
                     with self._prefetch_lock:
-                        self._prefetch_result = text
+                        self._prefetch_result = make_prefetch_entry(
+                            text,
+                            query,
+                            session_id=session_id,
+                            effective_scope=scope,
+                        )
             except Exception as e:
                 logger.debug("Hindsight prefetch failed: %s", e, exc_info=True)
 
         self._prefetch_thread = threading.Thread(target=_run, daemon=True, name="hindsight-prefetch")
         self._prefetch_thread.start()
+
+    def _prefetch_scope(self, session_id: str = "") -> str:
+        recall_tags = tuple(sorted(str(tag) for tag in (self._recall_tags or [])))
+        recall_types = tuple(sorted(str(kind) for kind in (self._recall_types or [])))
+        recall_params = {
+            "bank": self._bank_id,
+            "method": self._prefetch_method,
+            "budget": self._budget,
+            "max_tokens": self._recall_max_tokens,
+            "tags": recall_tags,
+            "tags_match": self._recall_tags_match,
+            "types": recall_types,
+        }
+        return (
+            f"recall:{json.dumps(recall_params, sort_keys=True, separators=(',', ':'))}|"
+            f"user:{self._user_id}|"
+            f"agent:{self._agent_identity}|workspace:{self._agent_workspace}|"
+            f"session:{session_id or self._session_id or ''}"
+        )
 
     def _build_turn_messages(self, user_content: str, assistant_content: str) -> List[Dict[str, str]]:
         now = datetime.now(timezone.utc).isoformat()

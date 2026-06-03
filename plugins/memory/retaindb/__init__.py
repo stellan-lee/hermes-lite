@@ -33,6 +33,12 @@ from pathlib import Path
 from typing import Any, Dict, List
 from urllib.parse import quote
 
+from agent.memory_prefetch import (
+    make_prefetch_entry,
+    make_prefetch_key,
+    prefetch_entry_matches,
+    prefetch_entry_result,
+)
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
@@ -461,9 +467,9 @@ class RetainDBMemoryProvider(MemoryProvider):
         self._lock = threading.Lock()
 
         # Prefetch caches
-        self._context_result = ""
-        self._dialectic_result = ""
-        self._agent_model: dict = {}
+        self._context_result: Any = None
+        self._dialectic_result: Any = None
+        self._agent_model: Any = None
 
         # Prefetch thread tracking — prevents accumulation on rapid calls
         self._prefetch_threads: list[threading.Thread] = []
@@ -543,45 +549,62 @@ class RetainDBMemoryProvider(MemoryProvider):
         """Fire context + dialectic + agent model prefetches in background."""
         if not self._client:
             return
+        effective_session_id = session_id or self._session_id
+        scope = self._prefetch_scope(effective_session_id)
         # Wait for any still-running prefetch threads before spawning new ones.
         # Prevents thread accumulation if turns fire faster than prefetches complete.
         for t in self._prefetch_threads:
             t.join(timeout=2.0)
         threads = [
-            threading.Thread(target=self._prefetch_context, args=(query,), name="retaindb-ctx", daemon=True),
-            threading.Thread(target=self._prefetch_dialectic, args=(query,), name="retaindb-dialectic", daemon=True),
-            threading.Thread(target=self._prefetch_agent_model, name="retaindb-agent-model", daemon=True),
+            threading.Thread(target=self._prefetch_context, args=(query, effective_session_id, scope), name="retaindb-ctx", daemon=True),
+            threading.Thread(target=self._prefetch_dialectic, args=(query, effective_session_id, scope), name="retaindb-dialectic", daemon=True),
+            threading.Thread(target=self._prefetch_agent_model, args=(query, effective_session_id, scope), name="retaindb-agent-model", daemon=True),
         ]
         self._prefetch_threads = threads
         for t in threads:
             t.start()
 
-    def _prefetch_context(self, query: str) -> None:
+    def _prefetch_context(self, query: str, effective_session_id: str, scope: str) -> None:
         try:
-            query_result = self._client.query_context(self._user_id, self._session_id, query)
+            query_result = self._client.query_context(self._user_id, effective_session_id, query)
             profile = self._client.get_profile(self._user_id)
             overlay = _build_overlay(profile, query_result)
             with self._lock:
-                self._context_result = overlay
+                self._context_result = make_prefetch_entry(
+                    overlay,
+                    query,
+                    session_id=effective_session_id,
+                    effective_scope=scope,
+                )
         except Exception as exc:
             logger.debug("RetainDB context prefetch failed: %s", exc)
 
-    def _prefetch_dialectic(self, query: str) -> None:
+    def _prefetch_dialectic(self, query: str, effective_session_id: str, scope: str) -> None:
         try:
             result = self._client.ask_user(self._user_id, query, reasoning_level=self._reasoning_level(query))
             answer = str(result.get("answer") or "")
             if answer:
                 with self._lock:
-                    self._dialectic_result = answer
+                    self._dialectic_result = make_prefetch_entry(
+                        answer,
+                        query,
+                        session_id=effective_session_id,
+                        effective_scope=scope,
+                    )
         except Exception as exc:
             logger.debug("RetainDB dialectic prefetch failed: %s", exc)
 
-    def _prefetch_agent_model(self) -> None:
+    def _prefetch_agent_model(self, query: str, effective_session_id: str, scope: str) -> None:
         try:
             model = self._client.get_agent_model(self._agent_id)
             if model.get("memory_count", 0) > 0:
                 with self._lock:
-                    self._agent_model = model
+                    self._agent_model = make_prefetch_entry(
+                        json.dumps(model, sort_keys=True),
+                        query,
+                        session_id=effective_session_id,
+                        effective_scope=scope,
+                    )
         except Exception as exc:
             logger.debug("RetainDB agent model prefetch failed: %s", exc)
 
@@ -596,19 +619,49 @@ class RetainDBMemoryProvider(MemoryProvider):
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Consume prefetched results and return them as a context block."""
+        effective_session_id = session_id or self._session_id
+        scope = self._prefetch_scope(effective_session_id)
+        key = make_prefetch_key(query, session_id=effective_session_id, effective_scope=scope)
         with self._lock:
-            context = self._context_result
-            dialectic = self._dialectic_result
-            agent_model = self._agent_model
-            self._context_result = ""
-            self._dialectic_result = ""
-            self._agent_model = {}
+            context_entry = self._context_result
+            dialectic_entry = self._dialectic_result
+            agent_model_entry = self._agent_model
+            self._context_result = None
+            self._dialectic_result = None
+            self._agent_model = None
+
+        context = (
+            prefetch_entry_result(context_entry)
+            if prefetch_entry_matches(context_entry, query, session_id=effective_session_id, effective_scope=scope)
+            else ""
+        )
+        dialectic = (
+            prefetch_entry_result(dialectic_entry)
+            if prefetch_entry_matches(dialectic_entry, query, session_id=effective_session_id, effective_scope=scope)
+            else ""
+        )
+        agent_model_text = (
+            prefetch_entry_result(agent_model_entry)
+            if prefetch_entry_matches(agent_model_entry, query, session_id=effective_session_id, effective_scope=scope)
+            else ""
+        )
+        if not (context or dialectic or agent_model_text):
+            logger.debug(
+                "RetainDB prefetch cache miss/mismatch query_hash=%s session_present=%s",
+                key["query_hash"], bool(session_id),
+            )
 
         parts: list[str] = []
         if context:
             parts.append(context)
         if dialectic:
             parts.append(f"[RetainDB User Synthesis]\n{dialectic}")
+        agent_model: dict = {}
+        if agent_model_text:
+            try:
+                agent_model = json.loads(agent_model_text)
+            except Exception:
+                agent_model = {}
         if agent_model and agent_model.get("memory_count", 0) > 0:
             model_lines: list[str] = []
             if agent_model.get("persona"):
@@ -621,6 +674,13 @@ class RetainDBMemoryProvider(MemoryProvider):
                 parts.append("[RetainDB Agent Self-Model]\n" + "\n".join(model_lines))
 
         return "\n\n".join(parts)
+
+    def _prefetch_scope(self, session_id: str = "") -> str:
+        project = self._client.project if self._client else "retaindb"
+        return (
+            f"project:{project}|user:{self._user_id}|agent:{self._agent_id}|"
+            f"session:{session_id or self._session_id or ''}"
+        )
 
     # ── Turn sync ──────────────────────────────────────────────────────────
 

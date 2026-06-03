@@ -1522,6 +1522,10 @@ DEFAULT_CONFIG = {
         # "hindsight", "holographic", "retaindb", "byterover".
         # Only ONE external provider is allowed at a time.
         "provider": "",
+        # Legacy warmer for the completed turn's query. Disabled by
+        # default so recall for the current model call is keyed to the
+        # current query/scope instead of the previous turn.
+        "post_turn_prefetch_enabled": False,
     },
 
     # Subagent delegation — override the provider:model used by delegate_task

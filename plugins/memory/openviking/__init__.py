@@ -38,6 +38,12 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+from agent.memory_prefetch import (
+    make_prefetch_entry,
+    make_prefetch_key,
+    prefetch_entry_matches,
+    prefetch_entry_result,
+)
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
@@ -419,7 +425,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._session_id = ""
         self._turn_count = 0
         self._sync_thread: Optional[threading.Thread] = None
-        self._prefetch_result = ""
+        self._prefetch_result: Any = None
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread: Optional[threading.Thread] = None
 
@@ -522,17 +528,31 @@ class OpenVikingMemoryProvider(MemoryProvider):
         """Return prefetched results from the background thread."""
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=3.0)
+        scope = self._prefetch_scope(session_id)
+        key = make_prefetch_key(query, session_id=session_id, effective_scope=scope)
         with self._prefetch_lock:
-            result = self._prefetch_result
-            self._prefetch_result = ""
+            entry = self._prefetch_result
+            self._prefetch_result = None
+        if not prefetch_entry_matches(entry, query, session_id=session_id, effective_scope=scope):
+            logger.debug(
+                "OpenViking prefetch cache mismatch query_hash=%s session_present=%s",
+                key["query_hash"], bool(session_id),
+            )
+            return ""
+        result = prefetch_entry_result(entry)
         if not result:
             return ""
+        logger.debug(
+            "OpenViking prefetch cache hit query_hash=%s session_hash=%s result_len=%d",
+            key["query_hash"], key["session_hash"], len(result),
+        )
         return f"## OpenViking Context\n{result}"
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         """Fire a background search to pre-load relevant context."""
         if not self._client or not query:
             return
+        scope = self._prefetch_scope(session_id)
 
         def _run():
             try:
@@ -556,7 +576,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
                             parts.append(f"- [{score:.2f}] {abstract} ({uri})")
                 if parts:
                     with self._prefetch_lock:
-                        self._prefetch_result = "\n".join(parts)
+                        self._prefetch_result = make_prefetch_entry(
+                            "\n".join(parts),
+                            query,
+                            session_id=session_id,
+                            effective_scope=scope,
+                        )
             except Exception as e:
                 logger.debug("OpenViking prefetch failed: %s", e)
 
@@ -564,6 +589,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
             target=_run, daemon=True, name="openviking-prefetch"
         )
         self._prefetch_thread.start()
+
+    def _prefetch_scope(self, session_id: str = "") -> str:
+        return (
+            f"account:{self._account}|user:{self._user}|agent:{self._agent}|"
+            f"session:{session_id or self._session_id or ''}"
+        )
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
         """Record the conversation turn in OpenViking's session (non-blocking)."""

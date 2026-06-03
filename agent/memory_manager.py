@@ -16,11 +16,11 @@ Usage in run_agent.py:
     prompt_parts.append(self._memory_manager.build_system_prompt())
 
     # Pre-turn
-    context = self._memory_manager.prefetch_all(user_message)
+    self._memory_manager.queue_prefetch_all(user_message, session_id=session_id)
+    context = self._memory_manager.prefetch_all(user_message, session_id=session_id)
 
     # Post-turn
     self._memory_manager.sync_all(user_msg, assistant_response)
-    self._memory_manager.queue_prefetch_all(user_msg)
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ import re
 import inspect
 from typing import Any, Dict, List, Optional
 
+from agent.memory_prefetch import make_prefetch_key, short_hash
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
@@ -343,17 +344,40 @@ class MemoryManager:
         are skipped. Failures in one provider don't block others.
         """
         parts = []
+        query_key = make_prefetch_key(query, session_id=session_id)
         for provider in self._providers:
             try:
                 result = provider.prefetch(query, session_id=session_id)
                 if result and result.strip():
+                    logger.debug(
+                        "Memory provider '%s' prefetch hit query_hash=%s session_hash=%s result_len=%d",
+                        provider.name,
+                        query_key["query_hash"],
+                        short_hash(session_id or ""),
+                        len(result),
+                    )
                     parts.append(result)
+                else:
+                    logger.debug(
+                        "Memory provider '%s' prefetch miss query_hash=%s session_present=%s",
+                        provider.name,
+                        query_key["query_hash"],
+                        bool(session_id),
+                    )
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' prefetch failed (non-fatal): %s",
                     provider.name, e,
                 )
-        return "\n\n".join(parts)
+        merged = "\n\n".join(parts)
+        logger.debug(
+            "External memory context injection candidate query_hash=%s session_present=%s injected=%s result_len=%d",
+            query_key["query_hash"],
+            bool(session_id),
+            bool(merged.strip()),
+            len(merged),
+        )
+        return merged
 
     def queue_prefetch_all(self, query: str, *, session_id: str = "") -> None:
         """Queue background prefetch on all providers for the next turn."""

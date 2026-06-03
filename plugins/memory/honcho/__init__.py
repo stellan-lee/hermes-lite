@@ -22,6 +22,12 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+from agent.memory_prefetch import (
+    make_prefetch_entry,
+    make_prefetch_key,
+    prefetch_entry_matches,
+    prefetch_entry_result,
+)
 from agent.memory_manager import sanitize_context
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
@@ -195,7 +201,7 @@ class HonchoMemoryProvider(MemoryProvider):
         self._manager = None   # HonchoSessionManager
         self._config = None    # HonchoClientConfig
         self._session_key = ""
-        self._prefetch_result = ""
+        self._prefetch_result: Any = None
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread: Optional[threading.Thread] = None
         self._sync_thread: Optional[threading.Thread] = None
@@ -483,7 +489,13 @@ class HonchoMemoryProvider(MemoryProvider):
                     return
                 if r and r.strip():
                     with self._prefetch_lock:
-                        self._prefetch_result = r
+                        self._prefetch_result = make_prefetch_entry(
+                            r,
+                            _prewarm_query,
+                            session_id=session_id,
+                            effective_scope=self._session_key,
+                            fired_at=0,
+                        )
                         self._prefetch_result_fired_at = 0
                     # Treat prewarm as turn 0 so cadence gating starts clean.
                     self._last_dialectic_turn = 0
@@ -668,7 +680,10 @@ class HonchoMemoryProvider(MemoryProvider):
 
         # Check if background context prefetch has a fresher result
         if self._manager:
-            fresh_ctx = self._manager.pop_context_result(self._session_key)
+            try:
+                fresh_ctx = self._manager.pop_context_result(self._session_key, query=query)
+            except TypeError:
+                fresh_ctx = self._manager.pop_context_result(self._session_key)
             if fresh_ctx:
                 formatted = self._format_first_turn_context(fresh_ctx)
                 if formatted:
@@ -708,7 +723,13 @@ class HonchoMemoryProvider(MemoryProvider):
                     return
                 if r and r.strip():
                     with self._prefetch_lock:
-                        self._prefetch_result = r
+                        self._prefetch_result = make_prefetch_entry(
+                            r,
+                            query,
+                            session_id=session_id,
+                            effective_scope=self._session_key,
+                            fired_at=_fired_at,
+                        )
                         self._prefetch_result_fired_at = _fired_at
                     # Advance cadence only on a non-empty result so the next
                     # turn retries when the call returned nothing.
@@ -733,11 +754,31 @@ class HonchoMemoryProvider(MemoryProvider):
 
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=3.0)
+        _key = make_prefetch_key(query, session_id=session_id, effective_scope=self._session_key)
         with self._prefetch_lock:
-            dialectic_result = self._prefetch_result
-            fired_at = self._prefetch_result_fired_at
-            self._prefetch_result = ""
+            dialectic_entry = self._prefetch_result
+            fired_at = (
+                dialectic_entry.get("fired_at", self._prefetch_result_fired_at)
+                if isinstance(dialectic_entry, dict)
+                else self._prefetch_result_fired_at
+            )
+            self._prefetch_result = None
             self._prefetch_result_fired_at = -999
+
+        if not prefetch_entry_matches(
+            dialectic_entry,
+            query,
+            session_id=session_id,
+            effective_scope=self._session_key,
+        ):
+            if dialectic_entry:
+                logger.debug(
+                    "Honcho pending dialectic discarded as query/scope mismatch: query_hash=%s session_present=%s",
+                    _key["query_hash"], bool(session_id),
+                )
+            dialectic_result = ""
+        else:
+            dialectic_result = prefetch_entry_result(dialectic_entry)
 
         # Discard stale pending results: if the fire happened more than
         # cadence × multiplier turns ago (e.g. a run of trivial-prompt turns
@@ -840,7 +881,13 @@ class HonchoMemoryProvider(MemoryProvider):
                 return
             if result and result.strip():
                 with self._prefetch_lock:
-                    self._prefetch_result = result
+                    self._prefetch_result = make_prefetch_entry(
+                        result,
+                        query,
+                        session_id=session_id,
+                        effective_scope=self._session_key,
+                        fired_at=_fired_at,
+                    )
                     self._prefetch_result_fired_at = _fired_at
                 self._last_dialectic_turn = _fired_at
                 self._dialectic_empty_streak = 0

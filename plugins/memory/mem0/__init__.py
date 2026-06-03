@@ -22,6 +22,12 @@ import threading
 import time
 from typing import Any, Dict, List
 
+from agent.memory_prefetch import (
+    make_prefetch_entry,
+    make_prefetch_key,
+    prefetch_entry_matches,
+    prefetch_entry_result,
+)
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
@@ -127,7 +133,7 @@ class Mem0MemoryProvider(MemoryProvider):
         self._user_id = "hermes-user"
         self._agent_id = "hermes"
         self._rerank = True
-        self._prefetch_result = ""
+        self._prefetch_result: Any = None
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread = None
         self._sync_thread = None
@@ -238,16 +244,30 @@ class Mem0MemoryProvider(MemoryProvider):
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=3.0)
+        scope = self._prefetch_scope(session_id)
+        key = make_prefetch_key(query, session_id=session_id, effective_scope=scope)
         with self._prefetch_lock:
-            result = self._prefetch_result
-            self._prefetch_result = ""
+            entry = self._prefetch_result
+            self._prefetch_result = None
+        if not prefetch_entry_matches(entry, query, session_id=session_id, effective_scope=scope):
+            logger.debug(
+                "Mem0 prefetch cache mismatch query_hash=%s session_present=%s",
+                key["query_hash"], bool(session_id),
+            )
+            return ""
+        result = prefetch_entry_result(entry)
         if not result:
             return ""
+        logger.debug(
+            "Mem0 prefetch cache hit query_hash=%s session_hash=%s result_len=%d",
+            key["query_hash"], key["session_hash"], len(result),
+        )
         return f"## Mem0 Memory\n{result}"
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         if self._is_breaker_open():
             return
+        scope = self._prefetch_scope(session_id)
 
         def _run():
             try:
@@ -261,7 +281,12 @@ class Mem0MemoryProvider(MemoryProvider):
                 if results:
                     lines = [r.get("memory", "") for r in results if r.get("memory")]
                     with self._prefetch_lock:
-                        self._prefetch_result = "\n".join(f"- {l}" for l in lines)
+                        self._prefetch_result = make_prefetch_entry(
+                            "\n".join(f"- {l}" for l in lines),
+                            query,
+                            session_id=session_id,
+                            effective_scope=scope,
+                        )
                 self._record_success()
             except Exception as e:
                 self._record_failure()
@@ -269,6 +294,9 @@ class Mem0MemoryProvider(MemoryProvider):
 
         self._prefetch_thread = threading.Thread(target=_run, daemon=True, name="mem0-prefetch")
         self._prefetch_thread.start()
+
+    def _prefetch_scope(self, session_id: str = "") -> str:
+        return f"user:{self._user_id}|agent:{self._agent_id}|session:{session_id or ''}"
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
         """Send the turn to Mem0 for server-side fact extraction (non-blocking)."""

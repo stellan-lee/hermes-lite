@@ -31,10 +31,10 @@ def _bare_agent():
 
     agent = AIAgent.__new__(AIAgent)
     agent._memory_manager = MagicMock()
-    # session_id is now propagated into sync_all / queue_prefetch_all so
-    # providers that cache per-session state can update it mid-process
-    # (see #6672).
+    # session_id is now propagated into memory calls so providers that
+    # cache per-session state can update it mid-process (see #6672).
     agent.session_id = "test_session_001"
+    agent._memory_post_turn_prefetch_enabled = False
     return agent
 
 
@@ -70,11 +70,11 @@ class TestSyncExternalMemoryForTurn:
 
     # --- Normal completed turn still syncs ------------------------------
 
-    def test_completed_turn_syncs_and_queues_prefetch(self):
+    def test_completed_turn_syncs_without_post_turn_prefetch_by_default(self):
         """Regression guard for the positive path: a normal completed
-        turn must still trigger both ``sync_all`` AND
-        ``queue_prefetch_all`` — otherwise the external memory backend
-        never learns about anything and every user complains.
+        turn must still trigger ``sync_all``. The legacy post-turn
+        prefetch warmer is disabled by default because it warms the
+        query that just finished.
         """
         agent = _bare_agent()
         agent._sync_external_memory_for_turn(
@@ -86,9 +86,21 @@ class TestSyncExternalMemoryForTurn:
             "What's the weather in Paris?", "It's sunny and 22°C.",
             session_id="test_session_001",
         )
+        agent._memory_manager.queue_prefetch_all.assert_not_called()
+
+    def test_completed_turn_queues_prefetch_when_opted_in(self):
+        agent = _bare_agent()
+        agent._memory_post_turn_prefetch_enabled = True
+
+        agent._sync_external_memory_for_turn(
+            original_user_message="What's the weather in Paris?",
+            final_response="It's sunny and 22°C.",
+            interrupted=False,
+        )
+
+        agent._memory_manager.sync_all.assert_called_once()
         agent._memory_manager.queue_prefetch_all.assert_called_once_with(
-            "What's the weather in Paris?",
-            session_id="test_session_001",
+            "What's the weather in Paris?", session_id="test_session_001"
         )
 
     def test_completed_turn_syncs_messages_when_present(self):
@@ -191,9 +203,9 @@ class TestSyncExternalMemoryForTurn:
         agent._memory_manager.sync_all.assert_called_once()
 
     def test_prefetch_exception_is_swallowed(self):
-        """Same best-effort contract applies to the prefetch step — a
-        failure in queue_prefetch_all must not bubble out."""
+        """Same best-effort contract applies when legacy prefetch is enabled."""
         agent = _bare_agent()
+        agent._memory_post_turn_prefetch_enabled = True
         agent._memory_manager.queue_prefetch_all.side_effect = RuntimeError(
             "prefetch worker dead"
         )
@@ -228,7 +240,7 @@ class TestSyncExternalMemoryForTurn:
         )
         if expect_sync:
             agent._memory_manager.sync_all.assert_called_once()
-            agent._memory_manager.queue_prefetch_all.assert_called_once()
+            agent._memory_manager.queue_prefetch_all.assert_not_called()
         else:
             agent._memory_manager.sync_all.assert_not_called()
             agent._memory_manager.queue_prefetch_all.assert_not_called()
