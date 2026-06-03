@@ -1526,6 +1526,11 @@ DEFAULT_CONFIG = {
         # default so recall for the current model call is keyed to the
         # current query/scope instead of the previous turn.
         "post_turn_prefetch_enabled": False,
+        # Opt-in deterministic enrichment for current-turn recall queries.
+        "recall_query_builder_enabled": False,
+        "recall_query_recent_turns": 6,
+        "recall_query_max_recent_chars": 1200,
+        "recall_query_max_chars": 1800,
     },
 
     # Subagent delegation — override the provider:model used by delegate_task

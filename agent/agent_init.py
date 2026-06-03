@@ -1054,6 +1054,10 @@ def init_agent(
     agent._memory_enabled = False
     agent._user_profile_enabled = False
     agent._memory_post_turn_prefetch_enabled = False
+    agent._memory_recall_query_builder_enabled = False
+    agent._memory_recall_query_recent_turns = 6
+    agent._memory_recall_query_max_recent_chars = 1200
+    agent._memory_recall_query_max_chars = 1800
     agent._memory_nudge_interval = 10
     agent._turns_since_memory = 0
     agent._iters_since_skill = 0
@@ -1064,6 +1068,18 @@ def init_agent(
             agent._user_profile_enabled = mem_config.get("user_profile_enabled", False)
             agent._memory_post_turn_prefetch_enabled = bool(
                 mem_config.get("post_turn_prefetch_enabled", False)
+            )
+            agent._memory_recall_query_builder_enabled = bool(
+                mem_config.get("recall_query_builder_enabled", False)
+            )
+            agent._memory_recall_query_recent_turns = int(
+                mem_config.get("recall_query_recent_turns", 6) or 6
+            )
+            agent._memory_recall_query_max_recent_chars = int(
+                mem_config.get("recall_query_max_recent_chars", 1200) or 1200
+            )
+            agent._memory_recall_query_max_chars = int(
+                mem_config.get("recall_query_max_chars", 1800) or 1800
             )
             agent._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
             if agent._memory_enabled or agent._user_profile_enabled:

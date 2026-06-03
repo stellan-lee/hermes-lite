@@ -32,6 +32,8 @@ from agent.display import KawaiiSpinner
 from agent.error_classifier import FailoverReason, classify_api_error
 from agent.iteration_budget import IterationBudget
 from agent.memory_manager import build_memory_context_block
+from agent.memory_prefetch import short_hash
+from agent.memory_recall_query import build_recall_query_plan
 from agent.message_sanitization import (
     _repair_tool_call_arguments,
     _sanitize_messages_non_ascii,
@@ -774,12 +776,49 @@ def run_conversation(
     _ext_prefetch_cache = ""
     if agent._memory_manager:
         try:
-            _query = original_user_message if isinstance(original_user_message, str) else ""
+            _raw_query = (
+                original_user_message
+                if isinstance(original_user_message, str)
+                else ""
+            )
             _sid = getattr(agent, "session_id", "") or ""
-            if _query:
-                agent._memory_manager.queue_prefetch_all(_query, session_id=_sid)
+            _recall_query = _raw_query
+            _recall_plan = None
+            _builder_enabled = bool(
+                getattr(agent, "_memory_recall_query_builder_enabled", False)
+            )
+            if _builder_enabled and _raw_query:
+                _recall_plan = build_recall_query_plan(
+                    _raw_query,
+                    recent_messages=messages,
+                    max_recent_turns=getattr(
+                        agent, "_memory_recall_query_recent_turns", 6
+                    ),
+                    max_recent_chars=getattr(
+                        agent, "_memory_recall_query_max_recent_chars", 1200
+                    ),
+                    max_query_chars=getattr(
+                        agent, "_memory_recall_query_max_chars", 1800
+                    ),
+                )
+                _recall_query = _recall_plan.recall_query or _raw_query
+            if _raw_query or _recall_query:
+                logger.debug(
+                    "memory recall query builder: enabled=%s raw_hash=%s recall_hash=%s "
+                    "raw_len=%d recall_len=%d intent=%s entity_count=%d used_recent_context=%s",
+                    _builder_enabled,
+                    short_hash(_raw_query),
+                    short_hash(_recall_query),
+                    len(_raw_query),
+                    len(_recall_query),
+                    getattr(_recall_plan, "intent", None) or "",
+                    len(getattr(_recall_plan, "entities", []) or []),
+                    bool(getattr(_recall_plan, "used_recent_context", False)),
+                )
+            if _recall_query:
+                agent._memory_manager.queue_prefetch_all(_recall_query, session_id=_sid)
                 _ext_prefetch_cache = agent._memory_manager.prefetch_all(
-                    _query,
+                    _recall_query,
                     session_id=_sid,
                 ) or ""
         except Exception:

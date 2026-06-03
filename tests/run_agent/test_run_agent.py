@@ -5972,20 +5972,43 @@ class TestMemoryProviderTurnStart:
         # assert the extracted-form spelling directly.
         assert "on_turn_start(agent._user_turn_count" in src
 
-    def test_current_turn_prefetch_uses_session_id_and_current_query_queue(self):
+    def test_current_turn_prefetch_uses_original_query_and_session_id(self, agent):
         """Current-turn recall must be keyed by the active query and session."""
-        import inspect
-        from agent.conversation_loop import run_conversation as _rc
+        agent.client.chat.completions.create.return_value = _mock_response("done")
+        agent._cached_system_prompt = "test system prompt"
+        agent._memory_recall_query_builder_enabled = False
+        agent._memory_manager = MagicMock()
+        agent._memory_manager.build_system_prompt.return_value = ""
+        agent._memory_manager.prefetch_all.return_value = ""
+        agent.session_id = "session-raw-query"
 
-        src = inspect.getsource(_rc)
-        idx_query = src.index('_query = original_user_message if isinstance(original_user_message, str) else ""')
-        idx_sid = src.index('_sid = getattr(agent, "session_id", "") or ""', idx_query)
-        idx_queue = src.index(".queue_prefetch_all(_query, session_id=_sid)", idx_sid)
-        idx_prefetch = src.index(".prefetch_all(", idx_queue)
-        prefetch_call = src[idx_prefetch:idx_prefetch + 140]
+        agent.run_conversation("and the mobile version?")
 
-        assert idx_query < idx_sid < idx_queue < idx_prefetch
-        assert "session_id=_sid" in prefetch_call
+        agent._memory_manager.queue_prefetch_all.assert_called_once_with(
+            "and the mobile version?",
+            session_id="session-raw-query",
+        )
+        agent._memory_manager.prefetch_all.assert_called_once_with(
+            "and the mobile version?",
+            session_id="session-raw-query",
+        )
+
+    def test_current_turn_prefetch_treats_non_string_original_query_as_empty(self, agent):
+        agent.client.chat.completions.create.return_value = _mock_response("done")
+        agent._cached_system_prompt = "test system prompt"
+        agent._memory_recall_query_builder_enabled = False
+        agent._memory_manager = MagicMock()
+        agent._memory_manager.build_system_prompt.return_value = ""
+        agent._memory_manager.prefetch_all.return_value = ""
+        agent.session_id = "session-empty-query"
+
+        agent.run_conversation(
+            "visible user message",
+            persist_user_message={"not": "a string"},
+        )
+
+        agent._memory_manager.queue_prefetch_all.assert_not_called()
+        agent._memory_manager.prefetch_all.assert_not_called()
 
     def test_empty_external_memory_does_not_inject_memory_context(self):
         """The API-call injection path must stay gated on non-empty recall."""
@@ -5996,3 +6019,89 @@ class TestMemoryProviderTurnStart:
         idx_gate = src.index("if _ext_prefetch_cache:")
         idx_build = src.index("build_memory_context_block(_ext_prefetch_cache)", idx_gate)
         assert idx_gate < idx_build
+
+
+class TestMemoryRecallQueryBuilderIntegration:
+    def _run_with_memory(self, agent, user_message, history=None):
+        agent.client.chat.completions.create.return_value = _mock_response("done")
+        agent._cached_system_prompt = "test system prompt"
+        agent._memory_manager = MagicMock()
+        agent._memory_manager.build_system_prompt.return_value = ""
+        agent._memory_manager.prefetch_all.return_value = "remembered memory context"
+        agent.session_id = "session-123"
+        return agent.run_conversation(user_message, conversation_history=history)
+
+    def _api_user_content(self, agent):
+        kwargs = agent.client.chat.completions.create.call_args.kwargs
+        api_messages = kwargs["messages"]
+        users = [m for m in api_messages if m.get("role") == "user"]
+        return users[-1]["content"]
+
+    def test_disabled_uses_raw_original_query(self, agent):
+        agent._memory_recall_query_builder_enabled = False
+
+        self._run_with_memory(agent, "and the mobile version?")
+
+        agent._memory_manager.queue_prefetch_all.assert_called_once_with(
+            "and the mobile version?",
+            session_id="session-123",
+        )
+        agent._memory_manager.prefetch_all.assert_called_once_with(
+            "and the mobile version?",
+            session_id="session-123",
+        )
+
+    def test_enabled_uses_same_enriched_query_and_preserves_api_user_message(self, agent):
+        agent._memory_recall_query_builder_enabled = True
+        history = [
+            {"role": "user", "content": "what did we decide about Telegram approval cards?"},
+            {"role": "assistant", "content": "We decided compact inline buttons."},
+        ]
+
+        result = self._run_with_memory(agent, "and the mobile version?", history)
+
+        queued_query = agent._memory_manager.queue_prefetch_all.call_args.args[0]
+        prefetched_query = agent._memory_manager.prefetch_all.call_args.args[0]
+        assert queued_query == prefetched_query
+        assert queued_query != "and the mobile version?"
+        assert "and the mobile version?" in queued_query
+        assert "Telegram approval cards" in queued_query
+        assert agent._memory_manager.queue_prefetch_all.call_args.kwargs == {"session_id": "session-123"}
+        assert agent._memory_manager.prefetch_all.call_args.kwargs == {"session_id": "session-123"}
+
+        api_user_content = self._api_user_content(agent)
+        assert api_user_content.startswith("and the mobile version?")
+        assert "<memory-context>" in api_user_content
+        assert "</memory-context>" in api_user_content
+        assert "remembered memory context" in api_user_content
+        assert "Original question:" not in api_user_content
+        assert result["messages"][-2]["content"] == "and the mobile version?"
+
+    def test_enabled_context_dependent_prompt_includes_recent_topic(self, agent):
+        agent._memory_recall_query_builder_enabled = True
+        history = [
+            {"role": "user", "content": "Let's finish Telegram approval cards."},
+            {"role": "assistant", "content": "The desktop card uses approve and reject inline buttons."},
+        ]
+
+        self._run_with_memory(agent, "and the mobile version?", history)
+
+        query = agent._memory_manager.prefetch_all.call_args.args[0]
+        assert "mobile version" in query
+        assert "Telegram approval cards" in query
+
+    def test_enabled_sanitizes_memory_context_from_recent_messages(self, agent):
+        agent._memory_recall_query_builder_enabled = True
+        history = [
+            {
+                "role": "assistant",
+                "content": "Visible topic. <memory-context>secret recalled text</memory-context>",
+            }
+        ]
+
+        self._run_with_memory(agent, "and the mobile version?", history)
+
+        query = agent._memory_manager.prefetch_all.call_args.args[0]
+        assert "Visible topic" in query
+        assert "secret recalled text" not in query
+        assert "memory-context" not in query
