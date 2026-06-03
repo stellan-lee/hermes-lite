@@ -140,6 +140,17 @@ def test_url_with_dots_not_fragmented():
     assert any("api.example.com" in c.summary for c in decisions)
 
 
+def test_implementation_detail_natural_phrasing():
+    # Regression: "Implementation detail:" must be detected even though
+    # "implement" alone won't match "Implementation" under word boundaries.
+    cards = extract_memory_cards(
+        "how did we implement PR3?",
+        "Implementation detail: multi-query recall runs queue_prefetch_all then "
+        "prefetch_all for each subquery.",
+    )
+    assert MemoryCardType.IMPLEMENTATION_DETAIL in _types(cards)
+
+
 def test_open_question_extraction():
     cards = extract_memory_cards(
         "anything unresolved?",

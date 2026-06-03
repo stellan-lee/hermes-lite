@@ -173,6 +173,10 @@ _SIGNALS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         MemoryCardType.IMPLEMENTATION_DETAIL,
         (
             "implement",
+            # "implement" won't match "implementation" under word boundaries
+            # (trailing "ation" breaks \b), yet "Implementation detail:" is the
+            # most natural phrasing — match it explicitly.
+            "implementation",
             "code",
             "function",
             "class",
