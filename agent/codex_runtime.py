@@ -141,8 +141,12 @@ def run_codex_app_server_turn(
                 final_response=turn.final_text,
                 interrupted=False,
             )
-        except Exception:
-            logger.debug("external memory sync raised", exc_info=True)
+        except Exception as e:
+            # No exc_info / str(e): the traceback or message may echo memory
+            # or card text. Safe metadata only.
+            logger.debug(
+                "external memory sync raised (non-fatal): %s", type(e).__name__
+            )
 
     # Background review fork — same cadence + signature as the default
     # path (line ~15449). Only fires when a trigger actually tripped AND

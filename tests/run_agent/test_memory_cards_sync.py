@@ -142,3 +142,137 @@ def test_user_message_not_modified_by_cards():
     # sync_all received the verbatim original user message.
     assert agent._memory_manager.sync_all.call_args.args[0] == user
     assert user == "which approval UX should we use?"
+
+
+# ---------------------------------------------------------------------------
+# PR5: supersession / conflict resolution post-turn integration
+# ---------------------------------------------------------------------------
+
+from agent.memory_cards import MemoryCard, format_memory_cards_for_sync  # noqa: E402
+
+# A turn whose assistant response is a single-sentence decision carrying both
+# a decision keyword and explicit override language, with a quoted entity that
+# cleanly matches the prior card below.
+OVERRIDE_TURN = (
+    "what layout for the approval buttons?",
+    'Final decision: use one row instead of two rows for "ApprovalButtons".',
+)
+
+
+def _prior_decision_text(card_id="OLDPRIOR1", summary="Use two rows for ApprovalButtons."):
+    return format_memory_cards_for_sync(
+        [
+            MemoryCard(
+                card_id=card_id, type="decision", status="active",
+                title="ApprovalButtons", summary=summary,
+                entities=["ApprovalButtons"], source_session_id="sess-card-1",
+            )
+        ]
+    )
+
+
+def _conflict_agent(*, resolution_enabled=True):
+    agent = _bare_agent(structured_enabled=True)
+    agent._memory_structured_conflict_resolution_enabled = resolution_enabled
+    agent._memory_structured_conflict_require_explicit_override = True
+    agent._memory_structured_conflict_min_entity_overlap = 1
+    agent._memory_structured_conflict_max_candidates = 8
+    return agent
+
+
+def test_resolution_off_does_not_look_up_candidates():
+    agent = _conflict_agent(resolution_enabled=False)
+    agent._sync_external_memory_for_turn(
+        original_user_message=OVERRIDE_TURN[0],
+        final_response=OVERRIDE_TURN[1],
+        interrupted=False,
+    )
+    agent._memory_manager.lookup_structured_card_candidates.assert_not_called()
+    agent._memory_manager.sync_structured_cards_all.assert_called_once()
+
+
+def test_resolution_on_looks_up_then_writes_new_and_marker():
+    agent = _conflict_agent()
+    agent._memory_manager.lookup_structured_card_candidates.return_value = (
+        _prior_decision_text()
+    )
+    agent._sync_external_memory_for_turn(
+        original_user_message=OVERRIDE_TURN[0],
+        final_response=OVERRIDE_TURN[1],
+        interrupted=False,
+    )
+    # Candidate lookup happened (before the write).
+    assert agent._memory_manager.lookup_structured_card_candidates.called
+    agent._memory_manager.sync_structured_cards_all.assert_called_once()
+    written = agent._memory_manager.sync_structured_cards_all.call_args.args[0]
+    statuses = [c.status for c in written]
+    assert "active" in statuses
+    assert "superseded" in statuses  # a marker card was appended
+    marker = next(c for c in written if c.status == "superseded")
+    assert marker.superseded_by  # points at the new card id
+    active = next(c for c in written if c.status == "active")
+    assert "OLDPRIOR1" in active.supersedes
+
+
+def test_resolution_does_not_queue_prefetch():
+    agent = _conflict_agent()
+    agent._memory_manager.lookup_structured_card_candidates.return_value = (
+        _prior_decision_text()
+    )
+    agent._sync_external_memory_for_turn(
+        original_user_message=OVERRIDE_TURN[0],
+        final_response=OVERRIDE_TURN[1],
+        interrupted=False,
+    )
+    agent._memory_manager.queue_prefetch_all.assert_not_called()
+
+
+def test_candidate_lookup_failure_fails_open_and_writes_new_card():
+    agent = _conflict_agent()
+    agent._memory_manager.lookup_structured_card_candidates.side_effect = (
+        RuntimeError("provider down")
+    )
+    # Must not raise; new cards still written without supersession metadata.
+    agent._sync_external_memory_for_turn(
+        original_user_message=OVERRIDE_TURN[0],
+        final_response=OVERRIDE_TURN[1],
+        interrupted=False,
+    )
+    agent._memory_manager.sync_structured_cards_all.assert_called_once()
+    written = agent._memory_manager.sync_structured_cards_all.call_args.args[0]
+    assert all(c.status != "superseded" for c in written)  # no markers
+    assert all(not c.supersedes for c in written)
+
+
+def test_resolution_logs_redact_raw_candidate_text(caplog):
+    agent = _conflict_agent()
+    leaky = _prior_decision_text(summary="LEAK_CANDIDATE_SUMMARY two-row.")
+    agent._memory_manager.lookup_structured_card_candidates.return_value = leaky
+
+    with caplog.at_level("DEBUG", logger="run_agent"):
+        agent._sync_external_memory_for_turn(
+            original_user_message=OVERRIDE_TURN[0],
+            final_response=OVERRIDE_TURN[1],
+            interrupted=False,
+        )
+    assert "LEAK_CANDIDATE_SUMMARY" not in caplog.text
+    assert "structured-memory-cards" not in caplog.text
+
+
+def test_resolution_failure_fails_open(monkeypatch):
+    agent = _conflict_agent()
+
+    def boom(*a, **k):
+        raise RuntimeError("resolver exploded")
+
+    monkeypatch.setattr("agent.memory_card_conflicts.resolve_card_conflicts", boom)
+    agent._memory_manager.lookup_structured_card_candidates.return_value = (
+        _prior_decision_text()
+    )
+    # Must not raise; new cards still written (fail-open returns original cards).
+    agent._sync_external_memory_for_turn(
+        original_user_message=OVERRIDE_TURN[0],
+        final_response=OVERRIDE_TURN[1],
+        interrupted=False,
+    )
+    agent._memory_manager.sync_structured_cards_all.assert_called_once()

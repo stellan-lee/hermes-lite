@@ -37,6 +37,30 @@ class MergedRecall:
     # Gross raw→final char delta (dedupe + budget drop + first-section
     # truncation combined), for debug logging only — not dedupe volume alone.
     removed_chars: int
+    # PR5 supersession-filter metadata (0 unless suppress_superseded=True).
+    parsed_card_count: int = 0
+    suppressed_card_count: int = 0
+
+
+def _collect_superseded_ids(results: list[str]) -> tuple[set[str], int]:
+    """Parse structured cards across all results and collect superseded ids.
+
+    An id is "superseded" if it appears in any active card's ``supersedes``
+    list, or it is the id of a card whose status is ``superseded`` (a marker).
+    Returns ``(superseded_ids, parsed_card_count)``. Fail-closed.
+    """
+    from agent.memory_cards import parse_memory_cards_from_text
+
+    joined = "\n\n".join(r for r in results if isinstance(r, str))
+    parsed = parse_memory_cards_from_text(joined)
+    superseded: set[str] = set()
+    for card in parsed:
+        for old_id in card.supersedes:
+            if old_id:
+                superseded.add(old_id)
+        if card.status == "superseded" and card.card_id:
+            superseded.add(card.card_id)
+    return superseded, len(parsed)
 
 
 def _split_sections(text: str) -> list[str]:
@@ -55,13 +79,44 @@ def merge_recall_results(
     results: list[str],
     *,
     max_total_chars: int = 6000,
+    suppress_superseded: bool = False,
 ) -> MergedRecall:
     """Merge per-subquery recall texts into one deduped, bounded block.
 
     ``results`` is consumed in priority order. Returns an empty-text
     :class:`MergedRecall` when every input is empty/blank.
+
+    When ``suppress_superseded`` is True (PR5, default off), structured cards
+    whose ids are marked superseded — by an active card's ``supersedes`` list
+    or a ``status: superseded`` marker — are dropped from the merged output
+    before dedupe/bounding. Non-structured text and active/newer cards are
+    preserved; parsing failures fail open (nothing suppressed).
     """
     max_total_chars = max(1, int(max_total_chars or 1))
+
+    parsed_card_count = 0
+    suppressed_card_count = 0
+    if suppress_superseded and results:
+        try:
+            superseded_ids, parsed_card_count = _collect_superseded_ids(results)
+            if superseded_ids:
+                from agent.memory_cards import filter_superseded_card_text
+
+                filtered: list[str] = []
+                for r in results:
+                    if isinstance(r, str):
+                        new_r, removed = filter_superseded_card_text(
+                            r, superseded_ids
+                        )
+                        suppressed_card_count += removed
+                        filtered.append(new_r)
+                    else:
+                        filtered.append(r)
+                results = filtered
+        except Exception:
+            parsed_card_count = 0
+            suppressed_card_count = 0
+
     raw_chars = sum(len(r) for r in results if isinstance(r, str))
 
     input_sections = 0
@@ -106,4 +161,6 @@ def merge_recall_results(
         raw_chars=raw_chars,
         final_chars=final_chars,
         removed_chars=max(0, raw_chars - final_chars),
+        parsed_card_count=parsed_card_count,
+        suppressed_card_count=suppressed_card_count,
     )

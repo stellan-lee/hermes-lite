@@ -1066,6 +1066,11 @@ def init_agent(
     agent._memory_structured_cards_max_per_turn = 5
     agent._memory_structured_cards_max_chars = 2500
     agent._memory_structured_cards_fallback_sync_turn_enabled = True
+    agent._memory_structured_conflict_resolution_enabled = False
+    agent._memory_structured_conflict_filter_enabled = False
+    agent._memory_structured_conflict_max_candidates = 8
+    agent._memory_structured_conflict_min_entity_overlap = 1
+    agent._memory_structured_conflict_require_explicit_override = True
     agent._memory_nudge_interval = 10
     agent._turns_since_memory = 0
     agent._iters_since_skill = 0
@@ -1112,6 +1117,21 @@ def init_agent(
             )
             agent._memory_structured_cards_fallback_sync_turn_enabled = bool(
                 mem_config.get("structured_cards_fallback_sync_turn_enabled", True)
+            )
+            agent._memory_structured_conflict_resolution_enabled = bool(
+                mem_config.get("structured_conflict_resolution_enabled", False)
+            )
+            agent._memory_structured_conflict_filter_enabled = bool(
+                mem_config.get("structured_conflict_filter_enabled", False)
+            )
+            agent._memory_structured_conflict_max_candidates = int(
+                mem_config.get("structured_conflict_max_candidates", 8) or 8
+            )
+            agent._memory_structured_conflict_min_entity_overlap = int(
+                mem_config.get("structured_conflict_min_entity_overlap", 1) or 1
+            )
+            agent._memory_structured_conflict_require_explicit_override = bool(
+                mem_config.get("structured_conflict_require_explicit_override", True)
             )
             agent._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
             if agent._memory_enabled or agent._user_profile_enabled:

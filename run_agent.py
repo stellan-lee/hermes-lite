@@ -2571,6 +2571,16 @@ class AIAgent:
                         self, "_memory_structured_cards_max_chars", 2500
                     ),
                 )
+                # PR5: append-only supersession/conflict resolution. Runs AFTER
+                # extraction but BEFORE writing the new cards, so candidate
+                # lookup can't match the new cards against themselves. Fail-open:
+                # any error returns the original cards (still written, no
+                # supersession metadata). Never queues prefetch, never injects
+                # into the current turn, never deletes old provider memories.
+                if cards and getattr(
+                    self, "_memory_structured_conflict_resolution_enabled", False
+                ):
+                    cards = self._resolve_structured_card_conflicts(cards)
                 if cards:
                     self._memory_manager.sync_structured_cards_all(
                         cards,
@@ -2583,6 +2593,81 @@ class AIAgent:
                     )
             except Exception:
                 pass
+
+    def _resolve_structured_card_conflicts(self, cards: list) -> list:
+        """PR5 — detect deterministic supersessions and append marker cards.
+
+        Returns ``updated_new_cards + superseded_marker_cards`` (append-only;
+        old provider memories are never touched). Fail-open: on any error the
+        original ``cards`` are returned unchanged so they are still written.
+        Logs only safe metadata (counts), never raw card/candidate text.
+        """
+        try:
+            from agent.memory_card_conflicts import (
+                build_candidate_query,
+                resolve_card_conflicts,
+            )
+            from agent.memory_cards import MemoryCardType
+
+            sid = self.session_id or ""
+            supersedable = {
+                MemoryCardType.DECISION,
+                MemoryCardType.PREFERENCE,
+                MemoryCardType.CONSTRAINT,
+                MemoryCardType.TODO,
+            }
+            candidate_texts: list = []
+            seen_queries: set = set()
+            for card in cards:
+                if card.type not in supersedable:
+                    continue
+                try:
+                    query = build_candidate_query(card)
+                    # Cards on the same topic produce identical queries — look
+                    # each unique query up only once to bound post-turn latency.
+                    if query in seen_queries:
+                        continue
+                    seen_queries.add(query)
+                    text = self._memory_manager.lookup_structured_card_candidates(
+                        query, session_id=sid
+                    )
+                    if text:
+                        candidate_texts.append(text)
+                except Exception:
+                    continue  # per-card fail-open
+            if not candidate_texts:
+                return cards
+
+            result = resolve_card_conflicts(
+                cards,
+                candidate_texts,
+                require_explicit_override=getattr(
+                    self,
+                    "_memory_structured_conflict_require_explicit_override",
+                    True,
+                ),
+                min_entity_overlap=getattr(
+                    self, "_memory_structured_conflict_min_entity_overlap", 1
+                ),
+                max_candidates=getattr(
+                    self, "_memory_structured_conflict_max_candidates", 8
+                ),
+            )
+            logger.debug(
+                "structured card conflict resolution: new_cards=%d "
+                "candidates_parsed=%d superseded=%d markers=%d",
+                len(cards),
+                result.candidates_parsed,
+                result.superseded_count,
+                result.marker_count,
+            )
+            return result.updated_new_cards + result.superseded_marker_cards
+        except Exception as e:
+            logger.debug(
+                "structured card conflict resolution failed (non-fatal): %s",
+                type(e).__name__,
+            )
+            return cards
 
     def release_clients(self) -> None:
         """Release LLM client resources WITHOUT tearing down session tool state.

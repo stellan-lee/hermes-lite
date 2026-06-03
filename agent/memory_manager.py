@@ -331,7 +331,7 @@ class MemoryManager:
             except Exception as e:
                 logger.warning(
                     "Memory provider '%s' system_prompt_block() failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
         return "\n\n".join(blocks)
 
@@ -367,7 +367,7 @@ class MemoryManager:
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' prefetch failed (non-fatal): %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
         merged = "\n\n".join(parts)
         logger.debug(
@@ -375,6 +375,40 @@ class MemoryManager:
             query_key["query_hash"],
             bool(session_id),
             bool(merged.strip()),
+            len(merged),
+        )
+        return merged
+
+    def lookup_structured_card_candidates(
+        self, query: str, *, session_id: str = ""
+    ) -> str:
+        """Read-only candidate lookup for PR5 supersession detection.
+
+        Calls each provider's ``prefetch`` directly and never calls
+        ``queue_prefetch_all`` — so PR1's keyed *queue* cache is never warmed
+        for a future turn. (A provider's own prefetch may consume its current
+        result slot, which is harmless here: this runs post-turn, after the
+        turn's recall was already consumed, and the next turn re-queues.)
+        Results are for internal supersession analysis only — never injected
+        into the model call. Fail-open: provider errors are swallowed. Logs
+        only safe metadata (query hash/length, result len).
+        """
+        parts: list[str] = []
+        for provider in self._providers:
+            try:
+                result = provider.prefetch(query, session_id=session_id)
+                if result and result.strip():
+                    parts.append(result)
+            except Exception as e:
+                logger.debug(
+                    "Memory provider '%s' candidate lookup failed (non-fatal): %s",
+                    provider.name, type(e).__name__,
+                )
+        merged = "\n\n".join(parts)
+        logger.debug(
+            "structured card candidate lookup: query_hash=%s query_len=%d result_len=%d",
+            short_hash(query),
+            len(query or ""),
             len(merged),
         )
         return merged
@@ -387,7 +421,7 @@ class MemoryManager:
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' queue_prefetch failed (non-fatal): %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
 
     # -- Sync ----------------------------------------------------------------
@@ -431,7 +465,7 @@ class MemoryManager:
             except Exception as e:
                 logger.warning(
                     "Memory provider '%s' sync_turn failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
 
     def sync_structured_cards_all(
@@ -524,7 +558,7 @@ class MemoryManager:
             except Exception as e:
                 logger.warning(
                     "Memory provider '%s' get_tool_schemas() failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
         return schemas
 
@@ -552,7 +586,7 @@ class MemoryManager:
         except Exception as e:
             logger.error(
                 "Memory provider '%s' handle_tool_call(%s) failed: %s",
-                provider.name, tool_name, e,
+                provider.name, tool_name, type(e).__name__,
             )
             return tool_error(f"Memory tool '{tool_name}' failed: {e}")
 
@@ -569,7 +603,7 @@ class MemoryManager:
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' on_turn_start failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
@@ -580,7 +614,7 @@ class MemoryManager:
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' on_session_end failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
 
     def on_session_switch(
@@ -628,7 +662,7 @@ class MemoryManager:
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' on_session_switch failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
 
     def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
@@ -646,7 +680,7 @@ class MemoryManager:
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' on_pre_compress failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
         return "\n\n".join(parts)
 
@@ -703,7 +737,7 @@ class MemoryManager:
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' on_memory_write failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
 
     def on_delegation(self, task: str, result: str, *,
@@ -717,7 +751,7 @@ class MemoryManager:
             except Exception as e:
                 logger.debug(
                     "Memory provider '%s' on_delegation failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
 
     def shutdown_all(self) -> None:
@@ -728,7 +762,7 @@ class MemoryManager:
             except Exception as e:
                 logger.warning(
                     "Memory provider '%s' shutdown failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )
 
     def initialize_all(self, session_id: str, **kwargs) -> None:
@@ -747,5 +781,5 @@ class MemoryManager:
             except Exception as e:
                 logger.warning(
                     "Memory provider '%s' initialize failed: %s",
-                    provider.name, e,
+                    provider.name, type(e).__name__,
                 )

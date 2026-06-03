@@ -75,6 +75,15 @@ _INTENT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("todo", "next", "status", "where were we", "open question"),
         ("下一步", "待办", "进度", "还剩", "卡在哪"),
     ),
+    # Placed last so it only catches queries no stronger intent matched
+    # (e.g. "we must decide" stays a decision). Addresses the PR4 eval gap
+    # where constraint recall queries got no intent at all.
+    (
+        "constraint / requirement",
+        ("constraint", "requirement", "must not", "must", "cannot", "can't",
+         "logging constraint", "restriction", "not allowed"),
+        ("限制", "要求", "必须", "不能", "不要", "只能"),
+    ),
 )
 
 # Maps each ``_INTENT_RULES`` label to a focused, recall-friendly suffix used
@@ -90,7 +99,8 @@ _INTENT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 # be truncated, degrading gracefully to the original recall phrasing.
 _INTENT_SUBQUERY_SUFFIX: dict[str, str] = {
     "previous decision / final agreed approach": (
-        "previous decision final agreed approach type: decision final decision"
+        "previous decision final agreed approach type: decision final decision "
+        "status: active current decision not superseded latest active decision"
     ),
     "implementation detail / constraints": (
         "implementation details constraints code path type: implementation_detail"
@@ -100,6 +110,9 @@ _INTENT_SUBQUERY_SUFFIX: dict[str, str] = {
     ),
     "task status / open todo": (
         "task status todo open question next step type: todo"
+    ),
+    "constraint / requirement": (
+        "constraint requirement restriction type: constraint status: active"
     ),
 }
 

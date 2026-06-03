@@ -51,21 +51,34 @@ class MemoryCardType:
 
 
 class MemoryCardStatus:
-    """Lifecycle status of a card. PR4 only ever emits active/open."""
+    """Lifecycle status of a card.
+
+    PR4 emits active/open. PR5 adds ``superseded`` (append-only): a new card
+    can mark a prior card superseded via metadata + a marker card — old
+    provider memories are never deleted or rewritten.
+    """
 
     ACTIVE = "active"
     OPEN = "open"
-    REJECTED = "rejected"  # reserved for a future cross-turn update pass
+    REJECTED = "rejected"  # reserved
+    SUPERSEDED = "superseded"  # PR5 — set on marker cards only
 
 
 @dataclass
 class MemoryCard:
     """One structured, durable memory signal extracted from a turn.
 
-    ``card_id`` is deterministic from the card's content + session hash, so
-    re-extracting the same turn yields stable identifiers (useful for
-    dedupe and idempotent provider writes). ``source_turn_hash`` is a hash
-    of the (sanitized) turn text — provenance without exposing raw content.
+    ``card_id`` is deterministic from the card's CONTENT + session hash
+    (type/title/summary/entities/session) so re-extracting the same turn
+    yields stable identifiers (useful for dedupe and idempotent provider
+    writes). It deliberately does NOT include the PR5 supersession fields
+    (``supersedes``/``superseded_by``/``conflict_group_id``): those are
+    derived post-hoc from a volatile candidate search and must not perturb
+    the stable content id. ``source_turn_hash`` is a hash of the (sanitized)
+    turn text — provenance without exposing raw content.
+
+    PR5 supersession fields are optional and default empty, so all PR4 cards
+    remain backward compatible.
     """
 
     card_id: str
@@ -77,6 +90,10 @@ class MemoryCard:
     confidence: str = "medium"
     source_session_id: str = ""
     source_turn_hash: str = ""
+    # PR5 — append-only supersession metadata.
+    supersedes: list[str] = field(default_factory=list)
+    superseded_by: str | None = None
+    conflict_group_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +282,34 @@ _MAX_ENTITIES_PER_CARD = 6
 def _hash(text: str, length: int = 16) -> str:
     """Stable short hex digest (no raw text retained)."""
     return hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest()[:length]
+
+
+def _normalized_topic_key(entities: list[str], title: str) -> str:
+    """Deterministic topic key from entities (preferred) else title tokens."""
+    if entities:
+        parts = sorted({e.casefold().strip() for e in entities if e and e.strip()})
+    else:
+        parts = sorted(
+            {t for t in re.findall(r"[a-z0-9]+|[一-鿿]+", (title or "").casefold())
+             if len(t) >= 2}
+        )
+    return "|".join(p for p in parts if p)
+
+
+def compute_conflict_group_id(
+    card_type: str, entities: list[str], title: str
+) -> str:
+    """Deterministic conflict-group id from card type + normalized topic.
+
+    Same type + same topic (entities, else title tokens) always yields the
+    same group id, regardless of candidate search order. The id is a hash —
+    no raw conversation text is exposed. Returns "" when there is no usable
+    topic signal (so callers can decline to group).
+    """
+    topic = _normalized_topic_key(entities, title)
+    if not topic:
+        return ""
+    return _hash((card_type or "") + "\x00" + topic, 12)
 
 
 def _clean_for_cards(value: object, max_chars: int) -> str:
@@ -489,16 +534,28 @@ def format_memory_cards_for_sync(
     for card in cards:
         entities = "; ".join(card.entities)
         labels = _TYPE_LABELS.get(card.type, card.type)
-        block = (
-            f"- type: {card.type}\n"
-            f"  status: {card.status}\n"
-            f"  title: {card.title}\n"
-            f"  summary: {card.summary}\n"
-            f"  entities: {entities}\n"
-            f"  labels: {labels}\n"
-            f"  confidence: {card.confidence}\n"
+        parts = [
+            f"- type: {card.type}",
+            f"  card_id: {card.card_id}",
+            f"  status: {card.status}",
+            f"  title: {card.title}",
+            f"  summary: {card.summary}",
+            f"  entities: {entities}",
+            f"  labels: {labels}",
+            f"  confidence: {card.confidence}",
+        ]
+        # PR5 supersession fields — emitted only when present, so PR4 cards
+        # are byte-for-byte unchanged apart from the new card_id line.
+        if card.supersedes:
+            parts.append("  supersedes: " + "; ".join(card.supersedes))
+        if card.superseded_by:
+            parts.append(f"  superseded_by: {card.superseded_by}")
+        if card.conflict_group_id:
+            parts.append(f"  conflict_group: {card.conflict_group_id}")
+        parts.append(
             f"  source_session: {_hash(card.source_session_id or '', 12)}"
         )
+        block = "\n".join(parts)
         if used + len(block) + 1 > budget:
             break
         lines.append(block)
@@ -507,3 +564,168 @@ def format_memory_cards_for_sync(
     if not lines:
         return ""
     return header + "\n" + "\n".join(lines) + "\n" + footer
+
+
+# ---------------------------------------------------------------------------
+# Parsing (PR5) — read structured-card blocks back out of recalled text.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ParsedMemoryCard:
+    """A structured card parsed from recalled/stored text (best-effort)."""
+
+    card_id: str = ""
+    type: str = ""
+    status: str = ""
+    title: str = ""
+    summary: str = ""
+    entities: list[str] = field(default_factory=list)
+    labels: str = ""
+    supersedes: list[str] = field(default_factory=list)
+    superseded_by: str = ""
+    conflict_group: str = ""
+
+
+_CARDS_BLOCK_RE = re.compile(
+    r"<structured-memory-cards\b[^>]*>([\s\S]*?)</structured-memory-cards>",
+    re.IGNORECASE,
+)
+# Same block, but capturing the open/close tags too (for in-place filtering).
+_CARDS_BLOCK_FULL_RE = re.compile(
+    r"(<structured-memory-cards\b[^>]*>)([\s\S]*?)(</structured-memory-cards>)",
+    re.IGNORECASE,
+)
+_PARSE_MAX_CHARS = 100_000
+
+
+def _split_list(value: str) -> list[str]:
+    return [p.strip() for p in value.split(";") if p.strip()]
+
+
+def parse_memory_cards_from_text(text: object) -> list[ParsedMemoryCard]:
+    """Parse PR4/PR5 structured-card blocks out of (recalled) text.
+
+    Deterministic, dependency-free, and fail-CLOSED: any malformed or
+    non-structured input yields ``[]`` rather than raising. Memory-context
+    blocks are stripped first, and the input is length-bounded. Only text in
+    the explicit ``<structured-memory-cards>`` wrapper is parsed — arbitrary
+    conversation is never interpreted as a card.
+    """
+    try:
+        raw = _content_to_text(text)
+        if not raw:
+            return []
+        raw = _MEMORY_CONTEXT_RE.sub(" ", raw)
+        if len(raw) > _PARSE_MAX_CHARS:
+            raw = raw[:_PARSE_MAX_CHARS]
+
+        cards: list[ParsedMemoryCard] = []
+        for block_match in _CARDS_BLOCK_RE.finditer(raw):
+            body = block_match.group(1)
+            current: ParsedMemoryCard | None = None
+            for line in body.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                is_new = stripped.startswith("- ")
+                if is_new:
+                    stripped = stripped[2:].strip()
+                if ":" not in stripped:
+                    continue
+                key, _, value = stripped.partition(":")
+                key = key.strip().casefold()
+                value = value.strip()
+                if is_new:
+                    # A new card starts at the first "- <key>:" line.
+                    if current is not None:
+                        cards.append(current)
+                    current = ParsedMemoryCard()
+                if current is None:
+                    # Indented line before any "- " delimiter — skip.
+                    continue
+                if key == "type":
+                    current.type = value
+                elif key == "card_id":
+                    current.card_id = value
+                elif key == "status":
+                    current.status = value
+                elif key == "title":
+                    current.title = value
+                elif key == "summary":
+                    current.summary = value
+                elif key == "entities":
+                    current.entities = _split_list(value)
+                elif key == "labels":
+                    current.labels = value
+                elif key == "supersedes":
+                    current.supersedes = _split_list(value)
+                elif key == "superseded_by":
+                    current.superseded_by = value
+                elif key == "conflict_group":
+                    current.conflict_group = value
+            if current is not None:
+                cards.append(current)
+
+        # Keep only chunks that actually looked like a card (had a type).
+        return [c for c in cards if c.type]
+    except Exception:
+        return []
+
+
+def _iter_card_chunks(body: str) -> list[list[str]]:
+    """Split a card-block body into per-card line chunks (delimiter ``- ``)."""
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    for line in body.splitlines():
+        if line.startswith("- "):
+            if current:
+                chunks.append(current)
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _chunk_card_id(chunk: list[str]) -> str:
+    for line in chunk:
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            stripped = stripped[2:].strip()
+        if stripped.casefold().startswith("card_id:"):
+            return stripped.split(":", 1)[1].strip()
+    return ""
+
+
+def filter_superseded_card_text(text: str, superseded_ids: set[str]) -> tuple[str, int]:
+    """Drop superseded card chunks from structured-card blocks in ``text``.
+
+    Returns ``(new_text, removed_count)``. Non-structured text is untouched;
+    a block whose every card is superseded is removed entirely. Fail-open:
+    on any error the original text is returned unchanged.
+    """
+    if not superseded_ids or not text or "<structured-memory-cards" not in text:
+        return text, 0
+    removed = 0
+
+    def _repl(match: re.Match[str]) -> str:
+        nonlocal removed
+        open_tag, body, close_tag = match.group(1), match.group(2), match.group(3)
+        kept: list[list[str]] = []
+        for chunk in _iter_card_chunks(body):
+            cid = _chunk_card_id(chunk)
+            if cid and cid in superseded_ids:
+                removed += 1
+                continue
+            kept.append(chunk)
+        if not kept:
+            return ""
+        inner = "\n".join("\n".join(chunk) for chunk in kept)
+        return open_tag + "\n" + inner + "\n" + close_tag
+
+    try:
+        new_text = _CARDS_BLOCK_FULL_RE.sub(_repl, text)
+    except Exception:
+        return text, 0
+    return new_text, removed

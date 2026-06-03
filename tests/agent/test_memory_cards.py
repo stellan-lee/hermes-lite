@@ -364,3 +364,165 @@ def test_format_does_not_leak_memory_context_content():
     )
     assert "<memory-context>" not in out
     assert "[System note:" not in out
+
+
+# ---------------------------------------------------------------------------
+# PR5: schema, formatting, conflict-group id, parser
+# ---------------------------------------------------------------------------
+
+from agent.memory_cards import (  # noqa: E402
+    ParsedMemoryCard,
+    compute_conflict_group_id,
+    parse_memory_cards_from_text,
+)
+
+
+def test_memorycard_supports_supersession_fields():
+    c = _sample_card(
+        supersedes=["a", "b"], superseded_by="z", conflict_group_id="g1"
+    )
+    assert c.supersedes == ["a", "b"]
+    assert c.superseded_by == "z"
+    assert c.conflict_group_id == "g1"
+
+
+def test_pr4_card_defaults_keep_supersession_empty():
+    # Backward compat: a card built the PR4 way has empty supersession fields.
+    cards = extract_memory_cards("ok", "We decided to use Foo. This is final.")
+    assert cards
+    for c in cards:
+        assert c.supersedes == []
+        assert c.superseded_by is None
+        assert c.conflict_group_id is None
+
+
+def test_status_superseded_constant_exists():
+    assert MemoryCardStatus.SUPERSEDED == "superseded"
+
+
+def test_format_includes_card_id():
+    out = format_memory_cards_for_sync([_sample_card(card_id="CARD42")])
+    assert "card_id: CARD42" in out
+
+
+def test_format_includes_supersession_fields_only_when_present():
+    plain = format_memory_cards_for_sync([_sample_card()])
+    assert "supersedes:" not in plain
+    assert "superseded_by:" not in plain
+    assert "conflict_group:" not in plain
+
+    rich = format_memory_cards_for_sync(
+        [_sample_card(supersedes=["OLD1", "OLD2"], conflict_group_id="G9")]
+    )
+    assert "supersedes: OLD1; OLD2" in rich
+    assert "conflict_group: G9" in rich
+
+    marker = format_memory_cards_for_sync(
+        [_sample_card(status=MemoryCardStatus.SUPERSEDED, superseded_by="NEW1")]
+    )
+    assert "status: superseded" in marker
+    assert "superseded_by: NEW1" in marker
+
+
+def test_format_with_supersession_still_bounded():
+    cards = [
+        _sample_card(card_id=str(i), supersedes=["x", "y"], conflict_group_id="g")
+        for i in range(30)
+    ]
+    out = format_memory_cards_for_sync(cards, max_chars=500)
+    assert len(out) <= 500
+    if out:
+        assert out.endswith("</structured-memory-cards>")
+
+
+def test_conflict_group_id_deterministic_and_topic_based():
+    a = compute_conflict_group_id("decision", ["Telegram cards", "Approve"], "t")
+    b = compute_conflict_group_id("decision", ["Approve", "Telegram cards"], "t2")
+    assert a == b  # entity-order independent
+    c = compute_conflict_group_id("preference", ["Telegram cards", "Approve"], "t")
+    assert c != a  # type participates
+    assert compute_conflict_group_id("decision", [], "") == ""
+
+
+def test_parse_single_card():
+    text = format_memory_cards_for_sync([_sample_card(card_id="ID1")])
+    parsed = parse_memory_cards_from_text(text)
+    assert len(parsed) == 1
+    p = parsed[0]
+    assert p.card_id == "ID1"
+    assert p.type == "decision"
+    assert p.status == "active"
+    assert p.title == "Telegram approval cards UX"
+    assert "Final decision" in p.summary
+    assert "Telegram approval cards" in p.entities
+
+
+def test_parse_multiple_cards():
+    text = format_memory_cards_for_sync(
+        [
+            _sample_card(card_id="ID1"),
+            _sample_card(card_id="ID2", type=MemoryCardType.PREFERENCE),
+        ]
+    )
+    parsed = parse_memory_cards_from_text(text)
+    assert [p.card_id for p in parsed] == ["ID1", "ID2"]
+    assert [p.type for p in parsed] == ["decision", "preference"]
+
+
+def test_parse_supersession_fields():
+    text = format_memory_cards_for_sync(
+        [
+            _sample_card(
+                card_id="NEW", supersedes=["OLD1", "OLD2"], conflict_group_id="G"
+            ),
+            _sample_card(
+                card_id="MARK",
+                status=MemoryCardStatus.SUPERSEDED,
+                superseded_by="NEW",
+            ),
+        ]
+    )
+    parsed = parse_memory_cards_from_text(text)
+    by_id = {p.card_id: p for p in parsed}
+    assert by_id["NEW"].supersedes == ["OLD1", "OLD2"]
+    assert by_id["NEW"].conflict_group == "G"
+    assert by_id["MARK"].status == "superseded"
+    assert by_id["MARK"].superseded_by == "NEW"
+
+
+def test_parse_malformed_returns_empty():
+    assert parse_memory_cards_from_text("just normal prose, no cards") == []
+    assert parse_memory_cards_from_text("") == []
+    assert parse_memory_cards_from_text(None) == []
+    assert parse_memory_cards_from_text(12345) == []
+    # Wrapper present but no real card fields → no usable cards.
+    assert (
+        parse_memory_cards_from_text(
+            "<structured-memory-cards>\n  nonsense line\n</structured-memory-cards>"
+        )
+        == []
+    )
+
+
+def test_parse_strips_memory_context_blocks():
+    text = (
+        "<memory-context>SECRET_LEAK decided to use evil</memory-context>\n"
+        + format_memory_cards_for_sync([_sample_card(card_id="ID1")])
+    )
+    parsed = parse_memory_cards_from_text(text)
+    assert len(parsed) == 1
+    blob = " ".join(p.summary + p.title + " ".join(p.entities) for p in parsed)
+    assert "SECRET_LEAK" not in blob
+
+
+def test_parse_unicode_safe():
+    card = _sample_card(
+        card_id="ID1",
+        title="审批卡片",
+        summary="最终决定就用紧凑卡片。",
+        entities=["审批卡片"],
+    )
+    parsed = parse_memory_cards_from_text(format_memory_cards_for_sync([card]))
+    assert len(parsed) == 1
+    assert parsed[0].title == "审批卡片"
+    assert "紧凑卡片" in parsed[0].summary

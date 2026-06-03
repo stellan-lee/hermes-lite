@@ -213,3 +213,58 @@ def test_fallback_sync_turn_exception_does_not_leak_card_text(caplog):
     assert "structured-memory-cards" not in text
     assert "RuntimeError" in text
     assert "leaky2" in text
+
+
+# ---------------------------------------------------------------------------
+# PR5 fixup 4: provider exception logging must not leak memory/card text
+# ---------------------------------------------------------------------------
+
+
+class _PrefetchBoomProvider(FallbackProvider):
+    def prefetch(self, query, *, session_id=""):
+        raise RuntimeError("LEAK_ME_MEMORY_TEXT")
+
+    def queue_prefetch(self, query, *, session_id=""):
+        pass
+
+
+class _SyncBoomProvider(FallbackProvider):
+    def sync_turn(self, user_content, assistant_content, *, session_id="", **kwargs):
+        raise RuntimeError("LEAK_ME_SYNC_TEXT")
+
+
+class _CandidateBoomProvider(FallbackProvider):
+    def prefetch(self, query, *, session_id=""):
+        raise RuntimeError("LEAK_ME_CANDIDATE_TEXT")
+
+
+def test_prefetch_exception_does_not_leak_memory_text(caplog):
+    mgr = MemoryManager()
+    mgr.add_provider(_PrefetchBoomProvider(name="pboom"))
+    with caplog.at_level("DEBUG", logger="agent.memory_manager"):
+        out = mgr.prefetch_all("q", session_id="s1")  # fail-open
+    assert out == ""
+    assert "LEAK_ME_MEMORY_TEXT" not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "pboom" in caplog.text
+
+
+def test_sync_turn_exception_does_not_leak_text(caplog):
+    mgr = MemoryManager()
+    mgr.add_provider(_SyncBoomProvider(name="sboom"))
+    with caplog.at_level("DEBUG", logger="agent.memory_manager"):
+        mgr.sync_all("user", "assistant", session_id="s1")  # fail-open
+    assert "LEAK_ME_SYNC_TEXT" not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "sboom" in caplog.text
+
+
+def test_candidate_lookup_exception_does_not_leak_text(caplog):
+    mgr = MemoryManager()
+    mgr.add_provider(_CandidateBoomProvider(name="cboom"))
+    with caplog.at_level("DEBUG", logger="agent.memory_manager"):
+        out = mgr.lookup_structured_card_candidates("q", session_id="s1")
+    assert out == ""
+    assert "LEAK_ME_CANDIDATE_TEXT" not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "cboom" in caplog.text

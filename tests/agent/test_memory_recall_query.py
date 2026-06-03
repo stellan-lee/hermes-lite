@@ -301,6 +301,27 @@ def test_todo_subquery_includes_structured_card_terms():
     assert "open question" in joined
 
 
+def test_constraint_intent_detected_and_subquery_terms():
+    # PR5: constraint queries previously got no intent (PR4 eval gap).
+    plan = build_recall_query_plan("what logging constraint did we set?")
+    assert plan.intent == "constraint / requirement"
+    joined = "\n".join(plan.subqueries)
+    assert "type: constraint" in joined
+
+
+def test_constraint_intent_does_not_steal_decision_queries():
+    # "decide" still wins over "must" (decision rule is earlier).
+    plan = build_recall_query_plan("what did we decide we must build?")
+    assert plan.intent == "previous decision / final agreed approach"
+
+
+def test_decision_subquery_includes_status_active_terms():
+    plan = build_recall_query_plan("what did we decide about the cards?")
+    joined = "\n".join(plan.subqueries)
+    assert "status: active" in joined
+    assert "not superseded" in joined
+
+
 def test_subqueries_handle_unicode_and_chinese_prompts():
     plan = build_recall_query_plan(
         "那按钮顺序呢？",

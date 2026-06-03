@@ -1556,6 +1556,22 @@ DEFAULT_CONFIG = {
         # When a provider doesn't implement sync_structured_cards, fall back to
         # writing the formatted card text via the normal sync_turn path.
         "structured_cards_fallback_sync_turn_enabled": True,
+        # Opt-in structured-card supersession/conflict handling (PR5). When a
+        # new card clearly overrides a prior card on the same topic, record it
+        # append-only (new card gains supersedes metadata + a marker card is
+        # written). Old provider memories are NEVER deleted or rewritten.
+        # Default off; deterministic, no LLM.
+        "structured_conflict_resolution_enabled": False,
+        # During recall merge, suppress structured-card sections that newer
+        # cards/markers mark superseded. Default off. NOTE: the filter runs in
+        # the multi-query recall merge path, so it only has effect when
+        # multi_query_recall_enabled is also true.
+        "structured_conflict_filter_enabled": False,
+        "structured_conflict_max_candidates": 8,
+        "structured_conflict_min_entity_overlap": 1,
+        # Require explicit override language ("instead", "replace", 改成, ...)
+        # in the new card before superseding a prior one. Conservative default.
+        "structured_conflict_require_explicit_override": True,
     },
 
     # Subagent delegation — override the provider:model used by delegate_task

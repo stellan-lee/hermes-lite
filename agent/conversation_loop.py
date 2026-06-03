@@ -417,10 +417,14 @@ def _recall_multi_query(agent, raw_query: str, sid: str, recent_messages) -> str
         max_total_chars=getattr(
             agent, "_memory_multi_query_recall_max_total_chars", 6000
         ),
+        suppress_superseded=getattr(
+            agent, "_memory_structured_conflict_filter_enabled", False
+        ),
     )
     logger.debug(
         "memory multi-query recall: enabled=True planned=%d retrieved=%d [%s] "
-        "raw_total=%d final=%d removed_chars=%d removed_sections=%d injected=%s",
+        "raw_total=%d final=%d removed_chars=%d removed_sections=%d "
+        "parsed_cards=%d suppressed_cards=%d injected=%s",
         len(subqueries),
         len(results),
         "; ".join(sub_meta),
@@ -428,6 +432,8 @@ def _recall_multi_query(agent, raw_query: str, sid: str, recent_messages) -> str
         merged.final_chars,
         merged.removed_chars,
         max(0, merged.input_sections - merged.output_sections),
+        merged.parsed_card_count,
+        merged.suppressed_card_count,
         bool(merged.text),
     )
     return merged.text
@@ -566,15 +572,15 @@ def run_conversation(
     # calls so that nudge logic accumulates correctly in CLI mode.
     agent.iteration_budget = IterationBudget(agent.max_iterations)
 
-    # Log conversation turn start for debugging/observability
+    # Log conversation turn start for debugging/observability. Never log raw
+    # user content — only safe metadata (content type/length/hash).
     _preview_text = _summarize_user_message_for_log(user_message)
-    _msg_preview = (_preview_text[:80] + "...") if len(_preview_text) > 80 else _preview_text
-    _msg_preview = _msg_preview.replace("\n", " ")
     logger.info(
-        "conversation turn: session=%s model=%s provider=%s platform=%s history=%d msg=%r",
+        "conversation turn: session=%s model=%s provider=%s platform=%s history=%d "
+        "msg_type=%s msg_len=%d msg_hash=%s",
         agent.session_id or "none", agent.model, agent.provider or "unknown",
         agent.platform or "unknown", len(conversation_history or []),
-        _msg_preview,
+        type(user_message).__name__, len(_preview_text), short_hash(_preview_text),
     )
 
     # Initialize conversation (copy to avoid mutating the caller's list)

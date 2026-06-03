@@ -6010,6 +6010,20 @@ class TestMemoryProviderTurnStart:
         agent._memory_manager.queue_prefetch_all.assert_not_called()
         agent._memory_manager.prefetch_all.assert_not_called()
 
+    def test_conversation_start_log_redacts_user_text(self, agent, caplog):
+        """PR5 fixup 4: the turn-start log must not contain raw user text —
+        only safe metadata (type/length/hash)."""
+        agent.client.chat.completions.create.return_value = _mock_response("done")
+        agent._cached_system_prompt = "test system prompt"
+        agent.session_id = "session-redact"
+
+        with caplog.at_level("INFO", logger="agent.conversation_loop"):
+            agent.run_conversation("LEAK_ME_USER_TEXT please remember this")
+
+        assert "LEAK_ME_USER_TEXT" not in caplog.text
+        assert "conversation turn:" in caplog.text
+        assert "msg_hash=" in caplog.text
+
     def test_empty_external_memory_does_not_inject_memory_context(self):
         """The API-call injection path must stay gated on non-empty recall."""
         import inspect
