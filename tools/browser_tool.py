@@ -91,15 +91,31 @@ from agent.browser_provider import BrowserProvider as CloudBrowserProvider  # no
 from agent.browser_registry import (  # noqa: F401  (test-patchable surface)
     get_provider as _registry_get_browser_provider,
 )
-from plugins.browser.browserbase.provider import (  # noqa: F401  (legacy import surface)
-    BrowserbaseBrowserProvider as BrowserbaseProvider,
-)
-from plugins.browser.browser_use.provider import (  # noqa: F401
-    BrowserUseBrowserProvider as BrowserUseProvider,
-)
-from plugins.browser.firecrawl.provider import (  # noqa: F401
-    FirecrawlBrowserProvider as FirecrawlProvider,
-)
+# Cloud browser providers ship as optional plugins under
+# plugins/browser/<vendor>/. Guard each import so a missing or removed
+# provider plugin degrades gracefully — the name resolves to ``None`` and is
+# simply omitted from ``_PROVIDER_REGISTRY`` below — instead of breaking the
+# import of the whole browser tool. (firecrawl was dropped in the lite build;
+# selecting ``browser.cloud_provider: firecrawl`` now yields a clear
+# "not registered" path rather than an ImportError.)
+try:
+    from plugins.browser.browserbase.provider import (  # noqa: F401  (legacy import surface)
+        BrowserbaseBrowserProvider as BrowserbaseProvider,
+    )
+except ImportError:
+    BrowserbaseProvider = None  # type: ignore[assignment,misc]
+try:
+    from plugins.browser.browser_use.provider import (  # noqa: F401
+        BrowserUseBrowserProvider as BrowserUseProvider,
+    )
+except ImportError:
+    BrowserUseProvider = None  # type: ignore[assignment,misc]
+try:
+    from plugins.browser.firecrawl.provider import (  # noqa: F401
+        FirecrawlBrowserProvider as FirecrawlProvider,
+    )
+except ImportError:
+    FirecrawlProvider = None  # type: ignore[assignment,misc]
 from tools.tool_backend_helpers import normalize_browser_cloud_provider
 # Camofox local anti-detection browser backend (optional).
 # When CAMOFOX_URL is set, all browser operations route through the
@@ -418,10 +434,17 @@ def _stop_cdp_supervisor(task_id: str) -> None:
 # wins. This keeps the test surface stable while letting third-party
 # plugins drop in under ``~/.hermes/plugins/browser/<vendor>/``.
 
+# Only register providers whose plugin actually imported (see guarded imports
+# above). A provider whose plugin is absent is left out entirely, so lookups
+# return None and resolution falls through to the registry / a clear error.
 _PROVIDER_REGISTRY: Dict[str, type] = {
-    "browserbase": BrowserbaseProvider,
-    "browser-use": BrowserUseProvider,
-    "firecrawl": FirecrawlProvider,
+    name: cls
+    for name, cls in (
+        ("browserbase", BrowserbaseProvider),
+        ("browser-use", BrowserUseProvider),
+        ("firecrawl", FirecrawlProvider),
+    )
+    if cls is not None
 }
 # Frozen copy of the import-time _PROVIDER_REGISTRY, used by
 # ``_is_legacy_provider_registry_overridden`` to detect test-time
@@ -569,10 +592,11 @@ def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
         # mirroring the firecrawl gate documented on
         # :data:`agent.browser_registry._LEGACY_PREFERENCE`.
         try:
-            fallback_provider = BrowserUseProvider()
-            if fallback_provider.is_configured():
-                resolved = fallback_provider
-            else:
+            if BrowserUseProvider is not None:
+                fallback_provider = BrowserUseProvider()
+                if fallback_provider.is_configured():
+                    resolved = fallback_provider
+            if resolved is None and BrowserbaseProvider is not None:
                 fallback_provider = BrowserbaseProvider()
                 if fallback_provider.is_configured():
                     resolved = fallback_provider
