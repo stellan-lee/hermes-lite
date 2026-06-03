@@ -176,16 +176,24 @@ def _probe_single_server(
         _ensure_mcp_loop,
         _run_on_mcp_loop,
         _connect_server,
+        _interpolate_env_vars,
         _stop_mcp_loop,
     )
 
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+        load_hermes_dotenv()
+    except Exception:
+        pass
+
+    resolved_config = _interpolate_env_vars(config)
     _ensure_mcp_loop()
 
     tools_found: List[Tuple[str, str]] = []
 
     async def _probe():
         server = await asyncio.wait_for(
-            _connect_server(name, config), timeout=connect_timeout
+            _connect_server(name, resolved_config), timeout=connect_timeout
         )
         for t in server._tools:
             desc = getattr(t, "description", "") or ""

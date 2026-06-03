@@ -6,6 +6,7 @@ any actual MCP servers or API keys.
 """
 
 import argparse
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,16 @@ class FakeTool:
     def __init__(self, name: str, description: str = ""):
         self.name = name
         self.description = description
+
+
+class FakeServer:
+    """Mimics a connected MCP server task."""
+
+    def __init__(self, tools):
+        self._tools = tools
+
+    async def shutdown(self):
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +493,46 @@ class TestEnvVarInterpolation:
         assert _interpolate_env_vars(True) is True
         assert _interpolate_env_vars(None) is None
 
+    def test_probe_interpolates_authorization_header(self, monkeypatch):
+        """MCP add/test probes must resolve saved auth placeholders."""
+        monkeypatch.setenv("MCP_AUTH_API_KEY", "secret123")
+        captured = {}
+
+        async def fake_connect(name, config):
+            captured["name"] = name
+            captured["config"] = config
+            return FakeServer([FakeTool("search", "Search")])
+
+        import tools.mcp_tool as mcp_tool
+
+        monkeypatch.setattr(mcp_tool, "_ensure_mcp_loop", lambda: None)
+        monkeypatch.setattr(mcp_tool, "_stop_mcp_loop", lambda: None)
+        monkeypatch.setattr(mcp_tool, "_connect_server", fake_connect)
+        monkeypatch.setattr(
+            mcp_tool,
+            "_run_on_mcp_loop",
+            lambda coro, timeout=None: asyncio.run(coro),
+        )
+
+        from hermes_cli.mcp_config import _probe_single_server
+
+        tools = _probe_single_server(
+            "auth",
+            {
+                "url": "https://example.com/mcp",
+                "headers": {
+                    "Authorization": "Bearer ${MCP_AUTH_API_KEY}",
+                },
+            },
+        )
+
+        assert tools == [("search", "Search")]
+        assert captured["name"] == "auth"
+        assert (
+            captured["config"]["headers"]["Authorization"]
+            == "Bearer secret123"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: config helpers
@@ -649,4 +700,3 @@ class TestMcpLogin:
 
         assert "Authenticated — 3 tool(s) available" in out
         assert "no OAuth token" not in out
-
