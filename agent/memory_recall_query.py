@@ -81,11 +81,26 @@ _INTENT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 # to build the intent-specific subquery ("<topic> <suffix>"). Keys MUST stay
 # in sync with the labels above — ``test_every_intent_label_has_subquery_suffix``
 # fails loudly if a label is added/renamed without updating this table.
+# Each suffix keeps its original recall phrasing first (existing callers/tests
+# depend on those exact substrings), then appends structured-card-friendly
+# terms ("type: <card-type>" plus label phrases) so subqueries also match the
+# structured memory cards written by PR4 — without special-casing recall.
+# The appended terms are best-effort: under a tight ``max_subquery_chars`` the
+# subquery is bounded by ``_limit_text`` and the trailing ``type:`` terms may
+# be truncated, degrading gracefully to the original recall phrasing.
 _INTENT_SUBQUERY_SUFFIX: dict[str, str] = {
-    "previous decision / final agreed approach": "previous decision final agreed approach",
-    "implementation detail / constraints": "implementation details constraints code path",
-    "user preference": "user preference style format",
-    "task status / open todo": "task status todo open question next step",
+    "previous decision / final agreed approach": (
+        "previous decision final agreed approach type: decision final decision"
+    ),
+    "implementation detail / constraints": (
+        "implementation details constraints code path type: implementation_detail"
+    ),
+    "user preference": (
+        "user preference style format type: preference preferred format"
+    ),
+    "task status / open todo": (
+        "task status todo open question next step type: todo"
+    ),
 }
 
 

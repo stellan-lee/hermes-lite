@@ -1544,6 +1544,18 @@ DEFAULT_CONFIG = {
         # prefetch (~3s internal join); this is a cooperative ceiling — once a
         # subquery takes at least this long, no further subqueries are issued.
         "multi_query_recall_per_query_timeout_ms": 3000,
+        # Opt-in structured memory cards (PR4): after a completed turn, distil
+        # a few small, deterministic cards (decisions, preferences, todos,
+        # constraints, implementation details, open questions) and write them
+        # to memory providers for better FUTURE recall. Recall-only — never
+        # injected into the current turn and never added to conversation
+        # history. Default off; no LLM calls involved.
+        "structured_cards_enabled": False,
+        "structured_cards_max_per_turn": 5,
+        "structured_cards_max_chars": 2500,
+        # When a provider doesn't implement sync_structured_cards, fall back to
+        # writing the formatted card text via the normal sync_turn path.
+        "structured_cards_fallback_sync_turn_enabled": True,
     },
 
     # Subagent delegation — override the provider:model used by delegate_task

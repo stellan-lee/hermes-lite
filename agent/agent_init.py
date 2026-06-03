@@ -1062,6 +1062,10 @@ def init_agent(
     agent._memory_multi_query_recall_max_queries = 4
     agent._memory_multi_query_recall_max_total_chars = 6000
     agent._memory_multi_query_recall_per_query_timeout_ms = 3000
+    agent._memory_structured_cards_enabled = False
+    agent._memory_structured_cards_max_per_turn = 5
+    agent._memory_structured_cards_max_chars = 2500
+    agent._memory_structured_cards_fallback_sync_turn_enabled = True
     agent._memory_nudge_interval = 10
     agent._turns_since_memory = 0
     agent._iters_since_skill = 0
@@ -1096,6 +1100,18 @@ def init_agent(
             )
             agent._memory_multi_query_recall_per_query_timeout_ms = int(
                 mem_config.get("multi_query_recall_per_query_timeout_ms", 3000) or 3000
+            )
+            agent._memory_structured_cards_enabled = bool(
+                mem_config.get("structured_cards_enabled", False)
+            )
+            agent._memory_structured_cards_max_per_turn = int(
+                mem_config.get("structured_cards_max_per_turn", 5) or 5
+            )
+            agent._memory_structured_cards_max_chars = int(
+                mem_config.get("structured_cards_max_chars", 2500) or 2500
+            )
+            agent._memory_structured_cards_fallback_sync_turn_enabled = bool(
+                mem_config.get("structured_cards_fallback_sync_turn_enabled", True)
             )
             agent._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
             if agent._memory_enabled or agent._user_profile_enabled:

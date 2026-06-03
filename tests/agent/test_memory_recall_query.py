@@ -266,6 +266,41 @@ def test_subqueries_do_not_leak_system_developer_tool_content():
     assert "assistant tool call secret" not in joined
 
 
+def test_decision_subquery_includes_structured_card_terms():
+    plan = build_recall_query_plan(
+        'what did we decide about Telegram approval cards and "compact mode"?'
+    )
+    joined = "\n".join(plan.subqueries)
+    # PR4: subqueries also carry structured-card-friendly terms.
+    assert "type: decision" in joined
+    # PR3 phrasing preserved.
+    assert "previous decision final agreed approach" in joined
+
+
+def test_implementation_subquery_includes_structured_card_terms():
+    plan = build_recall_query_plan(
+        "how should we implement the queue_prefetch_all path?"
+    )
+    joined = "\n".join(plan.subqueries)
+    assert "type: implementation_detail" in joined
+    assert "implementation details constraints code path" in joined
+
+
+def test_preference_subquery_includes_structured_card_terms():
+    plan = build_recall_query_plan("what format do I prefer?")
+    assert plan.intent == "user preference"
+    joined = "\n".join(plan.subqueries)
+    assert "type: preference" in joined
+
+
+def test_todo_subquery_includes_structured_card_terms():
+    plan = build_recall_query_plan("what's the next step and open question?")
+    assert plan.intent == "task status / open todo"
+    joined = "\n".join(plan.subqueries)
+    assert "type: todo" in joined
+    assert "open question" in joined
+
+
 def test_subqueries_handle_unicode_and_chinese_prompts():
     plan = build_recall_query_plan(
         "那按钮顺序呢？",

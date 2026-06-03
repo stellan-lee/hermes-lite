@@ -2549,6 +2549,41 @@ class AIAgent:
         except Exception:
             pass
 
+        # Structured memory cards (PR4): after the normal turn sync (which has
+        # already run/failed-open above), distil a few deterministic cards from
+        # the completed turn and write them for FUTURE recall. Default off.
+        # Wrapped in its own guard so card extraction/sync can never undo the
+        # sync_all above or block the user. Recall-only: this does NOT queue a
+        # prefetch, touch the current model call, or modify conversation
+        # history.
+        if getattr(self, "_memory_structured_cards_enabled", False):
+            try:
+                from agent.memory_cards import extract_memory_cards
+
+                cards = extract_memory_cards(
+                    original_user_message,
+                    final_response,
+                    session_id=self.session_id or "",
+                    max_cards=getattr(
+                        self, "_memory_structured_cards_max_per_turn", 5
+                    ),
+                    max_chars=getattr(
+                        self, "_memory_structured_cards_max_chars", 2500
+                    ),
+                )
+                if cards:
+                    self._memory_manager.sync_structured_cards_all(
+                        cards,
+                        session_id=self.session_id or "",
+                        fallback_sync_turn_enabled=getattr(
+                            self,
+                            "_memory_structured_cards_fallback_sync_turn_enabled",
+                            True,
+                        ),
+                    )
+            except Exception:
+                pass
+
     def release_clients(self) -> None:
         """Release LLM client resources WITHOUT tearing down session tool state.
 

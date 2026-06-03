@@ -434,6 +434,80 @@ class MemoryManager:
                     provider.name, e,
                 )
 
+    def sync_structured_cards_all(
+        self,
+        cards: list,
+        *,
+        session_id: str = "",
+        fallback_sync_turn_enabled: bool = True,
+    ) -> None:
+        """Write structured memory cards (PR4) to all providers, fail-open.
+
+        For each provider, in order:
+          - if it implements ``sync_structured_cards``, call it;
+          - otherwise, if ``fallback_sync_turn_enabled`` is True, write the
+            formatted card text through the existing ``sync_turn`` path so the
+            cards still land in the provider's backend for future recall;
+          - otherwise skip the provider.
+
+        Structured cards are recall-only provenance: this never queues a
+        prefetch and never injects into the current turn. Provider failures
+        are swallowed (best-effort) so a misconfigured backend can't block
+        the user. No raw card text is logged — only safe counts/types/lengths.
+        """
+        if not cards:
+            return
+
+        from agent.memory_cards import format_memory_cards_for_sync
+
+        formatted: str | None = None
+        provider_count = len(self._providers)
+        synced = 0
+        failed = 0
+        for provider in self._providers:
+            try:
+                if hasattr(provider, "sync_structured_cards"):
+                    provider.sync_structured_cards(cards, session_id=session_id)
+                    synced += 1
+                elif fallback_sync_turn_enabled:
+                    if formatted is None:
+                        formatted = format_memory_cards_for_sync(cards)
+                    if formatted:
+                        provider.sync_turn(
+                            "[Structured memory cards extracted from completed turn]",
+                            formatted,
+                            session_id=session_id,
+                        )
+                        synced += 1
+            except Exception as e:
+                failed += 1
+                # Fail-open. Log SAFE metadata only — never the exception
+                # message: a provider's error text can echo back the formatted
+                # cards / summaries it was given, which would leak raw card
+                # content into logs. Exception class name + counts are enough
+                # to diagnose without exposing any card/user/assistant text.
+                logger.debug(
+                    "memory.structured_cards.sync_error provider=%s exc_type=%s "
+                    "card_count=%d fallback_enabled=%s",
+                    provider.name,
+                    type(e).__name__,
+                    len(cards),
+                    fallback_sync_turn_enabled,
+                )
+
+        # Safe metadata only — never raw card summaries or formatted text.
+        types = sorted({getattr(c, "type", "") for c in cards})
+        logger.debug(
+            "structured cards sync: providers=%d cards=%d types=%s "
+            "formatted_len=%d synced=%d failed_open=%d",
+            provider_count,
+            len(cards),
+            ",".join(t for t in types if t),
+            len(formatted or ""),
+            synced,
+            failed,
+        )
+
     # -- Tools ---------------------------------------------------------------
 
     def get_all_tool_schemas(self) -> List[Dict[str, Any]]:
