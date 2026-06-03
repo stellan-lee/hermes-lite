@@ -842,7 +842,6 @@ class TestEnvWriteDenylist:
         [
             "HERMES_GEMINI_CLIENT_ID",
             "HERMES_LANGFUSE_PUBLIC_KEY",
-            "HERMES_SPOTIFY_CLIENT_ID",
             "HERMES_QWEN_BASE_URL",
             "HERMES_MAX_ITERATIONS",
         ],
@@ -852,7 +851,7 @@ class TestEnvWriteDenylist:
         location names (HOME/PROFILE/CONFIG/ENV) are. Integration
         credentials following the ``HERMES_*`` convention must keep
         working or we'd regress every provider setup wizard that
-        currently writes one of these (auth.py, Spotify, Langfuse, …)."""
+        currently writes one of these (auth.py, Langfuse, …)."""
         save_env_value(allowed_key, "test-value-123")
         env = load_env()
         assert env[allowed_key] == "test-value-123"
@@ -892,4 +891,3 @@ class TestEnvWriteDenylist:
         # But the write path still refuses to update it
         with pytest.raises(ValueError, match="denylist"):
             save_env_value("LD_PRELOAD", "/tmp/evil.so")
-

@@ -14,10 +14,9 @@ Usage::
 
     python scripts/build_model_catalog.py
 
-Output: ``website/static/api/model-catalog.json``
-
-Live URL (after ``deploy-site.yml`` runs on merge to main):
-``https://hermes-agent.nousresearch.com/docs/api/model-catalog.json``
+Output: ``hermes_cli/data/model-catalog.json`` — the snapshot bundled with the
+package and used by ``hermes_cli/model_catalog.py`` as the offline fallback.
+Commit the regenerated file when models change.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ os.environ.setdefault("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".her
 
 from hermes_cli.models import OPENROUTER_MODELS, _PROVIDER_MODELS  # noqa: E402
 
-OUTPUT_PATH = os.path.join(REPO_ROOT, "website", "static", "api", "model-catalog.json")
+OUTPUT_PATH = os.path.join(REPO_ROOT, "hermes_cli", "data", "model-catalog.json")
 CATALOG_VERSION = 1
 
 

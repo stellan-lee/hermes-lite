@@ -46,7 +46,7 @@ def _install_example_plugin(_isolate_hermes_home):
     The user-plugin source is preferred over a transient
     ``HERMES_BUNDLED_PLUGINS`` override because the bundled dir is
     resolved per-call (other tests in the suite implicitly rely on the
-    real bundled plugins — kanban, hermes-achievements, model providers
+    real bundled plugins — hermes-achievements, model providers
     — being available, and globally swapping that root would yank them
     all). User plugins are first in the discovery search order, so
     laying down the fixture here is enough.
@@ -2938,8 +2938,7 @@ class TestPluginAPIAuth:
 
     def test_plugin_route_requires_auth(self):
         """Plugin API routes should return 401 without a valid session token."""
-        # Use a known plugin route (kanban board)
-        resp = self.client.get("/api/plugins/kanban/board")
+        resp = self.client.get("/api/plugins/example/hello")
         assert resp.status_code == 401
 
     def test_plugin_route_allows_auth(self):
@@ -2962,34 +2961,31 @@ class TestPluginAPIAuth:
 
     def test_plugin_post_requires_auth(self):
         """Plugin POST routes should return 401 without a valid session token."""
-        resp = self.client.post("/api/plugins/kanban/tasks", json={"title": "test"})
+        resp = self.client.post("/api/plugins/_definitely_not_a_plugin_/tasks", json={"title": "test"})
         assert resp.status_code == 401
 
     def test_plugin_patch_requires_auth(self):
         """Plugin PATCH routes should return 401 without a valid session token.
 
-        PATCH is the mutation method most commonly used by the dashboard for
-        kanban task edits — explicitly cover it so a future middleware
-        regression that whitelists non-GET methods can't sneak through.
+        Explicitly cover it so a future middleware regression that whitelists
+        non-GET methods can't sneak through.
         """
         resp = self.client.patch(
-            "/api/plugins/kanban/tasks/t_fake",
+            "/api/plugins/_definitely_not_a_plugin_/tasks/t_fake",
             json={"title": "renamed"},
         )
         assert resp.status_code == 401
 
     def test_plugin_delete_requires_auth(self):
         """Plugin DELETE routes should return 401 without a valid session token."""
-        resp = self.client.delete("/api/plugins/kanban/tasks/t_fake")
+        resp = self.client.delete("/api/plugins/_definitely_not_a_plugin_/tasks/t_fake")
         assert resp.status_code == 401
 
-    def test_non_kanban_plugin_route_requires_auth(self):
-        """Auth must be plugin-agnostic, not kanban-specific.
+    def test_other_plugin_route_requires_auth(self):
+        """Auth must be plugin-agnostic.
 
         The middleware fix is at the gate level (no per-plugin allowlist),
-        so any plugin's API surface — kanban, hermes-achievements, future
-        plugins — must require the session token. Hit a non-kanban plugin
-        path to lock that in.
+        so any plugin's API surface must require the session token.
         """
         # Real plugin path (hermes-achievements is loaded by default).
         resp = self.client.get("/api/plugins/hermes-achievements/overview")
@@ -2999,32 +2995,6 @@ class TestPluginAPIAuth:
         # attacker can't fingerprint plugin names by status codes.
         resp = self.client.get("/api/plugins/_definitely_not_a_plugin_/anything")
         assert resp.status_code == 401
-
-    def test_plugin_websocket_unaffected_by_http_middleware(self):
-        """The kanban /events WebSocket has its own ``?token=`` check;
-        the HTTP middleware change must not start gating WS upgrades.
-
-        Starlette doesn't run HTTP middleware on WebSocket upgrades anyway,
-        but pin the behavior so a future refactor that moves auth into a
-        shared layer can't silently break the WS auth contract.
-        """
-        from starlette.websockets import WebSocketDisconnect
-
-        # Without a token the WS endpoint must close the upgrade itself
-        # (its own _check_ws_token), NOT 401 from the HTTP middleware.
-        try:
-            with self.client.websocket_connect(
-                "/api/plugins/kanban/events"
-            ):
-                pass  # if we got here without disconnect, the WS accepted us
-        except WebSocketDisconnect:
-            pass  # expected — WS endpoint rejected via its own check
-        except Exception:
-            # The kanban plugin may not be mounted in this test environment,
-            # in which case the route doesn't exist at all (3xx/4xx during
-            # upgrade). That's fine for this regression — it only matters
-            # that the HTTP middleware didn't start intercepting WS upgrades.
-            pass
 
 
 class TestDashboardPluginManifestExtensions:
@@ -3647,4 +3617,3 @@ class TestValidateProviderCredential:
     def test_empty_value_rejected(self):
         data = self._post("OPENAI_API_KEY", "   ").json()
         assert data["ok"] is False
-

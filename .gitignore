@@ -24,6 +24,10 @@ __pycache__/model_tools.cpython-310.pyc
 __pycache__/web_tools.cpython-310.pyc
 logs/
 data/
+# Bundled runtime catalogs ship with the package; keep them tracked despite the
+# broad data/ ignore above (model_catalog.py / skills_hub.py read these offline).
+!hermes_cli/data/
+!hermes_cli/data/*.json
 .pytest_cache/
 test_durations.json
 .pytest-cache/

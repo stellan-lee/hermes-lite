@@ -104,33 +104,17 @@ XAI_OAUTH_REDIRECT_HOST = "127.0.0.1"
 XAI_OAUTH_REDIRECT_PORT = 56121
 XAI_OAUTH_REDIRECT_PATH = "/callback"
 XAI_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
+XAI_OAUTH_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/guides/xai-grok-oauth"
+OAUTH_OVER_SSH_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/guides/oauth-over-ssh"
+
+# Display names for non-LLM "service" OAuth providers not present in
+# PROVIDER_REGISTRY. Empty now that Spotify has been removed; kept so the
+# generic helpers (is_known_auth_provider / get_auth_provider_display_name)
+# have a stable lookup table to fall through.
+SERVICE_PROVIDER_NAMES: Dict[str, str] = {}
 QWEN_OAUTH_CLIENT_ID = "f0304373b74a44d2b584a3fb70ca9e56"
 QWEN_OAUTH_TOKEN_URL = "https://chat.qwen.ai/api/v1/oauth2/token"
 QWEN_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
-DEFAULT_SPOTIFY_ACCOUNTS_BASE_URL = "https://accounts.spotify.com"
-DEFAULT_SPOTIFY_API_BASE_URL = "https://api.spotify.com/v1"
-DEFAULT_SPOTIFY_REDIRECT_URI = "http://127.0.0.1:43827/spotify/callback"
-SPOTIFY_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/user-guide/features/spotify"
-SPOTIFY_DASHBOARD_URL = "https://developer.spotify.com/dashboard"
-SPOTIFY_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
-
-XAI_OAUTH_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/guides/xai-grok-oauth"
-OAUTH_OVER_SSH_DOCS_URL = "https://hermes-agent.nousresearch.com/docs/guides/oauth-over-ssh"
-DEFAULT_SPOTIFY_SCOPE = " ".join((
-    "user-modify-playback-state",
-    "user-read-playback-state",
-    "user-read-currently-playing",
-    "user-read-recently-played",
-    "playlist-read-private",
-    "playlist-read-collaborative",
-    "playlist-modify-public",
-    "playlist-modify-private",
-    "user-library-read",
-    "user-library-modify",
-))
-SERVICE_PROVIDER_NAMES: Dict[str, str] = {
-    "spotify": "Spotify",
-}
 
 # Google Gemini OAuth (google-gemini-cli provider, Cloud Code Assist backend)
 DEFAULT_GEMINI_CLOUDCODE_BASE_URL = "cloudcode-pa://google"
@@ -2165,834 +2149,6 @@ def get_gemini_oauth_auth_status() -> Dict[str, Any]:
         "email": creds.email,
         "project_id": creds.project_id,
     }
-# Spotify auth — PKCE tokens stored in ~/.hermes/auth.json
-# =============================================================================
-
-
-def _spotify_scope_list(raw_scope: Optional[str] = None) -> List[str]:
-    scope_text = (raw_scope or DEFAULT_SPOTIFY_SCOPE).strip()
-    scopes = [part for part in scope_text.split() if part]
-    seen: set[str] = set()
-    ordered: List[str] = []
-    for scope in scopes:
-        if scope not in seen:
-            seen.add(scope)
-            ordered.append(scope)
-    return ordered
-
-
-def _spotify_scope_string(raw_scope: Optional[str] = None) -> str:
-    return " ".join(_spotify_scope_list(raw_scope))
-
-
-def _spotify_client_id(
-    explicit: Optional[str] = None,
-    state: Optional[Dict[str, Any]] = None,
-) -> str:
-    from hermes_cli.config import get_env_value
-
-    candidates = (
-        explicit,
-        get_env_value("HERMES_SPOTIFY_CLIENT_ID"),
-        get_env_value("SPOTIFY_CLIENT_ID"),
-        state.get("client_id") if isinstance(state, dict) else None,
-    )
-    for candidate in candidates:
-        cleaned = str(candidate or "").strip()
-        if cleaned:
-            return cleaned
-    raise AuthError(
-        "Spotify client_id is required. Set HERMES_SPOTIFY_CLIENT_ID or pass --client-id.",
-        provider="spotify",
-        code="spotify_client_id_missing",
-    )
-
-
-def _spotify_redirect_uri(
-    explicit: Optional[str] = None,
-    state: Optional[Dict[str, Any]] = None,
-) -> str:
-    from hermes_cli.config import get_env_value
-
-    candidates = (
-        explicit,
-        get_env_value("HERMES_SPOTIFY_REDIRECT_URI"),
-        get_env_value("SPOTIFY_REDIRECT_URI"),
-        state.get("redirect_uri") if isinstance(state, dict) else None,
-        DEFAULT_SPOTIFY_REDIRECT_URI,
-    )
-    for candidate in candidates:
-        cleaned = str(candidate or "").strip()
-        if cleaned:
-            return cleaned
-    return DEFAULT_SPOTIFY_REDIRECT_URI
-
-
-def _spotify_api_base_url(state: Optional[Dict[str, Any]] = None) -> str:
-    from hermes_cli.config import get_env_value
-
-    candidates = (
-        get_env_value("HERMES_SPOTIFY_API_BASE_URL"),
-        state.get("api_base_url") if isinstance(state, dict) else None,
-        DEFAULT_SPOTIFY_API_BASE_URL,
-    )
-    for candidate in candidates:
-        cleaned = str(candidate or "").strip().rstrip("/")
-        if cleaned:
-            return cleaned
-    return DEFAULT_SPOTIFY_API_BASE_URL
-
-
-def _spotify_accounts_base_url(state: Optional[Dict[str, Any]] = None) -> str:
-    from hermes_cli.config import get_env_value
-
-    candidates = (
-        get_env_value("HERMES_SPOTIFY_ACCOUNTS_BASE_URL"),
-        state.get("accounts_base_url") if isinstance(state, dict) else None,
-        DEFAULT_SPOTIFY_ACCOUNTS_BASE_URL,
-    )
-    for candidate in candidates:
-        cleaned = str(candidate or "").strip().rstrip("/")
-        if cleaned:
-            return cleaned
-    return DEFAULT_SPOTIFY_ACCOUNTS_BASE_URL
-
-
-def _spotify_code_verifier(length: int = 64) -> str:
-    raw = base64.urlsafe_b64encode(os.urandom(length)).decode("ascii")
-    return raw.rstrip("=")[:128]
-
-
-def _spotify_code_challenge(code_verifier: str) -> str:
-    digest = hashlib.sha256(code_verifier.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-
-
-def _oauth_pkce_code_verifier(length: int = 64) -> str:
-    raw = base64.urlsafe_b64encode(os.urandom(length)).decode("ascii")
-    return raw.rstrip("=")[:128]
-
-
-def _oauth_pkce_code_challenge(code_verifier: str) -> str:
-    digest = hashlib.sha256(code_verifier.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-
-
-def _spotify_build_authorize_url(
-    *,
-    client_id: str,
-    redirect_uri: str,
-    scope: str,
-    state: str,
-    code_challenge: str,
-    accounts_base_url: str,
-) -> str:
-    query = urlencode({
-        "client_id": client_id,
-        "response_type": "code",
-        "redirect_uri": redirect_uri,
-        "scope": scope,
-        "state": state,
-        "code_challenge_method": "S256",
-        "code_challenge": code_challenge,
-    })
-    return f"{accounts_base_url}/authorize?{query}"
-
-
-def _spotify_validate_redirect_uri(redirect_uri: str) -> tuple[str, int, str]:
-    parsed = urlparse(redirect_uri)
-    if parsed.scheme != "http":
-        raise AuthError(
-            "Spotify PKCE redirect_uri must use http://localhost or http://127.0.0.1.",
-            provider="spotify",
-            code="spotify_redirect_invalid",
-        )
-    host = parsed.hostname or ""
-    if host not in {"127.0.0.1", "localhost"}:
-        raise AuthError(
-            "Spotify PKCE redirect_uri must point to localhost or 127.0.0.1.",
-            provider="spotify",
-            code="spotify_redirect_invalid",
-        )
-    if not parsed.port:
-        raise AuthError(
-            "Spotify PKCE redirect_uri must include an explicit localhost port.",
-            provider="spotify",
-            code="spotify_redirect_invalid",
-        )
-    return host, parsed.port, parsed.path or "/"
-
-
-def _make_spotify_callback_handler(expected_path: str) -> tuple[type[BaseHTTPRequestHandler], dict[str, Any]]:
-    result: dict[str, Any] = {
-        "code": None,
-        "state": None,
-        "error": None,
-        "error_description": None,
-    }
-
-    class _SpotifyCallbackHandler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            if parsed.path != expected_path:
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b"Not found.")
-                return
-
-            params = parse_qs(parsed.query)
-            result["code"] = params.get("code", [None])[0]
-            result["state"] = params.get("state", [None])[0]
-            result["error"] = params.get("error", [None])[0]
-            result["error_description"] = params.get("error_description", [None])[0]
-
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            if result["error"]:
-                body = "<html><body><h1>Spotify authorization failed.</h1>You can close this tab.</body></html>"
-            else:
-                body = "<html><body><h1>Spotify authorization received.</h1>You can close this tab.</body></html>"
-            self.wfile.write(body.encode("utf-8"))
-
-        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
-            return
-
-    return _SpotifyCallbackHandler, result
-
-
-def _spotify_wait_for_callback(
-    redirect_uri: str,
-    *,
-    timeout_seconds: float = 180.0,
-) -> dict[str, Any]:
-    host, port, path = _spotify_validate_redirect_uri(redirect_uri)
-    handler_cls, result = _make_spotify_callback_handler(path)
-
-    class _ReuseHTTPServer(HTTPServer):
-        allow_reuse_address = True
-
-    try:
-        server = _ReuseHTTPServer((host, port), handler_cls)
-    except OSError as exc:
-        raise AuthError(
-            f"Could not bind Spotify callback server on {host}:{port}: {exc}",
-            provider="spotify",
-            code="spotify_callback_bind_failed",
-        ) from exc
-
-    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + max(5.0, timeout_seconds)
-    try:
-        while time.monotonic() < deadline:
-            if result["code"] or result["error"]:
-                return result
-            time.sleep(0.1)
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1.0)
-    raise AuthError(
-        "Spotify authorization timed out waiting for the local callback.",
-        provider="spotify",
-        code="spotify_callback_timeout",
-    )
-
-
-def _xai_validate_loopback_redirect_uri(redirect_uri: str) -> tuple[str, int, str]:
-    parsed = urlparse(redirect_uri)
-    if parsed.scheme != "http":
-        raise AuthError(
-            "xAI OAuth redirect_uri must use http://127.0.0.1.",
-            provider="xai-oauth",
-            code="xai_redirect_invalid",
-        )
-    host = parsed.hostname or ""
-    if host != XAI_OAUTH_REDIRECT_HOST:
-        raise AuthError(
-            "xAI OAuth redirect_uri must point to 127.0.0.1.",
-            provider="xai-oauth",
-            code="xai_redirect_invalid",
-        )
-    if not parsed.port:
-        raise AuthError(
-            "xAI OAuth redirect_uri must include an explicit localhost port.",
-            provider="xai-oauth",
-            code="xai_redirect_invalid",
-        )
-    return host, parsed.port, parsed.path or "/"
-
-
-def _xai_callback_cors_origin(origin: Optional[str]) -> str:
-    # CORS allowlist for the loopback callback.  Only xAI's own auth origins
-    # are accepted; the redirect_uri itself is bound to 127.0.0.1 and gated by
-    # PKCE+state, so additional dev/3p origins are not needed here.
-    allowed = {
-        "https://accounts.x.ai",
-        "https://auth.x.ai",
-    }
-    return origin if origin in allowed else ""
-
-
-def _make_xai_callback_handler(expected_path: str) -> tuple[type[BaseHTTPRequestHandler], dict[str, Any]]:
-    result: dict[str, Any] = {
-        "code": None,
-        "state": None,
-        "error": None,
-        "error_description": None,
-    }
-    result_lock = threading.Lock()
-
-    class _XAICallbackHandler(BaseHTTPRequestHandler):
-        def _maybe_write_cors_headers(self) -> None:
-            origin = self.headers.get("Origin")
-            allow_origin = _xai_callback_cors_origin(origin)
-            if allow_origin:
-                self.send_header("Access-Control-Allow-Origin", allow_origin)
-                self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
-                self.send_header("Access-Control-Allow-Private-Network", "true")
-                self.send_header("Vary", "Origin")
-
-        def do_OPTIONS(self) -> None:  # noqa: N802
-            self.send_response(204)
-            self._maybe_write_cors_headers()
-            self.end_headers()
-
-        def do_GET(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            if parsed.path != expected_path:
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b"Not found.")
-                return
-
-            params = parse_qs(parsed.query)
-            incoming = {
-                "code": params.get("code", [None])[0],
-                "state": params.get("state", [None])[0],
-                "error": params.get("error", [None])[0],
-                "error_description": params.get("error_description", [None])[0],
-            }
-
-            # Diagnostic logging — emits at INFO so reporters of loopback bugs
-            # (#27385 — "callback received but Hermes times out") can produce
-            # actionable evidence without a code change.  Logged values are
-            # fingerprints / booleans only; no actual code/state strings leak
-            # into the log file.  Run with ``HERMES_LOG_LEVEL=INFO`` (or check
-            # ``~/.hermes/logs/agent.log`` which captures INFO+ unconditionally).
-            try:
-                logger.info(
-                    "xAI loopback callback received: path=%s has_code=%s has_state=%s has_error=%s "
-                    "ua=%s",
-                    parsed.path,
-                    incoming["code"] is not None,
-                    incoming["state"] is not None,
-                    incoming["error"] is not None,
-                    (self.headers.get("User-Agent") or "")[:80],
-                )
-                if incoming["error"]:
-                    logger.info(
-                        "xAI loopback callback carries error=%s error_description=%s",
-                        incoming["error"],
-                        (incoming["error_description"] or "")[:200],
-                    )
-            except Exception:
-                # Logging must never break the OAuth flow.
-                pass
-
-            # Treat a hit on the callback path with neither `code` nor `error`
-            # as a missing OAuth callback (e.g. xAI's auth backend failed to
-            # redirect and the user navigated to the bare loopback URL by hand).
-            # Show an explicit "not received" page rather than the success page —
-            # otherwise the browser claims authorization succeeded while the CLI
-            # is still waiting for a real callback and eventually times out.
-            if incoming["code"] is None and incoming["error"] is None:
-                self.send_response(400)
-                self._maybe_write_cors_headers()
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-                body = (
-                    "<html><body>"
-                    "<h1>xAI authorization not received.</h1>"
-                    "<p>No authorization code was present in this callback URL. "
-                    "Return to the terminal and re-run "
-                    "<code>hermes auth add xai-oauth</code> to retry.</p>"
-                    "</body></html>"
-                )
-                self.wfile.write(body.encode("utf-8"))
-                return
-
-            # ThreadingHTTPServer allows a fallback/manual callback to complete
-            # while a browser connection is stuck.  Once we have a terminal
-            # OAuth result (code or error), keep the first one so a later
-            # concurrent/invalid callback cannot overwrite state before
-            # validation in _xai_oauth_loopback_login().
-            with result_lock:
-                if not (result["code"] or result["error"]):
-                    result.update(incoming)
-
-            self.send_response(200)
-            self._maybe_write_cors_headers()
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            if incoming["error"]:
-                body = "<html><body><h1>xAI authorization failed.</h1>You can close this tab.</body></html>"
-            else:
-                body = "<html><body><h1>xAI authorization received.</h1>You can close this tab.</body></html>"
-            self.wfile.write(body.encode("utf-8"))
-
-        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
-            return
-
-    return _XAICallbackHandler, result
-
-
-def _xai_start_callback_server(
-    preferred_port: int = XAI_OAUTH_REDIRECT_PORT,
-) -> tuple[HTTPServer, threading.Thread, dict[str, Any], str]:
-    host = XAI_OAUTH_REDIRECT_HOST
-    expected_path = XAI_OAUTH_REDIRECT_PATH
-    handler_cls, result = _make_xai_callback_handler(expected_path)
-
-    class _ReuseHTTPServer(ThreadingHTTPServer):
-        allow_reuse_address = True
-        daemon_threads = True
-
-    ports_to_try = [preferred_port]
-    if preferred_port != 0:
-        ports_to_try.append(0)
-    server = None
-    last_error: Optional[OSError] = None
-    for port in ports_to_try:
-        try:
-            server = _ReuseHTTPServer((host, port), handler_cls)
-            break
-        except OSError as exc:
-            last_error = exc
-    if server is None:
-        raise AuthError(
-            f"Could not bind xAI callback server on {host}:{preferred_port}: {last_error}",
-            provider="xai-oauth",
-            code="xai_callback_bind_failed",
-        ) from last_error
-
-    actual_port = int(server.server_address[1])
-    redirect_uri = f"http://{host}:{actual_port}{expected_path}"
-    thread = threading.Thread(
-        target=server.serve_forever,
-        kwargs={"poll_interval": 0.1},
-        daemon=True,
-    )
-    thread.start()
-    return server, thread, result, redirect_uri
-
-
-def _xai_wait_for_callback(
-    server: HTTPServer,
-    thread: threading.Thread,
-    result: dict[str, Any],
-    *,
-    timeout_seconds: float = 180.0,
-) -> dict[str, Any]:
-    deadline = time.monotonic() + max(5.0, timeout_seconds)
-    try:
-        while time.monotonic() < deadline:
-            if result["code"] or result["error"]:
-                return result
-            time.sleep(0.1)
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=1.0)
-    # Diagnostic: distinguish "no callback ever arrived" from "callback
-    # arrived but result wasn't populated" (#27385).  The per-hit handler
-    # also logs at INFO; if neither line appears, xAI's IDP never reached
-    # the loopback at all (firewall, port-binding, IPv6/IPv4 mismatch).
-    logger.info(
-        "xAI loopback wait timed out after %.0fs with no usable callback "
-        "(result.code=%s result.error=%s)",
-        max(5.0, timeout_seconds),
-        result["code"] is not None,
-        result["error"] is not None,
-    )
-    raise AuthError(
-        "xAI authorization timed out waiting for the local callback.",
-        provider="xai-oauth",
-        code="xai_callback_timeout",
-    )
-
-
-def _spotify_token_payload_to_state(
-    token_payload: Dict[str, Any],
-    *,
-    client_id: str,
-    redirect_uri: str,
-    requested_scope: str,
-    accounts_base_url: str,
-    api_base_url: str,
-    previous_state: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    now = datetime.now(timezone.utc)
-    expires_in = _coerce_ttl_seconds(token_payload.get("expires_in", 0))
-    expires_at = datetime.fromtimestamp(now.timestamp() + expires_in, tz=timezone.utc)
-    state = dict(previous_state or {})
-    state.update({
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "accounts_base_url": accounts_base_url,
-        "api_base_url": api_base_url,
-        "scope": requested_scope,
-        "granted_scope": str(token_payload.get("scope") or requested_scope).strip(),
-        "token_type": str(token_payload.get("token_type", "Bearer") or "Bearer").strip() or "Bearer",
-        "access_token": str(token_payload.get("access_token", "") or "").strip(),
-        "refresh_token": str(
-            token_payload.get("refresh_token")
-            or state.get("refresh_token")
-            or ""
-        ).strip(),
-        "obtained_at": now.isoformat(),
-        "expires_at": expires_at.isoformat(),
-        "expires_in": expires_in,
-        "auth_type": "oauth_pkce",
-    })
-    return state
-
-
-def _spotify_exchange_code_for_tokens(
-    *,
-    client_id: str,
-    code: str,
-    redirect_uri: str,
-    code_verifier: str,
-    accounts_base_url: str,
-    timeout_seconds: float = 20.0,
-) -> Dict[str, Any]:
-    try:
-        response = httpx.post(
-            f"{accounts_base_url}/api/token",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "client_id": client_id,
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "code_verifier": code_verifier,
-            },
-            timeout=timeout_seconds,
-        )
-    except Exception as exc:
-        raise AuthError(
-            f"Spotify token exchange failed: {exc}",
-            provider="spotify",
-            code="spotify_token_exchange_failed",
-        ) from exc
-
-    if response.status_code >= 400:
-        detail = response.text.strip()
-        raise AuthError(
-            "Spotify token exchange failed."
-            + (f" Response: {detail}" if detail else ""),
-            provider="spotify",
-            code="spotify_token_exchange_failed",
-        )
-    payload = response.json()
-    if not isinstance(payload, dict) or not str(payload.get("access_token", "") or "").strip():
-        raise AuthError(
-            "Spotify token response did not include an access_token.",
-            provider="spotify",
-            code="spotify_token_exchange_invalid",
-        )
-    return payload
-
-
-def _refresh_spotify_oauth_state(
-    state: Dict[str, Any],
-    *,
-    timeout_seconds: float = 20.0,
-) -> Dict[str, Any]:
-    refresh_token = str(state.get("refresh_token", "") or "").strip()
-    if not refresh_token:
-        raise AuthError(
-            "Spotify refresh token missing. Run `hermes auth spotify` again.",
-            provider="spotify",
-            code="spotify_refresh_token_missing",
-            relogin_required=True,
-        )
-
-    client_id = _spotify_client_id(state=state)
-    accounts_base_url = _spotify_accounts_base_url(state)
-    try:
-        response = httpx.post(
-            f"{accounts_base_url}/api/token",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": client_id,
-            },
-            timeout=timeout_seconds,
-        )
-    except Exception as exc:
-        raise AuthError(
-            f"Spotify token refresh failed: {exc}",
-            provider="spotify",
-            code="spotify_refresh_failed",
-        ) from exc
-
-    if response.status_code >= 400:
-        detail = response.text.strip()
-        raise AuthError(
-            "Spotify token refresh failed. Run `hermes auth spotify` again."
-            + (f" Response: {detail}" if detail else ""),
-            provider="spotify",
-            code="spotify_refresh_failed",
-            relogin_required=True,
-        )
-
-    payload = response.json()
-    if not isinstance(payload, dict) or not str(payload.get("access_token", "") or "").strip():
-        raise AuthError(
-            "Spotify refresh response did not include an access_token.",
-            provider="spotify",
-            code="spotify_refresh_invalid",
-            relogin_required=True,
-        )
-
-    return _spotify_token_payload_to_state(
-        payload,
-        client_id=client_id,
-        redirect_uri=_spotify_redirect_uri(state=state),
-        requested_scope=str(state.get("scope") or DEFAULT_SPOTIFY_SCOPE),
-        accounts_base_url=accounts_base_url,
-        api_base_url=_spotify_api_base_url(state),
-        previous_state=state,
-    )
-
-
-def resolve_spotify_runtime_credentials(
-    *,
-    force_refresh: bool = False,
-    refresh_if_expiring: bool = True,
-    refresh_skew_seconds: int = SPOTIFY_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
-) -> Dict[str, Any]:
-    with _auth_store_lock():
-        auth_store = _load_auth_store()
-        state = _load_provider_state(auth_store, "spotify")
-        if not state:
-            raise AuthError(
-                "Spotify is not authenticated. Run `hermes auth spotify` first.",
-                provider="spotify",
-                code="spotify_auth_missing",
-                relogin_required=True,
-            )
-
-        should_refresh = bool(force_refresh)
-        if not should_refresh and refresh_if_expiring:
-            should_refresh = _is_expiring(state.get("expires_at"), refresh_skew_seconds)
-        if should_refresh:
-            state = _refresh_spotify_oauth_state(state)
-            _store_provider_state(auth_store, "spotify", state, set_active=False)
-            _save_auth_store(auth_store)
-
-    access_token = str(state.get("access_token", "") or "").strip()
-    if not access_token:
-        raise AuthError(
-            "Spotify access token missing. Run `hermes auth spotify` again.",
-            provider="spotify",
-            code="spotify_access_token_missing",
-            relogin_required=True,
-        )
-
-    return {
-        "provider": "spotify",
-        "access_token": access_token,
-        "api_key": access_token,
-        "token_type": str(state.get("token_type", "Bearer") or "Bearer"),
-        "base_url": _spotify_api_base_url(state),
-        "scope": str(state.get("granted_scope") or state.get("scope") or "").strip(),
-        "client_id": _spotify_client_id(state=state),
-        "redirect_uri": _spotify_redirect_uri(state=state),
-        "expires_at": state.get("expires_at"),
-        "refresh_token": str(state.get("refresh_token", "") or "").strip(),
-    }
-
-
-def get_spotify_auth_status() -> Dict[str, Any]:
-    state = get_provider_auth_state("spotify")
-    if not state:
-        return {"logged_in": False}
-
-    expires_at = state.get("expires_at")
-    refresh_token = str(state.get("refresh_token", "") or "").strip()
-    return {
-        "logged_in": bool(refresh_token or not _is_expiring(expires_at, 0)),
-        "auth_type": state.get("auth_type", "oauth_pkce"),
-        "client_id": state.get("client_id"),
-        "redirect_uri": state.get("redirect_uri"),
-        "scope": state.get("granted_scope") or state.get("scope"),
-        "expires_at": expires_at,
-        "api_base_url": state.get("api_base_url"),
-        "has_refresh_token": bool(refresh_token),
-    }
-
-
-def _spotify_interactive_setup(redirect_uri_hint: str) -> str:
-    """Walk the user through creating a Spotify developer app, persist the
-    resulting client_id to ~/.hermes/.env, and return it.
-
-    Raises SystemExit if the user aborts or submits an empty value.
-    """
-    from hermes_cli.config import save_env_value
-
-    print()
-    print("=" * 70)
-    print("Spotify first-time setup")
-    print("=" * 70)
-    print()
-    print("Spotify requires every user to register their own lightweight")
-    print("developer app. This takes about two minutes and only has to be")
-    print("done once per machine.")
-    print()
-    print(f"Full guide: {SPOTIFY_DOCS_URL}")
-    print()
-    print("Steps:")
-    print(f"  1. Opening {SPOTIFY_DASHBOARD_URL} in your browser...")
-    print("  2. Click 'Create app' and fill in:")
-    print("       App name:     anything (e.g. hermes-agent)")
-    print("       Description:  anything")
-    print(f"       Redirect URI: {redirect_uri_hint}")
-    print("       API/SDK:      Web API")
-    print("  3. Agree to the terms, click Save.")
-    print("  4. Open the app's Settings page and copy the Client ID.")
-    print("  5. Paste it below.")
-    print()
-
-    if not _is_remote_session():
-        try:
-            webbrowser.open(SPOTIFY_DASHBOARD_URL)
-        except Exception:
-            pass
-
-    try:
-        raw = input("Spotify Client ID: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        raise SystemExit("Spotify setup cancelled.")
-
-    if not raw:
-        print()
-        print(f"No Client ID entered. See {SPOTIFY_DOCS_URL} for the full guide.")
-        raise SystemExit("Spotify setup cancelled: empty Client ID.")
-
-    # Persist so subsequent `hermes auth spotify` runs skip the wizard.
-    save_env_value("HERMES_SPOTIFY_CLIENT_ID", raw)
-    # Only persist the redirect URI if it's non-default, to avoid pinning
-    # users to a value the default might later change to.
-    if redirect_uri_hint and redirect_uri_hint != DEFAULT_SPOTIFY_REDIRECT_URI:
-        save_env_value("HERMES_SPOTIFY_REDIRECT_URI", redirect_uri_hint)
-
-    print()
-    print("Saved HERMES_SPOTIFY_CLIENT_ID to ~/.hermes/.env")
-    print()
-    return raw
-
-
-def login_spotify_command(args) -> None:
-    existing_state = get_provider_auth_state("spotify") or {}
-
-    # Interactive wizard: if no client_id is configured anywhere, walk the
-    # user through creating the Spotify developer app instead of crashing
-    # with "HERMES_SPOTIFY_CLIENT_ID is required".
-    explicit_client_id = getattr(args, "client_id", None)
-    try:
-        client_id = _spotify_client_id(explicit_client_id, existing_state)
-    except AuthError as exc:
-        if getattr(exc, "code", "") != "spotify_client_id_missing":
-            raise
-        client_id = _spotify_interactive_setup(
-            redirect_uri_hint=getattr(args, "redirect_uri", None) or DEFAULT_SPOTIFY_REDIRECT_URI,
-        )
-
-    redirect_uri = _spotify_redirect_uri(getattr(args, "redirect_uri", None), existing_state)
-    scope = _spotify_scope_string(getattr(args, "scope", None) or existing_state.get("scope"))
-    accounts_base_url = _spotify_accounts_base_url(existing_state)
-    api_base_url = _spotify_api_base_url(existing_state)
-    open_browser = not getattr(args, "no_browser", False)
-
-    code_verifier = _spotify_code_verifier()
-    code_challenge = _spotify_code_challenge(code_verifier)
-    state_nonce = uuid.uuid4().hex
-    authorize_url = _spotify_build_authorize_url(
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        scope=scope,
-        state=state_nonce,
-        code_challenge=code_challenge,
-        accounts_base_url=accounts_base_url,
-    )
-
-    print("Starting Spotify PKCE login...")
-    print(f"Client ID: {client_id}")
-    print(f"Redirect URI: {redirect_uri}")
-    print("Make sure this redirect URI is allow-listed in your Spotify app settings.")
-    print()
-    print("Open this URL to authorize Hermes:")
-    print(authorize_url)
-    print()
-    print(f"Full setup guide: {SPOTIFY_DOCS_URL}")
-    print()
-
-    _print_loopback_ssh_hint(redirect_uri, docs_url=SPOTIFY_DOCS_URL)
-
-    if open_browser and not _is_remote_session() and _can_open_graphical_browser():
-        try:
-            opened = webbrowser.open(authorize_url)
-        except Exception:
-            opened = False
-        if opened:
-            print("Browser opened for Spotify authorization.")
-        else:
-            print("Could not open the browser automatically; use the URL above.")
-
-    callback = _spotify_wait_for_callback(
-        redirect_uri,
-        timeout_seconds=float(getattr(args, "timeout", None) or 180.0),
-    )
-    if callback.get("error"):
-        detail = callback.get("error_description") or callback["error"]
-        raise SystemExit(f"Spotify authorization failed: {detail}")
-    if callback.get("state") != state_nonce:
-        raise SystemExit("Spotify authorization failed: state mismatch.")
-
-    token_payload = _spotify_exchange_code_for_tokens(
-        client_id=client_id,
-        code=str(callback.get("code") or ""),
-        redirect_uri=redirect_uri,
-        code_verifier=code_verifier,
-        accounts_base_url=accounts_base_url,
-        timeout_seconds=float(getattr(args, "timeout", None) or 20.0),
-    )
-    spotify_state = _spotify_token_payload_to_state(
-        token_payload,
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        requested_scope=scope,
-        accounts_base_url=accounts_base_url,
-        api_base_url=api_base_url,
-    )
-
-    with _auth_store_lock():
-        auth_store = _load_auth_store()
-        _store_provider_state(auth_store, "spotify", spotify_state, set_active=False)
-        saved_to = _save_auth_store(auth_store)
-
-    print("Spotify login successful!")
-    print(f"  Auth state: {saved_to}")
-    print("  Provider state saved under providers.spotify")
-    print(f"  Docs: {SPOTIFY_DOCS_URL}")
-
 # =============================================================================
 # SSH / remote session detection
 # =============================================================================
@@ -3198,7 +2354,7 @@ def _ssh_user_at_host() -> str:
 
 def _print_loopback_ssh_hint(redirect_uri: str, *, docs_url: str | None = None) -> None:
     """Print an SSH tunnel hint when running a loopback-redirect OAuth flow on a
-    remote host. The auth server (xAI, Spotify, ...) will redirect the user's
+    remote host. The auth server (xAI, MCP OAuth, ...) will redirect the user's
     browser to ``127.0.0.1:<port>/callback``. If the browser is on a different
     machine than the loopback listener (the usual SSH case), the redirect can't
     reach the listener without a local port forward.
@@ -5707,8 +4863,6 @@ def get_auth_status(provider_id: Optional[str] = None) -> Dict[str, Any]:
     target = (provider_id or get_active_provider() or "").strip().lower()
     if not target:
         return {"logged_in": False}
-    if target == "spotify":
-        return get_spotify_auth_status()
     if target == "nous":
         return get_nous_auth_status()
     if target == "openai-codex":
@@ -6381,6 +5535,240 @@ def _login_xai_oauth(
     from hermes_constants import display_hermes_home as _dhh
     print(f"  Auth state: {_dhh()}/auth.json")
     print(f"  Config updated: {config_path} (model.provider=xai-oauth)")
+
+
+def _oauth_pkce_code_verifier(length: int = 64) -> str:
+    raw = base64.urlsafe_b64encode(os.urandom(length)).decode("ascii")
+    return raw.rstrip("=")[:128]
+
+
+def _oauth_pkce_code_challenge(code_verifier: str) -> str:
+    digest = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _xai_validate_loopback_redirect_uri(redirect_uri: str) -> tuple[str, int, str]:
+    parsed = urlparse(redirect_uri)
+    if parsed.scheme != "http":
+        raise AuthError(
+            "xAI OAuth redirect_uri must use http://127.0.0.1.",
+            provider="xai-oauth",
+            code="xai_redirect_invalid",
+        )
+    host = parsed.hostname or ""
+    if host != XAI_OAUTH_REDIRECT_HOST:
+        raise AuthError(
+            "xAI OAuth redirect_uri must point to 127.0.0.1.",
+            provider="xai-oauth",
+            code="xai_redirect_invalid",
+        )
+    if not parsed.port:
+        raise AuthError(
+            "xAI OAuth redirect_uri must include an explicit localhost port.",
+            provider="xai-oauth",
+            code="xai_redirect_invalid",
+        )
+    return host, parsed.port, parsed.path or "/"
+
+
+def _xai_callback_cors_origin(origin: Optional[str]) -> str:
+    # CORS allowlist for the loopback callback.  Only xAI's own auth origins
+    # are accepted; the redirect_uri itself is bound to 127.0.0.1 and gated by
+    # PKCE+state, so additional dev/3p origins are not needed here.
+    allowed = {
+        "https://accounts.x.ai",
+        "https://auth.x.ai",
+    }
+    return origin if origin in allowed else ""
+
+
+def _make_xai_callback_handler(expected_path: str) -> tuple[type[BaseHTTPRequestHandler], dict[str, Any]]:
+    result: dict[str, Any] = {
+        "code": None,
+        "state": None,
+        "error": None,
+        "error_description": None,
+    }
+    result_lock = threading.Lock()
+
+    class _XAICallbackHandler(BaseHTTPRequestHandler):
+        def _maybe_write_cors_headers(self) -> None:
+            origin = self.headers.get("Origin")
+            allow_origin = _xai_callback_cors_origin(origin)
+            if allow_origin:
+                self.send_header("Access-Control-Allow-Origin", allow_origin)
+                self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.send_header("Access-Control-Allow-Private-Network", "true")
+                self.send_header("Vary", "Origin")
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            self.send_response(204)
+            self._maybe_write_cors_headers()
+            self.end_headers()
+
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            if parsed.path != expected_path:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Not found.")
+                return
+
+            params = parse_qs(parsed.query)
+            incoming = {
+                "code": params.get("code", [None])[0],
+                "state": params.get("state", [None])[0],
+                "error": params.get("error", [None])[0],
+                "error_description": params.get("error_description", [None])[0],
+            }
+
+            # Diagnostic logging — emits at INFO so reporters of loopback bugs
+            # (#27385 — "callback received but Hermes times out") can produce
+            # actionable evidence without a code change.  Logged values are
+            # fingerprints / booleans only; no actual code/state strings leak
+            # into the log file.  Run with ``HERMES_LOG_LEVEL=INFO`` (or check
+            # ``~/.hermes/logs/agent.log`` which captures INFO+ unconditionally).
+            try:
+                logger.info(
+                    "xAI loopback callback received: path=%s has_code=%s has_state=%s has_error=%s "
+                    "ua=%s",
+                    parsed.path,
+                    incoming["code"] is not None,
+                    incoming["state"] is not None,
+                    incoming["error"] is not None,
+                    (self.headers.get("User-Agent") or "")[:80],
+                )
+                if incoming["error"]:
+                    logger.info(
+                        "xAI loopback callback carries error=%s error_description=%s",
+                        incoming["error"],
+                        (incoming["error_description"] or "")[:200],
+                    )
+            except Exception:
+                # Logging must never break the OAuth flow.
+                pass
+
+            # Treat a hit on the callback path with neither `code` nor `error`
+            # as a missing OAuth callback (e.g. xAI's auth backend failed to
+            # redirect and the user navigated to the bare loopback URL by hand).
+            # Show an explicit "not received" page rather than the success page —
+            # otherwise the browser claims authorization succeeded while the CLI
+            # is still waiting for a real callback and eventually times out.
+            if incoming["code"] is None and incoming["error"] is None:
+                self.send_response(400)
+                self._maybe_write_cors_headers()
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                body = (
+                    "<html><body>"
+                    "<h1>xAI authorization not received.</h1>"
+                    "<p>No authorization code was present in this callback URL. "
+                    "Return to the terminal and re-run "
+                    "<code>hermes auth add xai-oauth</code> to retry.</p>"
+                    "</body></html>"
+                )
+                self.wfile.write(body.encode("utf-8"))
+                return
+
+            # ThreadingHTTPServer allows a fallback/manual callback to complete
+            # while a browser connection is stuck.  Once we have a terminal
+            # OAuth result (code or error), keep the first one so a later
+            # concurrent/invalid callback cannot overwrite state before
+            # validation in _xai_oauth_loopback_login().
+            with result_lock:
+                if not (result["code"] or result["error"]):
+                    result.update(incoming)
+
+            self.send_response(200)
+            self._maybe_write_cors_headers()
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            if incoming["error"]:
+                body = "<html><body><h1>xAI authorization failed.</h1>You can close this tab.</body></html>"
+            else:
+                body = "<html><body><h1>xAI authorization received.</h1>You can close this tab.</body></html>"
+            self.wfile.write(body.encode("utf-8"))
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+            return
+
+    return _XAICallbackHandler, result
+
+
+def _xai_start_callback_server(
+    preferred_port: int = XAI_OAUTH_REDIRECT_PORT,
+) -> tuple[HTTPServer, threading.Thread, dict[str, Any], str]:
+    host = XAI_OAUTH_REDIRECT_HOST
+    expected_path = XAI_OAUTH_REDIRECT_PATH
+    handler_cls, result = _make_xai_callback_handler(expected_path)
+
+    class _ReuseHTTPServer(ThreadingHTTPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    ports_to_try = [preferred_port]
+    if preferred_port != 0:
+        ports_to_try.append(0)
+    server = None
+    last_error: Optional[OSError] = None
+    for port in ports_to_try:
+        try:
+            server = _ReuseHTTPServer((host, port), handler_cls)
+            break
+        except OSError as exc:
+            last_error = exc
+    if server is None:
+        raise AuthError(
+            f"Could not bind xAI callback server on {host}:{preferred_port}: {last_error}",
+            provider="xai-oauth",
+            code="xai_callback_bind_failed",
+        ) from last_error
+
+    actual_port = int(server.server_address[1])
+    redirect_uri = f"http://{host}:{actual_port}{expected_path}"
+    thread = threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": 0.1},
+        daemon=True,
+    )
+    thread.start()
+    return server, thread, result, redirect_uri
+
+
+def _xai_wait_for_callback(
+    server: HTTPServer,
+    thread: threading.Thread,
+    result: dict[str, Any],
+    *,
+    timeout_seconds: float = 180.0,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + max(5.0, timeout_seconds)
+    try:
+        while time.monotonic() < deadline:
+            if result["code"] or result["error"]:
+                return result
+            time.sleep(0.1)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1.0)
+    # Diagnostic: distinguish "no callback ever arrived" from "callback
+    # arrived but result wasn't populated" (#27385).  The per-hit handler
+    # also logs at INFO; if neither line appears, xAI's IDP never reached
+    # the loopback at all (firewall, port-binding, IPv6/IPv4 mismatch).
+    logger.info(
+        "xAI loopback wait timed out after %.0fs with no usable callback "
+        "(result.code=%s result.error=%s)",
+        max(5.0, timeout_seconds),
+        result["code"] is not None,
+        result["error"] is not None,
+    )
+    raise AuthError(
+        "xAI authorization timed out waiting for the local callback.",
+        provider="xai-oauth",
+        code="xai_callback_timeout",
+    )
 
 
 def _xai_oauth_build_authorize_url(

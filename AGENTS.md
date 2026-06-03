@@ -45,11 +45,10 @@ hermes-agent/
 │   ├── memory/           # Memory-provider plugins (honcho, mem0, supermemory, ...)
 │   ├── context_engine/   # Context-engine plugins
 │   ├── model-providers/  # Inference backend plugins (openrouter, anthropic, gmi, ...)
-│   ├── kanban/           # Multi-agent board dispatcher + worker plugin
 │   ├── hermes-achievements/  # Gamified achievement tracking
 │   ├── observability/    # Metrics / traces / logs plugin
 │   ├── image_gen/        # Image-generation providers
-│   └── <others>/         # disk-cleanup, google_meet, platforms, spotify,
+│   └── <others>/         # disk-cleanup, platforms,
 │                         #   strike-freedom-cockpit, ...
 ├── optional-skills/      # Heavier/niche skills shipped but NOT active by default
 ├── skills/               # Built-in skills bundled with the repo
@@ -59,7 +58,6 @@ hermes-agent/
 ├── acp_adapter/          # ACP server (VS Code / Zed / JetBrains integration)
 ├── cron/                 # Scheduler — jobs.py, scheduler.py
 ├── scripts/              # run_tests.sh, release.py, auxiliary scripts
-├── website/              # Docusaurus docs site
 └── tests/                # Pytest suite (~17k tests across ~900 files as of May 2026)
 ```
 
@@ -594,7 +592,7 @@ NOT import them (would double-instantiate `ProviderProfile`). Plugins
 without an explicit `kind:` get auto-coerced via a source-text heuristic
 (`register_provider` + `ProviderProfile` in `__init__.py`).
 
-Full authoring guide: `website/docs/developer-guide/model-provider-plugin.md`.
+Full authoring guide: https://hermes-agent.nousresearch.com/docs/developer-guide/model-provider-plugin
 
 ### Dashboard / context-engine / image-gen plugin directories
 
@@ -729,9 +727,9 @@ platforms inherit from.
 
 Current toolset keys: `browser`, `clarify`, `code_execution`, `cronjob`,
 `debugging`, `delegation`, `discord`, `discord_admin`, `feishu_doc`,
-`feishu_drive`, `file`, `homeassistant`, `image_gen`, `kanban`, `memory`,
+`feishu_drive`, `file`, `homeassistant`, `image_gen`, `memory`,
 `messaging`, `moa`, `rl`, `safe`, `search`, `session_search`, `skills`,
-`spotify`, `terminal`, `todo`, `tts`, `video`, `vision`, `web`, `yuanbao`.
+`terminal`, `todo`, `tts`, `video`, `vision`, `web`, `yuanbao`.
 
 Enable/disable per platform via `hermes tools` (the curses UI) or the
 `tools.<platform>.enabled` / `tools.<platform>.disabled` lists in
@@ -802,7 +800,7 @@ Config section (`curator:` in `config.yaml`):
 `enabled`, `interval_hours`, `min_idle_hours`, `stale_after_days`,
 `archive_after_days`, `backup.*`.
 
-Full user-facing docs: `website/docs/user-guide/features/curator.md`.
+Full user-facing docs: https://hermes-agent.nousresearch.com/docs/user-guide/features/curator
 
 ---
 
@@ -839,47 +837,6 @@ Hardening invariants:
 Cron deliveries are **not** mirrored into the target gateway session —
 they land in their own cron session with a header/footer frame so the
 main conversation's message-role alternation stays intact.
-
----
-
-## Kanban (multi-agent work queue)
-
-Durable SQLite-backed board that lets multiple profiles / workers
-collaborate on shared tasks. Users drive it via `hermes kanban <verb>`;
-workers spawned by the dispatcher drive it via a dedicated `kanban_*`
-toolset so their schema footprint is zero when they're not inside a
-kanban task.
-
-- **CLI:** `hermes_cli/kanban.py` wires `hermes kanban` with verbs
-  `init`, `create`, `list` (alias `ls`), `show`, `assign`, `link`,
-  `unlink`, `comment`, `complete`, `block`, `unblock`, `archive`,
-  `tail`, plus less-commonly-used `watch`, `stats`, `runs`, `log`,
-  `assignees`, `heartbeat`, `notify-*`, `dispatch`, `daemon`, `gc`.
-- **Worker/orchestrator toolset:** `tools/kanban_tools.py` exposes
-  `kanban_show`, `kanban_complete`, `kanban_block`, `kanban_heartbeat`,
-  `kanban_comment`, `kanban_create`, `kanban_link`; profiles that
-  explicitly enable the `kanban` toolset outside a dispatcher-spawned
-  task also get `kanban_list` and `kanban_unblock` for board routing.
-- **Dispatcher:** long-lived loop that (default every 60s) reclaims
-  stale claims, promotes ready tasks, atomically claims, and spawns
-  assigned profiles. Runs **inside the gateway** by default via
-  `kanban.dispatch_in_gateway: true`.
-- **Plugin assets:** `plugins/kanban/dashboard/` (web UI) +
-  `plugins/kanban/systemd/` (`hermes-kanban-dispatcher.service` for
-  standalone dispatcher deployment).
-
-Isolation model:
-- **Board** is the hard boundary — workers are spawned with
-  `HERMES_KANBAN_BOARD` pinned in their env so they can't see other
-  boards.
-- **Tenant** is a soft namespace *within* a board — one specialist
-  fleet can serve multiple businesses with workspace-path + memory-key
-  isolation.
-- After `kanban.failure_limit` consecutive non-success attempts on the
-  same task (default: 2), the dispatcher auto-blocks it to prevent spin
-  loops.
-
-Full user-facing docs: `website/docs/user-guide/features/kanban.md`.
 
 ---
 

@@ -144,12 +144,6 @@ gateway:
     invalid_days:          "Valeur --days invalide : {value}"
     error:                 "Erreur lors de la génération des analyses : {error}"
 
-  kanban:
-    error_prefix:          "⚠ erreur kanban : {error}"
-    subscribed_suffix:     "(abonné — vous serez notifié lorsque {task_id} se terminera ou sera bloqué)"
-    truncated_suffix:      "… (tronqué ; utilisez `hermes kanban …` dans votre terminal pour la sortie complète)"
-    no_output:             "(aucune sortie)"
-
   personality:
     none_configured:       "Aucune personnalité configurée dans `{path}/config.yaml`"
     header:                "🎭 **Personnalités disponibles**\n"

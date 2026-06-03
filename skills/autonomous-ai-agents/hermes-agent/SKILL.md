@@ -286,7 +286,6 @@ The registry of record is `hermes_cli/commands.py` — every consumer
 /reload-mcp          Reload MCP servers
 /cron                Manage cron jobs (CLI)
 /curator [sub]       Background skill maintenance (status, run, pin, archive, …)
-/kanban [sub]        Multi-profile collaboration board (tasks, links, comments)
 /plugins             List plugins (CLI)
 ```
 
@@ -421,10 +420,8 @@ Enable/disable via `hermes tools` (interactive) or `hermes tools enable/disable 
 | `clarify` | Ask user clarifying questions |
 | `messaging` | Cross-platform message sending |
 | `todo` | In-session task planning and tracking |
-| `kanban` | Multi-agent work-queue tools (gated to workers) |
 | `debugging` | Extra introspection/debug tools (off by default) |
 | `safe` | Minimal, low-risk toolset for locked-down sessions |
-| `spotify` | Spotify playback and playlist control |
 | `homeassistant` | Smart home control (off by default) |
 | `discord` | Discord integration tools |
 | `discord_admin` | Discord admin/moderation tools |
@@ -618,7 +615,7 @@ terminal(command="tmux new-session -d -s resumed 'hermes --resume 20260225_14305
 
 Four systems run alongside the main conversation loop. Quick reference
 here; full developer notes live in `AGENTS.md`, user-facing docs under
-`website/docs/user-guide/features/`.
+https://hermes-agent.nousresearch.com/docs/user-guide/features/
 
 ### Delegation (`delegate_task`)
 
@@ -677,37 +674,6 @@ so nothing is lost.
 Config: `curator.*` (`enabled`, `interval_hours`, `min_idle_hours`,
 `stale_after_days`, `archive_after_days`, `backup.*`).
 User docs: https://hermes-agent.nousresearch.com/docs/user-guide/features/curator
-
-### Kanban (multi-agent work queue)
-
-Durable SQLite board for multi-profile / multi-worker collaboration.
-Users drive it via `hermes kanban <verb>`; dispatcher-spawned workers
-see a focused `kanban_*` toolset gated by `HERMES_KANBAN_TASK`, and
-orchestrator profiles can opt into the broader `kanban` toolset. Normal
-sessions still have zero `kanban_*` schema footprint unless configured.
-
-- **CLI verbs (common):** `init`, `create`, `list` (alias `ls`),
-  `show`, `assign`, `link`, `unlink`, `comment`, `complete`, `block`,
-  `unblock`, `archive`, `tail`. Less common: `watch`, `stats`, `runs`,
-  `log`, `dispatch`, `daemon`, `gc`.
-- **Worker/orchestrator toolset:** `kanban_show`, `kanban_complete`,
-  `kanban_block`, `kanban_heartbeat`, `kanban_comment`, `kanban_create`,
-  `kanban_link`; profiles that explicitly enable the `kanban` toolset
-  outside a dispatcher-spawned task also get `kanban_list` and
-  `kanban_unblock` for board routing.
-- **Dispatcher** runs inside the gateway by default
-  (`kanban.dispatch_in_gateway: true`) — reclaims stale claims,
-  promotes ready tasks, atomically claims, spawns assigned profiles.
-  Auto-blocks a task after `failure_limit` consecutive spawn failures
-  (default 2; configurable via `kanban.failure_limit` or per-task
-  `max_retries`).
-- **Isolation:** board is the hard boundary (workers get
-  `HERMES_KANBAN_BOARD` pinned in env); tenant is a soft namespace
-  within a board for workspace-path + memory-key isolation.
-
-User docs: https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban
-
----
 
 ## Windows-Specific Quirks
 
@@ -897,8 +863,7 @@ hermes-agent/
 ├── gateway/              # Messaging gateway
 │   └── platforms/        # Platform adapters (telegram, discord, etc.)
 ├── cron/                 # Job scheduler
-├── tests/                # ~3000 pytest tests
-└── website/              # Docusaurus docs site
+└── tests/                # ~3000 pytest tests
 ```
 
 Config: `~/.hermes/config.yaml` (settings), `~/.hermes/.env` (API keys).

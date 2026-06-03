@@ -23,8 +23,8 @@
 # When invoked as root, it drops to the hermes user (via s6-setuidgid)
 # before exec'ing the real venv binary, so anything that writes under
 # $HERMES_HOME is uid-aligned with the supervised processes. When invoked
-# as any non-root UID — including the supervised processes themselves,
-# `docker exec --user hermes`, kanban subagents, etc. — it short-circuits
+# as any non-root UID — including the supervised processes themselves
+# and `docker exec --user hermes` — it short-circuits
 # straight to the venv binary with no privilege change. Net: one extra
 # fork on the docker-exec-as-root path, zero behavioral change on every
 # other path.

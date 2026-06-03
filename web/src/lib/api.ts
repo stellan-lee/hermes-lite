@@ -1,5 +1,5 @@
 // The dashboard can be served either at the root of its host (e.g.
-// https://kanban.tilos.com/) or under a URL prefix when reverse-proxied
+// a dedicated host) or under a URL prefix when reverse-proxied
 // (e.g. https://mission-control.tilos.com/hermes/). The Python backend
 // injects ``window.__HERMES_BASE_PATH__`` into index.html based on the
 // incoming ``X-Forwarded-Prefix`` header so the SPA can address its own

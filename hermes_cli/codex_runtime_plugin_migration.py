@@ -570,7 +570,7 @@ def _build_hermes_tools_mcp_entry() -> dict:
     # config / auth / sessions DB as the parent CLI. Read from os.environ
     # (not get_hermes_home()) on purpose: when the env var is unset we want
     # codex's subprocess to inherit whatever HERMES_HOME its launcher sets
-    # at runtime (systemd unit, gateway, kanban dispatcher, custom shell),
+    # at runtime (systemd unit, gateway, custom shell),
     # rather than burning the migrate-time resolved default into config.toml
     # — that would override the launcher's HERMES_HOME and pin the subprocess
     # to the wrong profile.

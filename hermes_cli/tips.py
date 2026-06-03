@@ -350,7 +350,6 @@ TIPS = [
     '/topic in Telegram DMs enables user-managed multi-session topic mode — /topic <id> restores past sessions inline.',
     '/approve session|always runs a pending dangerous command with your chosen trust scope; /deny rejects it.',
     '/restart gracefully restarts the gateway after draining active runs, then pings the requester when back up.',
-    '/kanban boards switch <slug> changes the active multi-project Kanban board from inside chat.',
     '/reload reloads ~/.hermes/.env into the running session — pick up new API keys without restarting.',
 
     # --- Cron (no-agent & scripts) ---
@@ -484,4 +483,3 @@ def get_random_tip(exclude_recent: int = 0) -> str:
             deduplication across sessions.
     """
     return random.choice(TIPS)
-

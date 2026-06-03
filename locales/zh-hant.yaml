@@ -144,12 +144,6 @@ gateway:
     invalid_days:          "無效的 --days 值：{value}"
     error:                 "產生洞察時發生錯誤：{error}"
 
-  kanban:
-    error_prefix:          "⚠ kanban 錯誤：{error}"
-    subscribed_suffix:     "（已訂閱 — 當 {task_id} 完成或被封鎖時將通知您）"
-    truncated_suffix:      "…（已截斷；如需完整輸出請在終端機執行 `hermes kanban …`）"
-    no_output:             "（無輸出）"
-
   personality:
     none_configured:       "`{path}/config.yaml` 中未設定人格"
     header:                "🎭 **可用人格**\n"
