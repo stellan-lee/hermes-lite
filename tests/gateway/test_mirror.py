@@ -173,7 +173,12 @@ class TestMirrorToSession:
         call_args = mock_sqlite.call_args
         assert call_args[0][0] == "sess_abc"
         msg = call_args[0][1]
-        assert msg["content"] == "Hello!"
+        # Provenance is embedded in content: the transcript schema has no
+        # mirror column, so the mirror/mirror_source flags are dropped at
+        # write time and the gateway replay relabel can never fire. Baking the
+        # "[Delivered from …]" label into content is what stops a delivered
+        # message from replaying as the model's own assistant turn.
+        assert msg["content"] == "[Delivered from cli] Hello!"
         assert msg["role"] == "assistant"
         assert msg["mirror"] is True
         assert msg["mirror_source"] == "cli"

@@ -829,12 +829,24 @@ def _consume_pid_marker_for_self(
     # so the watcher's non-destructive probe and this authoritative
     # consume agree on every platform (issue #34597).
     if target_pid != our_pid:
-        matches = False
-    elif target_start_time is not None and our_start_time is not None:
+        # Foreign marker — it names a different live process, which may still
+        # legitimately consume it. Leave it in place (non-destructive),
+        # mirroring planned_stop_marker_targets_self(). Destroying it here is
+        # the bug: a concurrent/earlier consume by THIS process would unlink a
+        # marker meant for another PID, so that process exits as "unexpected"
+        # (exit 1) and gets revived. The TTL staleness check above and the
+        # namer's clear_*_marker on exit bound any leak.
+        return False
+
+    if target_start_time is not None and our_start_time is not None:
         matches = target_start_time == our_start_time
     else:
         matches = True
 
+    # Same PID: safe to unlink. matches=True → we are the target (consume so a
+    # subsequent unrelated signal doesn't re-trigger). matches=False → PID
+    # reuse (original target is dead): the marker can never apply to anyone, so
+    # clean it up.
     try:
         path.unlink(missing_ok=True)
     except OSError:

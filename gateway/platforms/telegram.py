@@ -1010,6 +1010,11 @@ class TelegramAdapter(BasePlatformAdapter):
 
         await self._drain_polling_connections()
 
+        # disconnect() may have torn down the app while we slept above.
+        if not (self._app and self._app.updater):
+            logger.info("[%s] Skipping polling resume — adapter disconnected", self.name)
+            return
+
         try:
             await self._app.updater.start_polling(
                 allowed_updates=Update.ALL_TYPES,
@@ -1136,6 +1141,11 @@ class TelegramAdapter(BasePlatformAdapter):
 
             await asyncio.sleep(RETRY_DELAY)
             await self._drain_polling_connections()
+
+            # disconnect() may have torn down the app while we slept above.
+            if not (self._app and self._app.updater):
+                logger.info("[%s] Skipping polling resume — adapter disconnected", self.name)
+                return
 
             try:
                 await self._app.updater.start_polling(
@@ -1834,6 +1844,27 @@ class TelegramAdapter(BasePlatformAdapter):
                 task.cancel()
         self._pending_photo_batch_tasks.clear()
         self._pending_photo_batches.clear()
+
+        # Text-batch flush tasks sleep up to _text_batch_split_delay_seconds and
+        # then call handle_message(); if left running they fire into a torn-down
+        # adapter (_app/_bot set to None below). Cancel like the photo batches.
+        for task in self._pending_text_batch_tasks.values():
+            if task and not task.done():
+                task.cancel()
+        self._pending_text_batch_tasks.clear()
+        self._pending_text_batches.clear()
+
+        # The polling reconnect/conflict task sleeps up to ~60s and then calls
+        # self._app.updater.start_polling / _drain_polling_connections on wake.
+        # If disconnect() ran during that sleep it would dereference a None
+        # _app. Cancel it here (the start_polling sites are also None-guarded).
+        if self._polling_error_task and not self._polling_error_task.done():
+            self._polling_error_task.cancel()
+            try:
+                await self._polling_error_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._polling_error_task = None
 
         self._mark_disconnected()
         self._app = None
@@ -3086,17 +3117,23 @@ class TelegramAdapter(BasePlatformAdapter):
             shown = len(models)
             extra = f"\n_{total - shown} more available — type `/model <name>` directly_" if total > shown else ""
 
-            await query.edit_message_text(
-                text=self.format_message(
-                    (
-                        f"⚙ *Model Configuration*\n\n"
-                        f"Provider: *{pname}*{page_info}\n"
-                        f"Select a model:{extra}"
-                    )
-                ),
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=keyboard,
-            )
+            try:
+                await query.edit_message_text(
+                    text=self.format_message(
+                        (
+                            f"⚙ *Model Configuration*\n\n"
+                            f"Provider: *{pname}*{page_info}\n"
+                            f"Select a model:{extra}"
+                        )
+                    ),
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                # Benign on re-tap (BadRequest "Message is not modified") and
+                # transient parse/network errors — must not block the
+                # answerCallbackQuery below, else the button spinner sticks.
+                pass
             await query.answer()
 
         elif data.startswith("mg:"):
@@ -3122,17 +3159,23 @@ class TelegramAdapter(BasePlatformAdapter):
             shown = len(models)
             extra = f"\n_{total - shown} more available — type `/model <name>` directly_" if total > shown else ""
 
-            await query.edit_message_text(
-                text=self.format_message(
-                    (
-                        f"⚙ *Model Configuration*\n\n"
-                        f"Provider: *{pname}*{page_info}\n"
-                        f"Select a model:{extra}"
-                    )
-                ),
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=keyboard,
-            )
+            try:
+                await query.edit_message_text(
+                    text=self.format_message(
+                        (
+                            f"⚙ *Model Configuration*\n\n"
+                            f"Provider: *{pname}*{page_info}\n"
+                            f"Select a model:{extra}"
+                        )
+                    ),
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                # Benign on re-tap (BadRequest "Message is not modified") and
+                # transient parse/network errors — must not block the
+                # answerCallbackQuery below, else the button spinner sticks.
+                pass
             await query.answer()
 
         elif data.startswith("mm:"):
@@ -3215,17 +3258,20 @@ class TelegramAdapter(BasePlatformAdapter):
             ])
             keyboard = InlineKeyboardMarkup(rows)
 
-            await query.edit_message_text(
-                text=self.format_message(
-                    (
-                        f"⚙ *Model Configuration*\n\n"
-                        f"Provider family: *{_label or group_id}*\n\n"
-                        f"Select a provider:"
-                    )
-                ),
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=keyboard,
-            )
+            try:
+                await query.edit_message_text(
+                    text=self.format_message(
+                        (
+                            f"⚙ *Model Configuration*\n\n"
+                            f"Provider family: *{_label or group_id}*\n\n"
+                            f"Select a provider:"
+                        )
+                    ),
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                pass
             await query.answer()
 
         elif data == "mb":
@@ -3237,27 +3283,33 @@ class TelegramAdapter(BasePlatformAdapter):
             except Exception:
                 provider_label = state["current_provider"]
 
-            await query.edit_message_text(
-                text=self.format_message(
-                    (
-                        f"⚙ *Model Configuration*\n\n"
-                        f"Current model: `{state['current_model'] or 'unknown'}`\n"
-                        f"Provider: {provider_label}\n\n"
-                        f"Select a provider:"
-                    )
-                ),
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=keyboard,
-            )
+            try:
+                await query.edit_message_text(
+                    text=self.format_message(
+                        (
+                            f"⚙ *Model Configuration*\n\n"
+                            f"Current model: `{state['current_model'] or 'unknown'}`\n"
+                            f"Provider: {provider_label}\n\n"
+                            f"Select a provider:"
+                        )
+                    ),
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                pass
             await query.answer()
 
         elif data == "mx":
             # --- Cancel ---
             self._model_picker_state.pop(chat_id, None)
-            await query.edit_message_text(
-                text="Model selection cancelled.",
-                reply_markup=None,
-            )
+            try:
+                await query.edit_message_text(
+                    text="Model selection cancelled.",
+                    reply_markup=None,
+                )
+            except Exception:
+                pass
             await query.answer()
 
         else:
@@ -3265,6 +3317,30 @@ class TelegramAdapter(BasePlatformAdapter):
             await query.answer()
 
     async def _handle_callback_query(
+        self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"
+    ) -> None:
+        """Guard wrapper around the callback handler.
+
+        Any unhandled exception in the handler body would otherwise leave
+        Telegram's button spinner spinning forever — PTB only logs the error
+        and never sends answerCallbackQuery, so the user is stuck. Best-effort
+        answer() on failure so the spinner always clears.
+        """
+        query = getattr(update, "callback_query", None)
+        try:
+            await self._handle_callback_query_impl(update, context)
+        except Exception:
+            logger.exception(
+                "[%s] callback query handler failed (data=%r)",
+                self.name, getattr(query, "data", None),
+            )
+            if query is not None:
+                try:
+                    await query.answer()
+                except Exception:
+                    pass
+
+    async def _handle_callback_query_impl(
         self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"
     ) -> None:
         """Handle inline keyboard button clicks."""
@@ -5739,6 +5815,7 @@ class TelegramAdapter(BasePlatformAdapter):
         )
 
     async def _flush_media_group_event(self, media_group_id: str) -> None:
+        current_task = asyncio.current_task()
         try:
             await asyncio.sleep(self.MEDIA_GROUP_WAIT_SECONDS)
             event = self._media_group_events.pop(media_group_id, None)
@@ -5747,7 +5824,14 @@ class TelegramAdapter(BasePlatformAdapter):
         except asyncio.CancelledError:
             return
         finally:
-            self._media_group_tasks.pop(media_group_id, None)
+            # Only pop if WE are still the registered task. cancel() is async:
+            # when a new burst item replaces this task (see
+            # _queue_media_group_event), the cancelled task's finally runs
+            # AFTER the dict entry was overwritten, so an unconditional pop
+            # would evict the replacement (orphaning it + dropping debounce).
+            # Mirrors the text/photo flush guards.
+            if self._media_group_tasks.get(media_group_id) is current_task:
+                self._media_group_tasks.pop(media_group_id, None)
 
     async def _handle_sticker(self, msg: Message, event: "MessageEvent") -> None:
         """

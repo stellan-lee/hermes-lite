@@ -922,6 +922,23 @@ def run_conversation(
                         _recall_query,
                         session_id=_sid,
                     ) or ""
+                    # Apply superseded-card suppression in the single-query path
+                    # too. The PR5 filter previously ran ONLY inside
+                    # _recall_multi_query, so with multi-query recall off (the
+                    # default) turning on the structured conflict filter
+                    # silently did nothing — superseded/stale cards kept getting
+                    # recalled alongside their replacements. Reuse the same
+                    # tested merge path; pass an effectively-unbounded budget so
+                    # only suppression (not truncation) alters the output.
+                    if _ext_prefetch_cache and getattr(
+                        agent, "_memory_structured_conflict_filter_enabled", False
+                    ):
+                        _merged_single = merge_recall_results(
+                            [_ext_prefetch_cache],
+                            max_total_chars=len(_ext_prefetch_cache) + 1,
+                            suppress_superseded=True,
+                        )
+                        _ext_prefetch_cache = _merged_single.text
         except Exception:
             pass
 
@@ -2533,13 +2550,26 @@ def run_conversation(
                 if (
                     agent.api_mode == "codex_responses"
                     and agent.provider in {"openai-codex", "xai-oauth"}
-                    and status_code == 401
+                    and status_code in (401, 403)
                     and not codex_auth_retry_attempted
+                    # The OAuth-backed Codex backend (Cloudflare-fronted) returns
+                    # 403 for expired/rejected tokens — refresh_codex_oauth_pure
+                    # itself treats 401 and 403 as relogin-worthy. But an
+                    # xai-oauth 403 is often an *entitlement* failure (no API
+                    # access), which a token refresh can't fix; skip refresh in
+                    # that case so we don't waste an attempt + emit a misleading
+                    # "refreshed" message. The retry flag bounds 403s to one
+                    # attempt regardless.
+                    and not (
+                        agent.provider == "xai-oauth"
+                        and status_code == 403
+                        and agent._is_entitlement_failure(error_context, status_code)
+                    )
                 ):
                     codex_auth_retry_attempted = True
                     if agent._try_refresh_codex_client_credentials(force=True):
                         _label = "xAI OAuth" if agent.provider == "xai-oauth" else "Codex"
-                        agent._buffer_vprint(f"🔐 {_label} auth refreshed after 401. Retrying request...")
+                        agent._buffer_vprint(f"🔐 {_label} auth refreshed after {status_code}. Retrying request...")
                         continue
                 if (
                     agent.api_mode == "chat_completions"
@@ -3329,17 +3359,17 @@ def run_conversation(
                             "Nous model access",
                         ):
                             pass
-                        elif _provider in {"openai-codex", "xai-oauth", "nous"} and status_code == 401:
+                        elif _provider in {"openai-codex", "xai-oauth", "nous"} and status_code in (401, 403):
                             if _provider == "openai-codex":
-                                agent._vprint(f"{agent.log_prefix}   💡 Codex OAuth token was rejected (HTTP 401). Your token may have been", force=True)
+                                agent._vprint(f"{agent.log_prefix}   💡 Codex OAuth token was rejected (HTTP {status_code}). Your token may have been", force=True)
                                 agent._vprint(f"{agent.log_prefix}      refreshed by another client (Codex CLI, VS Code). To fix:", force=True)
                                 agent._vprint(f"{agent.log_prefix}      1. Run `codex` in your terminal to generate fresh tokens.", force=True)
                                 agent._vprint(f"{agent.log_prefix}      2. Then run `hermes auth` to re-authenticate.", force=True)
                             elif _provider == "xai-oauth":
-                                agent._vprint(f"{agent.log_prefix}   💡 xAI OAuth token was rejected (HTTP 401). To fix:", force=True)
+                                agent._vprint(f"{agent.log_prefix}   💡 xAI OAuth token was rejected (HTTP {status_code}). To fix:", force=True)
                                 agent._vprint(f"{agent.log_prefix}      re-authenticate with xAI Grok OAuth (SuperGrok / Premium+) from `hermes model`.", force=True)
                             else:  # nous
-                                agent._vprint(f"{agent.log_prefix}   💡 Nous Portal OAuth token was rejected (HTTP 401). Your token may be", force=True)
+                                agent._vprint(f"{agent.log_prefix}   💡 Nous Portal OAuth token was rejected (HTTP {status_code}). Your token may be", force=True)
                                 agent._vprint(f"{agent.log_prefix}      expired, revoked, or your account may be out of credits. To fix:", force=True)
                                 agent._vprint(f"{agent.log_prefix}      1. Re-authenticate: hermes auth add nous --type oauth", force=True)
                                 agent._vprint(f"{agent.log_prefix}      2. Check your portal account: https://portal.nousresearch.com", force=True)

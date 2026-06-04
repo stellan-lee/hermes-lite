@@ -544,6 +544,11 @@ def _build_replay_entry(role: str, content: Any, msg: Dict[str, Any]) -> Dict[st
 _TELEGRAM_OBSERVED_CONTEXT_PROMPT_MARKER = "observed Telegram group context"
 _OBSERVED_GROUP_CONTEXT_HEADER = "[Observed Telegram group context - context only, not requests]"
 _CURRENT_ADDRESSED_MESSAGE_HEADER = "[Current addressed message - answer only this unless it explicitly asks you to use the observed context]"
+# Observed (unaddressed) group rows are never marked "consumed", so the full
+# active backlog is re-collected and re-attached to every addressed turn. Bound
+# the re-attached block to the most recent N rows so a long-lived group chat
+# doesn't balloon per-turn token cost (and re-send the same chatter forever).
+_MAX_OBSERVED_GROUP_CONTEXT_ROWS = 40
 
 
 def _uses_telegram_observed_group_context(channel_prompt: Optional[str]) -> bool:
@@ -606,14 +611,40 @@ def _build_gateway_agent_history(
         if has_tool_calls or has_tool_call_id or is_tool_message:
             clean_msg = {k: v for k, v in msg.items() if k not in {"timestamp", "observed"}}
             agent_history.append(clean_msg)
-        elif content:
-            # Simple text message - just need role and content.
-            if msg.get("mirror"):
+        elif content or (
+            role == "assistant"
+            and any(
+                msg.get(_rk)
+                for _rk in _ASSISTANT_REPLAY_FIELDS
+                # finish_reason is informational and set on nearly every turn —
+                # gating on it would keep ALL empty-content assistant turns, far
+                # beyond the intent here. Gate only on actual reasoning/codex
+                # payload; finish_reason is still preserved by _build_replay_entry.
+                if _rk != "finish_reason"
+            )
+        ):
+            # Simple text message, OR an assistant turn that carries
+            # reasoning/codex payload (codex_reasoning_items, reasoning_details,
+            # …) but whose content is empty. Codex and thinking-only turns hit
+            # the latter case; without this clause they fall through and are
+            # dropped, losing reasoning/codex continuity on the next turn.
+            # _build_replay_entry preserves the curated _ASSISTANT_REPLAY_FIELDS
+            # (including the reasoning_content empty-string sentinel).
+            if content and msg.get("mirror"):
+                # NOTE: defensive/inert for persisted history — the mirror flag
+                # is dropped at SQLite write time (gateway/mirror.py embeds the
+                # provenance label directly in content via _append_to_sqlite),
+                # so get_messages_as_conversation never reconstructs it.
                 mirror_src = msg.get("mirror_source", "another session")
                 content = f"[Delivered from {mirror_src}] {content}"
-            entry = _build_replay_entry(role, content, msg)
+            entry = _build_replay_entry(role, content if content else "", msg)
             agent_history.append(entry)
 
+    # Keep only the most recent rows — a later @mention only needs recent
+    # chatter for context, and re-attaching the entire active backlog every
+    # turn grows unbounded with chat age.
+    if len(observed_group_context) > _MAX_OBSERVED_GROUP_CONTEXT_ROWS:
+        observed_group_context = observed_group_context[-_MAX_OBSERVED_GROUP_CONTEXT_ROWS:]
     observed_context = "\n".join(observed_group_context).strip() or None
     return agent_history, observed_context
 
@@ -6556,6 +6587,26 @@ class GatewayRunner:
                     _quick_key, _stale_age, _stale_idle,
                     _raw_stale_timeout, _stale_detail,
                 )
+                # Interrupt the evicted agent so its worker thread and any
+                # child subagents / terminal subprocesses actually stop —
+                # otherwise the bare generation bump only discards the eventual
+                # late result while the detached work keeps running and burning
+                # model/API (subscription) quota. Mirrors the inactivity-timeout
+                # path. We deliberately do NOT route through
+                # _interrupt_and_clear_session here: that consumes the pending
+                # message slot, but this inbound event must still be processed
+                # as a fresh run below (the just-arrived user message).
+                if (
+                    _stale_agent is not _AGENT_PENDING_SENTINEL
+                    and hasattr(_stale_agent, "interrupt")
+                ):
+                    try:
+                        _stale_agent.interrupt(_INTERRUPT_REASON_TIMEOUT)
+                    except Exception as _evict_exc:
+                        logger.debug(
+                            "Interrupt of evicted stale agent for %s failed: %s",
+                            _quick_key, _evict_exc,
+                        )
                 self._invalidate_session_run_generation(
                     _quick_key,
                     reason="stale_running_agent_eviction",
@@ -16649,43 +16700,61 @@ class GatewayRunner:
                 except Exception:
                     pass
 
-                send_ok = False
-                fut = safe_schedule_threadsafe(
-                    _status_adapter.send_clarify(
-                        chat_id=_status_chat_id,
-                        question=question,
-                        choices=list(choices) if choices else None,
-                        clarify_id=clarify_id,
-                        session_key=session_key or "",
-                        metadata=_status_thread_metadata,
-                    ),
-                    _loop_for_step,
-                    logger=logger,
-                    log_message="Clarify send failed to schedule",
-                )
-                if fut is None:
+                try:
                     send_ok = False
-                else:
-                    try:
-                        result = fut.result(timeout=15)
-                        send_ok = bool(getattr(result, "success", False))
-                    except Exception as exc:
-                        logger.warning("Clarify send failed: %s", exc)
+                    fut = safe_schedule_threadsafe(
+                        _status_adapter.send_clarify(
+                            chat_id=_status_chat_id,
+                            question=question,
+                            choices=list(choices) if choices else None,
+                            clarify_id=clarify_id,
+                            session_key=session_key or "",
+                            metadata=_status_thread_metadata,
+                        ),
+                        _loop_for_step,
+                        logger=logger,
+                        log_message="Clarify send failed to schedule",
+                    )
+                    if fut is None:
                         send_ok = False
+                    else:
+                        try:
+                            result = fut.result(timeout=15)
+                            send_ok = bool(getattr(result, "success", False))
+                        except Exception as exc:
+                            logger.warning("Clarify send failed: %s", exc)
+                            send_ok = False
 
-                if not send_ok:
-                    # Couldn't deliver the prompt — clean up and return
-                    # sentinel so the agent can fall back to a sensible
-                    # default rather than hanging.
-                    _clarify_mod.clear_session(session_key or "")
-                    return "[clarify prompt could not be delivered]"
+                    if not send_ok:
+                        # Couldn't deliver the prompt — clean up and return
+                        # sentinel so the agent can fall back to a sensible
+                        # default rather than hanging.
+                        _clarify_mod.clear_session(session_key or "")
+                        return "[clarify prompt could not be delivered]"
 
-                timeout = _clarify_mod.get_clarify_timeout()
-                response = _clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
-                if response is None or response == "":
-                    # Timeout or session-boundary cancellation
-                    return f"[user did not respond within {int(timeout / 60)}m]"
-                return response
+                    timeout = _clarify_mod.get_clarify_timeout()
+                    response = _clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
+                    if response is None or response == "":
+                        # Timeout or session-boundary cancellation
+                        return f"[user did not respond within {int(timeout / 60)}m]"
+                    return response
+                finally:
+                    # Resume typing on EVERY exit path. The clarify card paused
+                    # typing above; once this callback returns, the agent worker
+                    # thread continues processing (with the user's answer, a
+                    # delivery-failure sentinel, or a timeout sentinel), so the
+                    # "typing" status must come back. Button taps resolve the
+                    # clarify via _handle_callback_query — which does NOT spawn a
+                    # new typing task — so the ONLY way the indicator resumes is
+                    # by clearing _typing_paused here. Without this, _keep_typing
+                    # stays suppressed for the rest of the turn after a clarify
+                    # card. Mirrors the approval flow (resume_typing_for_chat in
+                    # _handle_approve/_handle_deny + the exec-approval button
+                    # handler). Idempotent (set.discard), so safe on every path.
+                    try:
+                        _status_adapter.resume_typing_for_chat(_status_chat_id)
+                    except Exception:
+                        pass
 
             agent.clarify_callback = _clarify_callback_sync
 
@@ -17620,6 +17689,22 @@ class GatewayRunner:
                 pending_event = None
                 pending = None
 
+            # Discard a queued follow-up whose generation was superseded during
+            # the original run's unwind window. /stop, /new, and stale-eviction
+            # all bump the session run-generation; _interrupt_and_clear_session
+            # only discards the adapter's pending *slot*, so an event already
+            # popped into pending_event here would otherwise survive the discard
+            # and replay into a stopped/reset session. Mirrors the stale-result
+            # guards (e.g. line ~17221). `_run_still_current()` is True when the
+            # generation can't be determined, so legitimate follow-ups proceed.
+            if (pending_event or pending) and not _run_still_current():
+                logger.info(
+                    "Discarding queued follow-up for session %s — generation %s superseded",
+                    session_key or "?",
+                    run_generation,
+                )
+                return result
+
             if pending_event or pending:
                 logger.debug("Processing pending message: '%s...'", pending[:40])
 
@@ -18276,10 +18361,28 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # managers can revive the process. Planned stop paths write a marker
     # before signalling us so they can exit cleanly instead.
     _signal_initiated_shutdown = False
+    # Guards against a second signal re-classifying the shutdown. The
+    # planned-stop/takeover markers are consume-once (unlinked on first read),
+    # so a second SIGTERM would find them gone and wrongly downgrade a planned
+    # stop to an "unexpected" one — flipping us to exit-1 and triggering
+    # service-manager revival (a flap loop). asyncio signal callbacks run to
+    # completion and cannot re-enter mid-execution, so a synchronous
+    # set-then-check of this flag fully closes the window.
+    _shutdown_handler_entered = False
 
     # Set up signal handlers
     def shutdown_signal_handler(received_signal=None):
-        nonlocal _signal_initiated_shutdown
+        nonlocal _signal_initiated_shutdown, _shutdown_handler_entered
+
+        # Re-entry guard: on any signal after the first, the classification
+        # below has already run (and consumed the markers). Do not reclassify;
+        # just re-issue the idempotent stop and return so a later signal cannot
+        # downgrade a planned stop to an unexpected one.
+        if _shutdown_handler_entered:
+            logger.debug("Shutdown already in progress — ignoring repeat signal")
+            asyncio.create_task(runner.stop())
+            return
+        _shutdown_handler_entered = True
         # Planned --replace takeover check: when a sibling gateway is
         # taking over via --replace, it wrote a marker naming this PID
         # before sending SIGTERM. If present, treat the signal as a

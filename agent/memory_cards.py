@@ -290,13 +290,20 @@ _STRONG_MARKERS_EN = re.compile(
 )
 _STRONG_MARKERS_ZH = ("必须", "决定", "最终", "不能")
 
-# A ``logistics_plan`` requires at least one CONCRETE anchor in the sentence,
-# beyond the trigger word itself (durability rule): a clock time, duration,
-# date, price/amount, flight/booking reference, an explicit backup, or a
-# route. Sentences that only name a travel word with no anchor ("maybe take
-# the airport bus") are vague chatter and are NOT captured. The flight/train
-# number alternative is kept case-sensitive (``(?-i:...)``) so generic
-# "<word> <number>" pairs do not masquerade as anchors.
+# A ``logistics_plan`` requires at least one CONCRETE, travel-specific anchor in
+# the sentence, beyond the trigger word itself (durability rule): a clock time,
+# date, price/amount, flight/booking reference, or an explicit backup.
+# Sentences that only name a travel word with no anchor ("maybe take the airport
+# bus") are vague chatter and are NOT captured.
+#
+# Deliberately EXCLUDED (too weak — they fire on ordinary engineering prose that
+# uses travel-homonym trigger words like "flight"/"booking"/"shuttle"/"fare"):
+#   * a bare weekday ("...deploys on Mon")
+#   * a generic duration ("...every 30 minutes")
+#   * a bare "via"/"route"/"en route" ("...routes via the sidecar")
+# The flight/train number alternative is case-sensitive (``(?-i:...)``) AND
+# restricted to a 2-letter IATA-style prefix so 3-letter software acronym+digit
+# tokens (API200, ABC123) no longer masquerade as flight numbers.
 _LOGISTICS_ANCHOR_RE = re.compile(
     r"""
       \d{1,2}:\d{2}                                     # clock time 23:30 / 09:00
@@ -304,15 +311,12 @@ _LOGISTICS_ANCHOR_RE = re.compile(
     | \b\d{1,2}h\d{2}\b                                  # 1h09 (time/duration)
     | \b\d+(?:\.\d+)?\s*(?:rmb|cny|usd|eur|gbp|jpy|yuan|dollars?|euros?|pounds?|bucks?)\b
     | [¥$€£]\s*\d                                        # ¥35 / $40
-    | \b\d+(?:\.\d+)?\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b
     | \b\d{1,2}\s*[/-]\s*\d{1,2}\b                       # date 6/12 or 6-12
     | \b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}\b
     | \b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b
-    | \b(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b
     | \b(?:today|tonight|tomorrow|tmr|overnight|next\s+(?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b
-    | \b(?-i:[A-Z]{1,3})\s?\d{2,4}\b                     # flight/train no. CA123, MU5100
+    | \b(?-i:[A-Z]{2})\s?\d{2,4}\b                       # flight/train no. CA123, MU5100 (2-letter IATA-style)
     | \b(?:backup|back-up|fallback|standby|plan\s+b|alternative)\b
-    | \b(?:via|route|en\s+route)\b
     | \b(?:confirmation|reservation|booking)\s+(?:no\.?|number|code|ref)\b
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -865,3 +869,81 @@ def filter_superseded_card_text(text: str, superseded_ids: set[str]) -> tuple[st
     except Exception:
         return text, 0
     return new_text, removed
+
+
+def dedupe_cards_in_text(text: str, seen_ids: set[str]) -> tuple[str, int]:
+    """Drop structured-card chunks whose non-empty ``card_id`` is already in
+    ``seen_ids`` (keeping the first occurrence), mutating ``seen_ids`` with
+    newly-seen ids.
+
+    Used to dedupe at the CARD level across merged multi-query recall: section
+    dedupe only collapses byte-identical blocks, so a card returned by two
+    subqueries in non-identical blocks (e.g. ``[X]`` and ``[X, Y]``) would
+    otherwise be injected twice. Cards with an empty card_id are never deduped
+    (each is kept). Non-structured text is untouched; a block emptied of cards
+    is removed. Returns ``(new_text, removed_count)``. Fail-open.
+    """
+    if not text or "<structured-memory-cards" not in text:
+        return text, 0
+    removed = 0
+
+    def _repl(match: "re.Match[str]") -> str:
+        nonlocal removed
+        open_tag, body, close_tag = match.group(1), match.group(2), match.group(3)
+        kept: list[list[str]] = []
+        for chunk in _iter_card_chunks(body):
+            cid = _chunk_card_id(chunk)
+            if cid:
+                if cid in seen_ids:
+                    removed += 1
+                    continue
+                seen_ids.add(cid)
+            kept.append(chunk)
+        if not kept:
+            return ""
+        inner = "\n".join("\n".join(chunk) for chunk in kept)
+        return open_tag + "\n" + inner + "\n" + close_tag
+
+    try:
+        new_text = _CARDS_BLOCK_FULL_RE.sub(_repl, text)
+    except Exception:
+        return text, 0
+    return new_text, removed
+
+
+def clip_cards_block_to_budget(section: str, max_chars: int) -> str:
+    """Clip a section containing a structured-card block to fit ``max_chars``
+    while keeping WHOLE cards and a valid closing tag.
+
+    A raw character clip of a card block produces an open
+    ``<structured-memory-cards>`` tag with no close and a half-card body, which
+    the model sees as malformed and which fails to re-parse if re-stored.
+    Returns the largest valid block (header + whole cards + footer) that fits,
+    or ``""`` if not even one card fits — in which case the caller should drop
+    the block rather than emit an unclosed one. Fail-open returns ``""``.
+    """
+    try:
+        m = _CARDS_BLOCK_FULL_RE.search(section)
+        if not m:
+            return ""
+        open_tag, body, close_tag = m.group(1), m.group(2), m.group(3)
+        chunks = _iter_card_chunks(body)
+        if not chunks:
+            return ""
+        # Fixed overhead: open_tag + "\n" + <inner> + "\n" + close_tag.
+        fixed = len(open_tag) + 1 + 1 + len(close_tag)
+        kept: list[list[str]] = []
+        running = 0
+        for chunk in chunks:
+            chunk_text = "\n".join(chunk)
+            add = len(chunk_text) + (1 if kept else 0)  # "\n" between cards
+            if fixed + running + add > max_chars:
+                break
+            kept.append(chunk)
+            running += add
+        if not kept:
+            return ""
+        inner = "\n".join("\n".join(c) for c in kept)
+        return open_tag + "\n" + inner + "\n" + close_tag
+    except Exception:
+        return ""

@@ -313,6 +313,32 @@ def test_observed_group_context_replays_normally_without_telegram_prompt():
     assert agent_history == [{"role": "user", "content": "[Alice|111]\nside chatter"}]
 
 
+def test_empty_content_assistant_with_codex_payload_is_replayed():
+    """Regression: an assistant turn with empty content but codex/reasoning
+    payload must survive replay (Codex/thinking continuity). A turn with ONLY
+    finish_reason (no reasoning/codex) is still dropped — finish_reason must not
+    widen the gate to all empty assistant turns."""
+    from gateway.run import _build_gateway_agent_history
+
+    codex_items = [{"type": "reasoning", "id": "rs_1"}]
+    history = [
+        {"role": "user", "content": "hi"},
+        # Empty content but carries codex reasoning → must be kept.
+        {"role": "assistant", "content": "", "codex_reasoning_items": codex_items},
+        {"role": "user", "content": "next"},
+        # Empty content with ONLY finish_reason → must be dropped.
+        {"role": "assistant", "content": "", "finish_reason": "stop"},
+    ]
+
+    agent_history, _ = _build_gateway_agent_history(history, channel_prompt=None)
+
+    roles = [(m["role"], m.get("content", "")) for m in agent_history]
+    assert roles == [("user", "hi"), ("assistant", ""), ("user", "next")]
+    # The kept assistant turn preserves its codex payload.
+    kept = agent_history[1]
+    assert kept["codex_reasoning_items"] == codex_items
+
+
 def test_observed_group_context_preserves_slash_command_text_for_dispatch():
     from gateway.platforms.base import MessageEvent, MessageType, Platform, SessionSource
 

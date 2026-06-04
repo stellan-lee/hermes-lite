@@ -2829,6 +2829,13 @@ def _pool_codex_access_token() -> str:
             reset_at = entry.get("last_error_reset_at")
             if isinstance(reset_at, (int, float)) and reset_at > time.time():
                 return False
+            # Skip expired/expiring tokens — the fallback returns the token
+            # as-is without refreshing, so handing back a doomed token just
+            # forces a wire 401/403 before any recovery. Opaque (non-JWT)
+            # tokens decode to no claims and are treated as not-expiring, so
+            # they are never wrongly dropped.
+            if _codex_access_token_is_expiring(token, CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS):
+                return False
             return True
 
         for entry in entries:

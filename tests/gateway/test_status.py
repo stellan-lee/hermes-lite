@@ -688,10 +688,12 @@ class TestTakeoverMarker:
         result = status.consume_takeover_marker_for_self()
 
         assert result is False
-        # Marker IS unlinked even on non-match (the record has been consumed
-        # and isn't relevant to us — leaving it around would grief a later
-        # legitimate check).
-        assert not (tmp_path / ".gateway-takeover.json").exists()
+        # A foreign marker (names a DIFFERENT live PID) must SURVIVE the
+        # consume — the process it actually names still needs to consume it.
+        # Destroying it here makes that process exit as "unexpected" (exit 1)
+        # and get revived. TTL staleness + the namer's clear-on-exit bound any
+        # leak. Mirrors the non-destructive probe planned_stop_marker_targets_self().
+        assert (tmp_path / ".gateway-takeover.json").exists()
 
     def test_consume_returns_false_on_start_time_mismatch(self, tmp_path, monkeypatch):
         """PID reuse defence: old marker's start_time mismatches current process."""
@@ -880,7 +882,10 @@ class TestPlannedStopMarker:
         result = status.consume_planned_stop_marker_for_self()
 
         assert result is False
-        assert not (tmp_path / ".gateway-planned-stop.json").exists()
+        # Foreign marker (different live PID) must survive — non-destructive,
+        # so the process it names can still consume it. See the takeover
+        # test above for the rationale.
+        assert (tmp_path / ".gateway-planned-stop.json").exists()
 
     def test_consume_returns_false_for_stale_marker(self, tmp_path, monkeypatch):
         from datetime import datetime, timezone, timedelta

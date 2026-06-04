@@ -31,10 +31,10 @@ def mirror_to_session(
     user_id: Optional[str] = None,
 ) -> bool:
     """
-    Append a delivery-mirror message to the target session's transcript.
+    Append a delivery-mirror message to the target session's SQLite transcript.
 
     Finds the gateway session that matches the given platform + chat_id,
-    then writes a mirror entry to both the JSONL transcript and SQLite DB.
+    then writes a mirror entry to the session's SQLite database.
 
     Returns True if mirrored successfully, False if no matching session or error.
     All errors are caught -- this is never fatal.
@@ -56,9 +56,19 @@ def mirror_to_session(
             )
             return False
 
+        # Embed provenance directly in the stored content. The transcript
+        # schema has no mirror column, so the mirror/mirror_source flags are
+        # dropped at write time (see _append_to_sqlite) — meaning the gateway's
+        # replay relabel keyed on msg["mirror"] can NEVER fire for persisted
+        # history. Without the inline label, a message delivered FROM another
+        # session/platform replays as this agent's own assistant turn, and the
+        # model treats someone else's message as something it said. Baking the
+        # label into content survives every round-trip (replace_messages,
+        # compaction, recall), unlike the dropped flags.
+        mirrored_content = f"[Delivered from {source_label}] {message_text}"
         mirror_msg = {
             "role": "assistant",
-            "content": message_text,
+            "content": mirrored_content,
             "timestamp": datetime.now().isoformat(),
             "mirror": True,
             "mirror_source": source_label,

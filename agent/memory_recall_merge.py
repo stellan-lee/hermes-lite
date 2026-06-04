@@ -40,6 +40,9 @@ class MergedRecall:
     # PR5 supersession-filter metadata (0 unless suppress_superseded=True).
     parsed_card_count: int = 0
     suppressed_card_count: int = 0
+    # Card-level dedupe metadata: cards dropped because the same card_id was
+    # already emitted by an earlier (sub)query result.
+    deduped_card_count: int = 0
 
 
 def _collect_superseded_ids(results: list[str]) -> tuple[set[str], int]:
@@ -117,6 +120,29 @@ def merge_recall_results(
             parsed_card_count = 0
             suppressed_card_count = 0
 
+    # Card-level dedupe across results (keep first occurrence of each card_id).
+    # Runs BEFORE budget accounting so duplicate cards don't consume
+    # max_total_chars and crowd out distinct content. Section dedupe below only
+    # collapses byte-identical blocks, which misses cards repeated across
+    # non-identical blocks from different subqueries.
+    deduped_card_count = 0
+    if results:
+        try:
+            from agent.memory_cards import dedupe_cards_in_text
+
+            seen_card_ids: set[str] = set()
+            deduped: list[str] = []
+            for r in results:
+                if isinstance(r, str):
+                    new_r, dropped = dedupe_cards_in_text(r, seen_card_ids)
+                    deduped_card_count += dropped
+                    deduped.append(new_r)
+                else:
+                    deduped.append(r)
+            results = deduped
+        except Exception:
+            deduped_card_count = 0
+
     raw_chars = sum(len(r) for r in results if isinstance(r, str))
 
     input_sections = 0
@@ -140,8 +166,18 @@ def merge_recall_results(
             if projected > max_total_chars:
                 if not out_sections:
                     # First section alone exceeds the budget: keep a readable
-                    # prefix rather than dropping recall entirely.
-                    clipped = section[:max_total_chars].rstrip()
+                    # prefix rather than dropping recall entirely. A structured-
+                    # card block must NOT be raw-clipped (that yields an
+                    # unclosed <structured-memory-cards> tag and a half-card
+                    # that the model mis-reads and that fails to re-parse);
+                    # clip it at a whole-card boundary with a valid close tag,
+                    # or drop it if not even one card fits.
+                    if "<structured-memory-cards" in section.lower():
+                        from agent.memory_cards import clip_cards_block_to_budget
+
+                        clipped = clip_cards_block_to_budget(section, max_total_chars)
+                    else:
+                        clipped = section[:max_total_chars].rstrip()
                     if clipped:
                         out_sections.append(clipped)
                         seen.add(key)
@@ -163,4 +199,5 @@ def merge_recall_results(
         removed_chars=max(0, raw_chars - final_chars),
         parsed_card_count=parsed_card_count,
         suppressed_card_count=suppressed_card_count,
+        deduped_card_count=deduped_card_count,
     )

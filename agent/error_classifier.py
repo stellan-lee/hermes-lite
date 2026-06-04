@@ -1087,6 +1087,28 @@ def _classify_by_error_code(
             should_fallback=False,
         )
 
+    if code_lower in {
+        "invalid_token",
+        "token_expired",
+        "token_revoked",
+        "unauthenticated",
+        "invalid_grant",
+        "authentication_error",
+        "unauthorized",
+    }:
+        # Auth failures can arrive as a structured SSE ``type=error`` frame
+        # (e.g. the OAuth-backed Codex backend) with NO HTTP status, so the
+        # status-code path never sees a 401/403. Classify by the code field so
+        # credential refresh/rotation engages instead of falling through to
+        # message-text heuristics. should_rotate_credential lets the pool auth
+        # branch fire and keeps the singleton refresh path reachable.
+        return result_fn(
+            FailoverReason.auth,
+            retryable=False,
+            should_rotate_credential=True,
+            should_fallback=True,
+        )
+
     return None
 
 
