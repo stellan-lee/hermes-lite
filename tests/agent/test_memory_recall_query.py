@@ -301,6 +301,58 @@ def test_todo_subquery_includes_structured_card_terms():
     assert "open question" in joined
 
 
+def test_logistics_intent_detected_english_and_chinese():
+    assert (
+        build_recall_query_plan("What is my Airport Bus plan?").intent
+        == "travel / logistics plan"
+    )
+    assert (
+        build_recall_query_plan("机场巴士怎么安排的？").intent
+        == "travel / logistics plan"
+    )
+    assert (
+        build_recall_query_plan("How am I getting to the airport?").intent
+        == "travel / logistics plan"
+    )
+    assert (
+        build_recall_query_plan("我的机场交通是什么？").intent
+        == "travel / logistics plan"
+    )
+
+
+def test_logistics_subquery_includes_structured_card_terms():
+    for query in (
+        "What is my Airport Bus plan?",
+        "what's in my itinerary?",
+        "show me my hotel booking",
+    ):
+        plan = build_recall_query_plan(query)
+        assert plan.intent == "travel / logistics plan"
+        joined = "\n".join(plan.subqueries)
+        assert "type: logistics_plan" in joined
+
+
+def test_logistics_intent_does_not_steal_decision_queries():
+    # "decide" still wins over travel words (decision rule is earlier).
+    plan = build_recall_query_plan("what did we decide about the flight?")
+    assert plan.intent == "previous decision / final agreed approach"
+
+
+def test_logistics_intent_does_not_steal_constraint_queries():
+    # A query naming a travel noun but really about a constraint keeps its
+    # constraint intent (travel rule is placed AFTER constraint).
+    assert (
+        build_recall_query_plan("what booking flow constraint did we set?").intent
+        == "constraint / requirement"
+    )
+    assert (
+        build_recall_query_plan(
+            "what requirement did we set for the hotel module?"
+        ).intent
+        == "constraint / requirement"
+    )
+
+
 def test_constraint_intent_detected_and_subquery_terms():
     # PR5: constraint queries previously got no intent (PR4 eval gap).
     plan = build_recall_query_plan("what logging constraint did we set?")

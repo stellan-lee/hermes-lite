@@ -75,14 +75,58 @@ _INTENT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("todo", "next", "status", "where were we", "open question"),
         ("下一步", "待办", "进度", "还剩", "卡在哪"),
     ),
-    # Placed last so it only catches queries no stronger intent matched
-    # (e.g. "we must decide" stays a decision). Addresses the PR4 eval gap
-    # where constraint recall queries got no intent at all.
+    # Placed near the end so it only catches queries no stronger intent
+    # matched (e.g. "we must decide" stays a decision). Addresses the PR4 eval
+    # gap where constraint recall queries got no intent at all.
     (
         "constraint / requirement",
         ("constraint", "requirement", "must not", "must", "cannot", "can't",
          "logging constraint", "restriction", "not allowed"),
         ("限制", "要求", "必须", "不能", "不要", "只能"),
+    ),
+    # Travel / logistics planning — placed LAST (after constraint/decision) so
+    # a query that names a travel noun but is really about a constraint or
+    # decision ("what booking flow constraint did we set?") keeps its stronger
+    # intent. This rule only catches queries no other intent claimed, so its
+    # broad travel needles cannot steal from earlier rules.
+    (
+        "travel / logistics plan",
+        (
+            "airport bus",
+            "airport transfer",
+            "airport shuttle",
+            "airport",
+            "getting to the airport",
+            "to the airport",
+            "flight",
+            "boarding",
+            "check-in",
+            "hotel",
+            "hostel",
+            "itinerary",
+            "booking",
+            "shuttle",
+            "layover",
+            "visa",
+            "esim",
+            "luggage",
+            "travel plan",
+            "trip plan",
+        ),
+        (
+            "机场巴士",
+            "机场大巴",
+            "机场交通",
+            "机场",
+            "航班",
+            "酒店",
+            "行程",
+            "打车",
+            "签证",
+            "行李",
+            "怎么去机场",
+            "预订",
+        ),
     ),
 )
 
@@ -110,6 +154,10 @@ _INTENT_SUBQUERY_SUFFIX: dict[str, str] = {
     ),
     "task status / open todo": (
         "task status todo open question next step type: todo"
+    ),
+    "travel / logistics plan": (
+        "travel plan logistics plan airport transfer itinerary trip booking "
+        "type: logistics_plan status: active"
     ),
     "constraint / requirement": (
         "constraint requirement restriction type: constraint status: active"

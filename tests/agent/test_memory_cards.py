@@ -162,6 +162,120 @@ def test_open_question_extraction():
 
 
 # ---------------------------------------------------------------------------
+# Logistics plan extraction (auto-captured, no explicit "remember")
+# ---------------------------------------------------------------------------
+
+
+def test_logistics_airport_bus_plan_english():
+    cards = extract_memory_cards(
+        "for my Tokyo trip the airport bus departs at 23:30, fare about 35 RMB, "
+        "duration around 1h09, backup taxi.",
+        "Got it.",
+    )
+    assert MemoryCardType.LOGISTICS_PLAN in _types(cards)
+    plan = next(c for c in cards if c.type == MemoryCardType.LOGISTICS_PLAN)
+    assert plan.status == MemoryCardStatus.ACTIVE
+    # Concrete details are preserved in the summary.
+    assert "23:30" in plan.summary
+    assert "35 RMB" in plan.summary
+
+
+def test_logistics_airport_bus_plan_chinese():
+    cards = extract_memory_cards(
+        "我的机场巴士计划是23:30出发，票价大概35元，备选打车。",
+        "好的。",
+    )
+    assert MemoryCardType.LOGISTICS_PLAN in _types(cards)
+
+
+def test_logistics_flight_and_hotel_booking():
+    cards = extract_memory_cards(
+        "I booked flight CA123 departing 09:00 and the Grand Hyatt hotel for "
+        "two nights.",
+        "Noted.",
+    )
+    assert MemoryCardType.LOGISTICS_PLAN in _types(cards)
+
+
+def test_logistics_airport_transfer_with_price_duration_backup():
+    cards = extract_memory_cards(
+        "Airport transfer is the express bus, fare 40 RMB, about 50 minutes, "
+        "with a taxi backup.",
+        "Understood.",
+    )
+    assert MemoryCardType.LOGISTICS_PLAN in _types(cards)
+
+
+def test_logistics_plan_can_come_from_assistant():
+    cards = extract_memory_cards(
+        "ok",
+        "Your airport shuttle departs at 06:15 and the fare is 30 RMB; backup "
+        "is a taxi.",
+    )
+    assert MemoryCardType.LOGISTICS_PLAN in _types(cards)
+
+
+def test_vague_travel_interest_does_not_extract_logistics():
+    cards = extract_memory_cards(
+        "I'd love to travel more someday and see the world.",
+        "That sounds lovely.",
+    )
+    assert MemoryCardType.LOGISTICS_PLAN not in _types(cards)
+
+
+def test_airport_bus_without_concrete_anchor_does_not_extract():
+    # Trigger word present but no time/price/date/route/backup anchor.
+    cards = extract_memory_cards(
+        "maybe I'll take the airport bus, seems okay.",
+        "Sure.",
+    )
+    assert MemoryCardType.LOGISTICS_PLAN not in _types(cards)
+
+
+def test_engineering_prose_with_incidental_anchor_is_not_logistics():
+    # Software vocabulary (route/transfer/train/cache) plus an incidental
+    # duration must NOT be mistaken for a travel plan. These previously
+    # mis-typed as logistics_plan when the needles were too broad.
+    samples = [
+        "we cache the route table for 5 minutes in the prefetch queue.",
+        "the transfer learning model trained for 30 minutes.",
+        "the train job ran for 2 hours overnight.",
+        "let me route this via the staging proxy.",
+    ]
+    for text in samples:
+        cards = extract_memory_cards("ok", text)
+        assert MemoryCardType.LOGISTICS_PLAN not in _types(cards), text
+
+
+def test_logistics_is_additive_existing_impl_classification_unchanged():
+    # The implementation_detail sentence still classifies as impl, not
+    # logistics (logistics is purely additive / last in the signal order).
+    cards = extract_memory_cards(
+        "how does recall work?",
+        "We implement the cache keyed by query and session in the prefetch "
+        "queue path.",
+    )
+    assert MemoryCardType.IMPLEMENTATION_DETAIL in _types(cards)
+    assert MemoryCardType.LOGISTICS_PLAN not in _types(cards)
+
+
+def test_logistics_plan_strips_memory_context_and_does_not_leak():
+    cards = extract_memory_cards(
+        "ok",
+        "Your airport bus departs 23:30. "
+        "<memory-context>secret recalled itinerary booked flight QF1 at 06:00"
+        "</memory-context>",
+    )
+    assert MemoryCardType.LOGISTICS_PLAN in _types(cards)
+    blob = " ".join(c.summary for c in cards) + " ".join(
+        " ".join(c.entities) for c in cards
+    )
+    assert "secret recalled" not in blob
+    assert "QF1" not in blob
+    assert "memory-context" not in blob
+
+
+# ---------------------------------------------------------------------------
 # Sanitization
 # ---------------------------------------------------------------------------
 
@@ -344,6 +458,15 @@ def test_format_includes_search_friendly_labels():
         [_sample_card(type=MemoryCardType.OPEN_QUESTION)]
     )
     assert "open question" in oq
+
+    logistics = format_memory_cards_for_sync(
+        [_sample_card(type=MemoryCardType.LOGISTICS_PLAN)]
+    )
+    assert "type: logistics_plan" in logistics
+    assert "logistics plan" in logistics
+    assert "travel plan" in logistics
+    assert "airport transfer" in logistics
+    assert "itinerary" in logistics
 
 
 def test_format_respects_max_chars():

@@ -48,6 +48,11 @@ class MemoryCardType:
     CONSTRAINT = "constraint"
     IMPLEMENTATION_DETAIL = "implementation_detail"
     OPEN_QUESTION = "open_question"
+    # Concrete personal logistics / planning facts (travel, airport transfers,
+    # flights, hotels, bookings, appointments, routes, times, prices, backup
+    # plans). Captured automatically — without an explicit "remember" — but
+    # only when the sentence carries a concrete anchor (see _has_logistics_anchor).
+    LOGISTICS_PLAN = "logistics_plan"
 
 
 class MemoryCardStatus:
@@ -101,7 +106,9 @@ class MemoryCard:
 #
 # Order matters: a sentence is classified as the FIRST matching type, so
 # stronger / more specific signals are listed before noisier generic ones
-# (implementation detail last — its keywords are the most common).
+# (implementation detail near the end — its keywords are the most common).
+# logistics_plan is intentionally LAST so it is purely additive: it only
+# captures sentences that no existing type matched (keeps PR1-PR5 unchanged).
 # English needles match on word boundaries (case-insensitive); Chinese
 # needles match as plain substrings (no word boundaries in Chinese).
 # ---------------------------------------------------------------------------
@@ -206,6 +213,74 @@ _SIGNALS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
         ("实现", "代码", "函数", "类", "文件", "bug", "修复", "接口", "缓存"),
     ),
+    (
+        # Logistics/planning facts — placed LAST so the type is purely
+        # additive: every existing signal (decision/constraint/.../impl) is
+        # matched first, so PR1-PR5 classification of any sentence is
+        # unchanged; logistics only captures sentences no other type claimed.
+        # Needles are deliberately travel-UNAMBIGUOUS — generic software words
+        # (route/transfer/train/duration/budget/terminal) are excluded because
+        # this memory system lives in a code repo where they are domain terms.
+        # A match here ALSO requires a concrete anchor (_has_logistics_anchor);
+        # a bare travel word with no time/price/date/backup is vague chatter.
+        MemoryCardType.LOGISTICS_PLAN,
+        (
+            "airport bus",
+            "airport shuttle",
+            "airport transfer",
+            "airport",
+            "shuttle",
+            "taxi",
+            "taxi backup",
+            "flight",
+            "boarding",
+            "depart",
+            "departure",
+            "arrival",
+            "check-in",
+            "checkin",
+            "hotel",
+            "hostel",
+            "booking",
+            "booked",
+            "reservation",
+            "itinerary",
+            "layover",
+            "visa",
+            "esim",
+            "luggage",
+            "baggage",
+            "fare",
+            "subway",
+            "plan is",
+            "schedule is",
+        ),
+        (
+            "机场巴士",
+            "机场大巴",
+            "机场交通",
+            "打车",
+            "备选打车",
+            "航班",
+            "酒店",
+            "预订",
+            "行程",
+            "出发",
+            "到达",
+            "入住",
+            "中转",
+            "路线",
+            "签证",
+            "行李",
+            "预算",
+            "费用",
+            "票价",
+            "时长",
+            "备选方案",
+            "安排",
+            "计划",
+        ),
+    ),
 )
 
 # Strong markers bump confidence to "high" when present in the sentence.
@@ -214,6 +289,52 @@ _STRONG_MARKERS_EN = re.compile(
     re.IGNORECASE,
 )
 _STRONG_MARKERS_ZH = ("必须", "决定", "最终", "不能")
+
+# A ``logistics_plan`` requires at least one CONCRETE anchor in the sentence,
+# beyond the trigger word itself (durability rule): a clock time, duration,
+# date, price/amount, flight/booking reference, an explicit backup, or a
+# route. Sentences that only name a travel word with no anchor ("maybe take
+# the airport bus") are vague chatter and are NOT captured. The flight/train
+# number alternative is kept case-sensitive (``(?-i:...)``) so generic
+# "<word> <number>" pairs do not masquerade as anchors.
+_LOGISTICS_ANCHOR_RE = re.compile(
+    r"""
+      \d{1,2}:\d{2}                                     # clock time 23:30 / 09:00
+    | \b\d{1,2}\s*[ap]\.?m\.?\b                          # 11pm / 7 a.m.
+    | \b\d{1,2}h\d{2}\b                                  # 1h09 (time/duration)
+    | \b\d+(?:\.\d+)?\s*(?:rmb|cny|usd|eur|gbp|jpy|yuan|dollars?|euros?|pounds?|bucks?)\b
+    | [¥$€£]\s*\d                                        # ¥35 / $40
+    | \b\d+(?:\.\d+)?\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b
+    | \b\d{1,2}\s*[/-]\s*\d{1,2}\b                       # date 6/12 or 6-12
+    | \b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}\b
+    | \b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b
+    | \b(?:mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b
+    | \b(?:today|tonight|tomorrow|tmr|overnight|next\s+(?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b
+    | \b(?-i:[A-Z]{1,3})\s?\d{2,4}\b                     # flight/train no. CA123, MU5100
+    | \b(?:backup|back-up|fallback|standby|plan\s+b|alternative)\b
+    | \b(?:via|route|en\s+route)\b
+    | \b(?:confirmation|reservation|booking)\s+(?:no\.?|number|code|ref)\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_LOGISTICS_ANCHOR_ZH_RE = re.compile(
+    r"\d{1,2}\s*[:：]\s*\d{2}"                   # 23:30 / 23：30 (full-width colon)
+    r"|\d{1,2}\s*点(?:半|\d{1,2}\s*分?)?"          # 11点 / 11点半 / 11点30
+    r"|\d+(?:\.\d+)?\s*(?:元|块|刀|人民币|美元|欧元|日元)"
+    r"|[¥￥]\s*\d"
+    r"|\d+\s*(?:小时|分钟|个小时|天|晚)"
+    r"|\d{1,2}\s*[月号日]"                        # 6月 / 12号 / 5日
+    r"|明天|后天|今晚|今天|下周|这周|周[一二三四五六日天]|礼拜[一二三四五六日天]"
+    r"|备选|备用|路线|中转|经由"
+)
+
+
+def _has_logistics_anchor(sentence: str) -> bool:
+    """True if the sentence carries a concrete logistics anchor (see above)."""
+    return bool(
+        _LOGISTICS_ANCHOR_RE.search(sentence)
+        or _LOGISTICS_ANCHOR_ZH_RE.search(sentence)
+    )
 
 # Which card types each source is allowed to produce. The assistant's final
 # response is the source of truth for decisions/todos/implementation; user
@@ -224,6 +345,7 @@ _ASSISTANT_TYPES = frozenset(
         MemoryCardType.DECISION,
         MemoryCardType.CONSTRAINT,
         MemoryCardType.OPEN_QUESTION,
+        MemoryCardType.LOGISTICS_PLAN,
         MemoryCardType.PREFERENCE,
         MemoryCardType.TODO,
         MemoryCardType.IMPLEMENTATION_DETAIL,
@@ -235,6 +357,9 @@ _USER_TYPES = frozenset(
         MemoryCardType.CONSTRAINT,
         MemoryCardType.TODO,
         MemoryCardType.OPEN_QUESTION,
+        # Logistics facts are usually stated by the user ("my airport bus plan
+        # is 23:30, backup taxi") and must be captured from user turns.
+        MemoryCardType.LOGISTICS_PLAN,
     }
 )
 
@@ -250,6 +375,10 @@ _TYPE_LABELS: dict[str, str] = {
         "implementation detail; implementation details; constraints; code path"
     ),
     MemoryCardType.OPEN_QUESTION: "open question; unresolved; tbd; decide later",
+    MemoryCardType.LOGISTICS_PLAN: (
+        "logistics plan; travel plan; airport transfer; itinerary; trip; "
+        "booking; transport; route; schedule"
+    ),
 }
 
 
@@ -371,6 +500,13 @@ def _classify(sentence: str, allowed: frozenset[str]) -> str | None:
         if question and card_type != MemoryCardType.OPEN_QUESTION:
             continue
         if pattern.search(lowered) or any(n in sentence for n in zh):
+            # Logistics cards demand a concrete anchor; a bare travel word
+            # ("maybe take the airport bus") is vague chatter. Fall through to
+            # later signals so the sentence can still match another type.
+            if card_type == MemoryCardType.LOGISTICS_PLAN and not _has_logistics_anchor(
+                sentence
+            ):
+                continue
             return card_type
     return None
 
