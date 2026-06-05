@@ -731,7 +731,6 @@ def run_doctor(args):
                 "opencode-zen",
                 "huggingface",
                 "lmstudio",
-                "nous",
             }
             if (
                 default_model

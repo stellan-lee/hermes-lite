@@ -2712,18 +2712,16 @@ SETUP_SECTIONS = [
 
 
 def _run_portal_one_shot(config: dict) -> None:
-    """One-shot Nous Portal setup — OAuth + provider switch + Tool Gateway.
+    """One-shot Nous Portal subscription setup — OAuth + Tool Gateway.
 
-    Wired into ``hermes setup --portal``. Does NOT prompt for anything
-    besides what the underlying OAuth + Tool Gateway prompts already need.
-    Designed to be shareable as a single command (``hermes setup --portal``)
-    that gets a brand-new user from zero to a fully working Hermes session
-    with web/image/tts/browser tools all routed via their Portal sub.
+    Wired into ``hermes setup --portal``. Logs into a Nous Portal subscription
+    and enables the Tool Gateway (web search, image generation, TTS, browser
+    automation, all routed via the Portal sub). It does NOT change the model
+    provider — pick your model/provider separately with ``hermes model``.
     """
     from types import SimpleNamespace
 
     from hermes_cli.auth_commands import auth_add_command
-    from hermes_cli.config import save_config
     from hermes_cli.auth import get_nous_auth_status
     from hermes_cli.nous_subscription import prompt_enable_tool_gateway
 
@@ -2794,21 +2792,9 @@ def _run_portal_one_shot(config: dict) -> None:
             print_info("  You can retry later with `hermes auth add nous --type oauth`.")
             return
 
-    # Set provider → nous so the model picker, status surfaces, and
-    # managed-tool gating all light up. Leave model.model empty so the
-    # runtime picks Nous's default model; the user can change it later
-    # with `hermes model`.
-    model_cfg = config.get("model")
-    if not isinstance(model_cfg, dict):
-        model_cfg = {}
-        config["model"] = model_cfg
-    model_cfg["provider"] = "nous"
-    save_config(config)
-    print()
-    print_success("  Nous set as your inference provider.")
-
-    # Offer the Tool Gateway opt-in (single Y/n) — same flow that fires
-    # from `hermes model` after picking Nous.
+    # Offer the Tool Gateway opt-in (single Y/n). This enables the managed
+    # web/image/tts/browser backends routed through the Portal subscription.
+    # It does NOT change the model provider — use `hermes model` for that.
     print()
     try:
         prompt_enable_tool_gateway(config)
@@ -2998,8 +2984,8 @@ def run_setup_wizard(args):
         setup_mode = prompt_choice(
             "How would you like to set up Hermes?",
             [
-                "Quick Setup (Nous Portal) — free OAuth login, no API keys, model + tools (recommended)",
-                "Full setup — configure every provider, tool & option yourself (bring your own keys)",
+                "Quick Setup — pick a model/provider, terminal & messaging (recommended)",
+                "Full setup — configure every provider, tool & option yourself",
             ],
             0,
         )
@@ -3055,40 +3041,30 @@ def run_setup_wizard(args):
 
 
 def _run_first_time_quick_setup(config: dict, hermes_home, is_existing: bool):
-    """Streamlined first-time setup via Nous Portal: OAuth, model, terminal & messaging.
+    """Streamlined first-time setup: model/provider, terminal & messaging.
 
-    Routes straight to the Nous Portal provider — runs the device-code OAuth
-    login, picks a Nous model, then configures the terminal backend and (optionally)
-    a messaging platform. Applies sensible defaults for everything else (agent
-    settings, tools); the user can customize later via ``hermes setup <section>``
-    or switch providers with ``hermes model``.
+    Runs the standard model-provider selection, then configures the terminal
+    backend and (optionally) a messaging platform. Applies sensible defaults for
+    everything else (agent settings, tools); the user can customize later via
+    ``hermes setup <section>`` or switch providers with ``hermes model``.
     """
     from hermes_cli.config import load_config
 
-    # Step 1: Nous Portal — OAuth login + model selection.
-    # _model_flow_nous() handles both the logged-out path (device-code OAuth,
-    # which selects a model internally) and the already-logged-in path (curated
-    # Nous model picker). Provider is set to "nous" by the login/model save.
-    print()
-    print_header("Nous Portal")
-    print_info("One subscription, 300+ models, plus the Tool Gateway:")
-    print_info("  web search, image generation, TTS, browser automation.")
-    print_info("Sign up: https://portal.nousresearch.com/manage-subscription")
+    # Step 1: Model & provider selection via the standard provider menu.
     print()
     try:
-        from hermes_cli.main import _model_flow_nous
-        _model_flow_nous(config)
+        setup_model_provider(config)
     except (KeyboardInterrupt, EOFError):
         print()
-        print_info("Nous Portal setup cancelled.")
+        print_info("Model setup cancelled.")
     except Exception as exc:
-        logger.debug("_model_flow_nous error during quick setup: %s", exc)
-        print_warning(f"Nous Portal setup encountered an error: {exc}")
+        logger.debug("setup_model_provider error during quick setup: %s", exc)
+        print_warning(f"Model setup encountered an error: {exc}")
         print_info("You can try again later with: hermes model")
 
-    # Re-sync the wizard's config dict from disk — _model_flow_nous (and the
-    # underlying login/model save) write via their own load/save cycle, and the
-    # wizard's later save_config(config) must not clobber those values (#4172).
+    # Re-sync the wizard's config dict from disk — the model/provider save may
+    # write via its own load/save cycle, and the wizard's later
+    # save_config(config) must not clobber those values (#4172).
     _refreshed = load_config()
     config.clear()
     config.update(_refreshed)

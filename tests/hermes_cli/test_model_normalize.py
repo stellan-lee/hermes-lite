@@ -155,9 +155,11 @@ class TestAggregatorProviders:
         result = normalize_model_for_provider("claude-sonnet-4.6", "openrouter")
         assert result == "anthropic/claude-sonnet-4.6"
 
-    def test_nous_prepends_vendor(self):
+    def test_nous_not_an_aggregator(self):
+        # The official Nous Portal provider was removed; "nous" is no longer
+        # treated as a vendor-prefixing aggregator.
         result = normalize_model_for_provider("gpt-5.4", "nous")
-        assert result == "openai/gpt-5.4"
+        assert result == "gpt-5.4"
 
     def test_vendor_already_present(self):
         result = normalize_model_for_provider("anthropic/claude-sonnet-4.6", "openrouter")
