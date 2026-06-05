@@ -50,12 +50,10 @@ def test_auxiliary_client_nous_extra_body_uses_helper():
     assert NOUS_EXTRA_BODY == {"tags": nous_portal_tags()}
 
 
-def test_nous_provider_profile_uses_helper():
-    """The Nous provider profile (main agent loop) must use the canonical tags."""
-    from agent.portal_tags import nous_portal_tags
+def test_nous_provider_profile_removed():
+    """The official Nous Portal model-provider profile was removed, so no
+    profile should resolve for ``nous`` (the portal_tags helper itself remains
+    an internal API)."""
     from providers import get_provider_profile
 
-    profile = get_provider_profile("nous")
-    assert profile is not None
-    body = profile.build_extra_body()
-    assert body["tags"] == nous_portal_tags()
+    assert get_provider_profile("nous") is None

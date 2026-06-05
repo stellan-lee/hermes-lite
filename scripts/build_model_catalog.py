@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Build the Hermes Model Catalog — a centralized JSON manifest of curated models.
 
-This script reads the in-repo hardcoded curated lists (``OPENROUTER_MODELS``,
-``_PROVIDER_MODELS["nous"]``) and writes them to a JSON manifest that the
-Hermes CLI fetches at runtime. Publishing the catalog through the docs site
-lets maintainers update model lists without shipping a Hermes release.
+This script reads the in-repo hardcoded curated lists (``OPENROUTER_MODELS``)
+and writes them to a JSON manifest that the Hermes CLI fetches at runtime.
+Publishing the catalog through the docs site lets maintainers update model
+lists without shipping a Hermes release.
 
 The runtime fetcher falls back to the same in-repo hardcoded lists if the
 manifest is unreachable, so this script is a convenience for keeping the
@@ -32,7 +32,7 @@ sys.path.insert(0, REPO_ROOT)
 # Ensure HERMES_HOME is set for imports that touch it at module level.
 os.environ.setdefault("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes"))
 
-from hermes_cli.models import OPENROUTER_MODELS, _PROVIDER_MODELS  # noqa: E402
+from hermes_cli.models import OPENROUTER_MODELS  # noqa: E402
 
 OUTPUT_PATH = os.path.join(REPO_ROOT, "hermes_cli", "data", "model-catalog.json")
 CATALOG_VERSION = 1
@@ -58,19 +58,6 @@ def build_catalog() -> dict:
                 "models": [
                     {"id": mid, "description": desc}
                     for mid, desc in OPENROUTER_MODELS
-                ],
-            },
-            "nous": {
-                "metadata": {
-                    "display_name": "Nous Portal",
-                    "note": (
-                        "Free-tier gating is determined live via Portal pricing "
-                        "(partition_nous_models_by_tier), not this manifest."
-                    ),
-                },
-                "models": [
-                    {"id": mid}
-                    for mid in _PROVIDER_MODELS.get("nous", [])
                 ],
             },
         },
