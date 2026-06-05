@@ -795,6 +795,14 @@ DEFAULT_CONFIG = {
         # identity slot (SOUL.md). Empty by default. The HERMES_ENVIRONMENT_HINT
         # env var overrides this (build-time/container mechanism).
         "environment_hint": "",
+        # Path to an external markdown file (e.g. "SYSTEM_PROMPT.md") holding
+        # the environment_hint text, so long/frequently-edited prompt content
+        # can live outside config.yaml. Relative paths resolve under
+        # HERMES_HOME. When set and readable, the file content is used in place
+        # of the inline ``environment_hint`` above; if the path is set but
+        # unreadable, a warning is logged and Hermes falls back to the inline
+        # value. The HERMES_ENVIRONMENT_HINT env var still overrides both.
+        "environment_hint_file": "",
         # Staged inactivity warning: send a warning to the user at this
         # threshold before escalating to a full timeout.  The warning fires
         # once per run and does not interrupt the agent.  0 = disable warning.

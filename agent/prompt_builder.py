@@ -787,23 +787,71 @@ def build_environment_hints() -> str:
     # (e.g. a sandbox runner / managed platform) explain the environment the
     # agent is running in — proxy, credential handling, mount layout — without
     # forking the identity slot (SOUL.md). Read once at prompt-build time, so
-    # it's part of the stable, cache-safe system prompt. The env var is the
-    # build-time/embedder mechanism (set in a container ENV); config.yaml
-    # ``agent.environment_hint`` is the user-facing surface. Env var wins.
+    # it's part of the stable, cache-safe system prompt.
+    #
+    # Precedence (first non-empty wins):
+    #   1. HERMES_ENVIRONMENT_HINT env var — build-time/embedder mechanism.
+    #   2. ``agent.environment_hint_file`` — path to an external markdown file
+    #      (e.g. SYSTEM_PROMPT.md) so long prompt text can live outside
+    #      config.yaml and be edited frequently. Relative paths resolve under
+    #      HERMES_HOME. If set but unreadable, a warning is logged and we fall
+    #      back to the inline value below.
+    #   3. ``agent.environment_hint`` — inline string in config.yaml.
     extra = (os.getenv("HERMES_ENVIRONMENT_HINT") or "").strip()
     if not extra:
         try:
             from hermes_cli.config import load_config
 
-            extra = str(
-                (load_config().get("agent", {}) or {}).get("environment_hint", "")
-            ).strip()
+            agent_cfg = load_config().get("agent", {}) or {}
+            hint_file = str(agent_cfg.get("environment_hint_file", "") or "").strip()
+            if hint_file:
+                file_hint = _load_environment_hint_file(hint_file)
+                if file_hint:
+                    extra = file_hint
+            if not extra:
+                extra = str(agent_cfg.get("environment_hint", "")).strip()
         except Exception as e:
             logger.debug("Could not read agent.environment_hint from config: %s", e)
     if extra:
         hints.append(extra)
 
     return "\n\n".join(hints)
+
+
+def _load_environment_hint_file(path_str: str) -> Optional[str]:
+    """Load the system-prompt markdown file named by ``agent.environment_hint_file``.
+
+    Relative paths resolve under :func:`get_hermes_home` so they follow the
+    active Hermes home/profile rather than the process cwd; absolute paths are
+    used as-is.  Returns the stripped file content, or ``None`` when the file
+    is missing/empty/unreadable.  An unreadable configured path is surfaced as
+    a warning (not silently ignored) so the caller can fall back to the inline
+    ``agent.environment_hint`` value.
+    """
+    try:
+        path = Path(path_str).expanduser()
+        if not path.is_absolute():
+            path = get_hermes_home() / path
+        if not path.exists():
+            logger.warning(
+                "agent.environment_hint_file points to a missing file: %s "
+                "(falling back to inline agent.environment_hint)",
+                path,
+            )
+            return None
+        content = path.read_text(encoding="utf-8").strip()
+        if not content:
+            logger.warning("agent.environment_hint_file is empty: %s", path)
+            return None
+        return content
+    except Exception as e:
+        logger.warning(
+            "Could not read agent.environment_hint_file %r: %s "
+            "(falling back to inline agent.environment_hint)",
+            path_str,
+            e,
+        )
+        return None
 
 
 CONTEXT_FILE_MAX_CHARS = 20_000

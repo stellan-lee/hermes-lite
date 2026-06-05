@@ -1024,6 +1024,90 @@ class TestEnvironmentHints:
         result = _pb.build_environment_hints()
         assert "Host:" in result
 
+    def test_environment_hint_file_relative_resolves_under_hermes_home(
+        self, monkeypatch, tmp_path
+    ):
+        """A relative environment_hint_file resolves under HERMES_HOME and wins
+        over the inline value."""
+        import agent.prompt_builder as _pb
+        (tmp_path / "SYSTEM_PROMPT.md").write_text("FILE-HINT", encoding="utf-8")
+        monkeypatch.setattr(_pb, "is_wsl", lambda: False)
+        monkeypatch.setattr(_pb, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.delenv("TERMINAL_ENV", raising=False)
+        monkeypatch.delenv("HERMES_ENVIRONMENT_HINT", raising=False)
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config",
+            lambda: {
+                "agent": {
+                    "environment_hint": "INLINE-VALUE",
+                    "environment_hint_file": "SYSTEM_PROMPT.md",
+                }
+            },
+        )
+        _pb._clear_backend_probe_cache()
+        result = _pb.build_environment_hints()
+        assert "FILE-HINT" in result
+        assert "INLINE-VALUE" not in result
+
+    def test_environment_hint_file_absolute_path(self, monkeypatch, tmp_path):
+        """An absolute environment_hint_file is used as-is."""
+        import agent.prompt_builder as _pb
+        hint_file = tmp_path / "prompt.md"
+        hint_file.write_text("ABS-FILE-HINT", encoding="utf-8")
+        monkeypatch.setattr(_pb, "is_wsl", lambda: False)
+        monkeypatch.delenv("TERMINAL_ENV", raising=False)
+        monkeypatch.delenv("HERMES_ENVIRONMENT_HINT", raising=False)
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config",
+            lambda: {"agent": {"environment_hint_file": str(hint_file)}},
+        )
+        _pb._clear_backend_probe_cache()
+        result = _pb.build_environment_hints()
+        assert "ABS-FILE-HINT" in result
+
+    def test_environment_hint_file_missing_falls_back_to_inline(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """A configured-but-missing file logs a warning and falls back to the
+        inline environment_hint."""
+        import logging
+        import agent.prompt_builder as _pb
+        monkeypatch.setattr(_pb, "is_wsl", lambda: False)
+        monkeypatch.setattr(_pb, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.delenv("TERMINAL_ENV", raising=False)
+        monkeypatch.delenv("HERMES_ENVIRONMENT_HINT", raising=False)
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config",
+            lambda: {
+                "agent": {
+                    "environment_hint": "INLINE-FALLBACK",
+                    "environment_hint_file": "does-not-exist.md",
+                }
+            },
+        )
+        _pb._clear_backend_probe_cache()
+        with caplog.at_level(logging.WARNING):
+            result = _pb.build_environment_hints()
+        assert "INLINE-FALLBACK" in result
+        assert any("environment_hint_file" in r.message for r in caplog.records)
+
+    def test_environment_hint_env_var_overrides_file(self, monkeypatch, tmp_path):
+        """The env var still wins over environment_hint_file."""
+        import agent.prompt_builder as _pb
+        (tmp_path / "SYSTEM_PROMPT.md").write_text("FILE-HINT", encoding="utf-8")
+        monkeypatch.setattr(_pb, "is_wsl", lambda: False)
+        monkeypatch.setattr(_pb, "get_hermes_home", lambda: tmp_path)
+        monkeypatch.delenv("TERMINAL_ENV", raising=False)
+        monkeypatch.setenv("HERMES_ENVIRONMENT_HINT", "ENV-WINS")
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config",
+            lambda: {"agent": {"environment_hint_file": "SYSTEM_PROMPT.md"}},
+        )
+        _pb._clear_backend_probe_cache()
+        result = _pb.build_environment_hints()
+        assert "ENV-WINS" in result
+        assert "FILE-HINT" not in result
+
 
 # =========================================================================
 # Conditional skill activation

@@ -589,7 +589,22 @@ agent:
   
   # Enable verbose logging
   verbose: false
-  
+
+  # Extra environment description appended to the system prompt's
+  # environment-hints block. Use it to explain the runtime environment
+  # (proxy, credential handling, mount layout) without editing SOUL.md.
+  # The HERMES_ENVIRONMENT_HINT env var overrides this.
+  # environment_hint: ""
+
+  # Instead of inlining a long environment_hint above, point to an external
+  # markdown file so the prompt text can live outside config.yaml and be
+  # edited frequently. Relative paths resolve under HERMES_HOME (~/.hermes or
+  # the active profile). When set and readable, the file content is used in
+  # place of the inline environment_hint; if the path is set but unreadable,
+  # a warning is logged and Hermes falls back to the inline value.
+  # environment_hint_file: "SYSTEM_PROMPT.md"
+
+
   # Reasoning effort level (OpenRouter and Nous Portal)
   # Controls how much "thinking" the model does before responding.
   # Options: "xhigh" (max), "high", "medium", "low", "minimal", "none" (disable)
