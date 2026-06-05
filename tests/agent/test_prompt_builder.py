@@ -48,6 +48,14 @@ class TestGuidanceConstants:
         assert "relevant cross-session context exists" in SESSION_SEARCH_GUIDANCE
         assert "recent turns of the current session" not in SESSION_SEARCH_GUIDANCE
 
+    def test_session_search_guidance_is_framed_as_lower_priority(self):
+        # session_search must be ranked below the current request, long-term
+        # memory, and the user profile — it is supporting evidence, not primary.
+        text = SESSION_SEARCH_GUIDANCE.lower()
+        assert "lower-priority" in text
+        assert "defer to" in text
+        assert "memory" in text and "profile" in text
+
 
 # =========================================================================
 # Context injection scanning

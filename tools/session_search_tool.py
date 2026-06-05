@@ -501,10 +501,15 @@ SESSION_SEARCH_SCHEMA = {
         "(`\"docker networking\"`), boolean (`python NOT java`), or prefix wildcards "
         "(`deploy*`).\n\n"
         "WHEN TO USE\n\n"
-        "  Reach for this on any \"what did we do about X\" / \"where did we leave Y\" / "
-        "\"find the session where Z\" question — before gh, web search, or filesystem "
-        "inspection. The session DB carries what was said when; external tools show "
-        "current world state."
+        "  This is lower-priority, supporting context — a fallback for explicit "
+        "past-session recall, not a primary source. Defer to the current user request, "
+        "long-term memory, and the user profile first; only reach for session_search "
+        "when those do not cover what you need. Use it on \"what did we do about X\" / "
+        "\"where did we leave Y\" / \"find the session where Z\" questions — before gh, "
+        "web search, or filesystem inspection. The session DB carries what was said "
+        "when; external tools show current world state. Treat what it returns as older, "
+        "weaker evidence: when it conflicts with memory, the profile, or the current "
+        "request, those win."
     ),
     "parameters": {
         "type": "object",
