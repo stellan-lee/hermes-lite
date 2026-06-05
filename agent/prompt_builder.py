@@ -158,9 +158,14 @@ MEMORY_GUIDANCE = (
 )
 
 SESSION_SEARCH_GUIDANCE = (
-    "When the user references something from a past conversation or you suspect "
-    "relevant cross-session context exists, use session_search to recall it before "
-    "asking them to repeat themselves."
+    "session_search is lower-priority, supporting context — a fallback for explicit "
+    "past-session recall, not a primary source. Always defer to the current user "
+    "request, long-term memory, and the user profile first; reach for session_search "
+    "only when the user references something from a past conversation or you suspect "
+    "relevant cross-session context exists that those higher-priority sources do not "
+    "cover. Treat anything it returns as older, weaker evidence: when it conflicts "
+    "with memory, the profile, or what the user is asking for now, the current "
+    "request and durable memory win."
 )
 
 CLARIFY_GUIDANCE = (
