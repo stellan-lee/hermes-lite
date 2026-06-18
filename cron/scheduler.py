@@ -149,9 +149,9 @@ _LEGACY_HOME_TARGET_ENV_VARS = {
 
 from cron.jobs import get_due_jobs, mark_job_run, save_job_output, advance_next_run
 
-# Sentinel: when a cron agent has nothing new to report, it can start its
-# response with this marker to suppress delivery.  Output is still saved
-# locally for audit.
+# Sentinel: when a cron agent has nothing new to report, it can respond with
+# exactly this marker to suppress delivery. Output is still saved locally for
+# audit.
 SILENT_MARKER = "[SILENT]"
 
 # Backward-compatible module override used by tests and emergency monkeypatches.
@@ -168,6 +168,22 @@ def _get_lock_paths() -> tuple[Path, Path]:
     hermes_home = _get_hermes_home()
     lock_dir = hermes_home / "cron"
     return lock_dir, lock_dir / ".tick.lock"
+
+
+def _is_silent_marker_response(content: str) -> bool:
+    """Return True only for the exact cron silence marker."""
+    return str(content or "").strip().upper() == SILENT_MARKER
+
+
+def _load_profile_dotenv() -> None:
+    """Load the active profile's .env into os.environ for this cron job."""
+    from dotenv import load_dotenv
+
+    env_path = str(_get_hermes_home() / ".env")
+    try:
+        load_dotenv(env_path, override=True, encoding="utf-8")
+    except UnicodeDecodeError:
+        load_dotenv(env_path, override=True, encoding="latin-1")
 
 
 @contextmanager
@@ -1252,6 +1268,12 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
 
+    # Re-read the active profile's .env for every run so provider/key/home-channel
+    # changes take effect without a gateway restart. This must happen before the
+    # no_agent short-circuit too: script-only watchdog alerts still need home
+    # channel env vars for delivery, and scripts may need configured env values.
+    _load_profile_dotenv()
+
     # ---------------------------------------------------------------
     # no_agent short-circuit — the script IS the job, no LLM involvement.
     # ---------------------------------------------------------------
@@ -1499,14 +1521,6 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
         logger.info("Job '%s': using workdir %s", job_id, _job_workdir)
 
     try:
-        # Re-read .env and config.yaml fresh every run so provider/key
-        # changes take effect without a gateway restart.
-        from dotenv import load_dotenv
-        try:
-            load_dotenv(str(_get_hermes_home() / ".env"), override=True, encoding="utf-8")
-        except UnicodeDecodeError:
-            load_dotenv(str(_get_hermes_home() / ".env"), override=True, encoding="latin-1")
-
         delivery_target = _resolve_delivery_target(job)
         if delivery_target:
             _VAR_MAP["HERMES_CRON_AUTO_DELIVER_PLATFORM"].set(delivery_target["platform"])
@@ -1979,14 +1993,22 @@ def tick(verbose: bool = True, adapters=None, loop=None) -> int:
                 # responses: do not deliver a blank message, and let the
                 # empty-response guard below mark the run as a soft failure.
                 should_deliver = bool(deliver_content.strip())
-                if should_deliver and success and SILENT_MARKER in deliver_content.strip().upper():
+                if should_deliver and success and _is_silent_marker_response(deliver_content):
                     logger.info("Job '%s': agent returned %s — skipping delivery", job["id"], SILENT_MARKER)
                     should_deliver = False
 
                 delivery_error = None
                 if should_deliver:
                     try:
-                        delivery_error = _deliver_result(job, deliver_content, adapters=adapters, loop=loop)
+                        with _job_profile_context(job["id"], job.get("profile")):
+                            if (job.get("profile") or "").strip():
+                                _load_profile_dotenv()
+                            delivery_error = _deliver_result(
+                                job,
+                                deliver_content,
+                                adapters=adapters,
+                                loop=loop,
+                            )
                     except Exception as de:
                         delivery_error = str(de)
                         logger.error("Delivery failed for job %s: %s", job["id"], de)

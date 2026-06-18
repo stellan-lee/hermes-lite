@@ -12,7 +12,7 @@ Covers:
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -259,6 +259,46 @@ def test_run_job_no_agent_script_failure_delivers_error(hermes_env):
     assert error is not None
     assert "oops" in final_response or "exited with code 3" in final_response
     assert "Cron watchdog" in final_response  # alert header
+
+
+def test_tick_no_agent_delivery_resolves_home_channel_from_dotenv(hermes_env, monkeypatch):
+    """Script-only alerts must load .env before resolving bare home-channel targets."""
+    from cron.jobs import create_job
+    import cron.scheduler as sched
+    from gateway.config import Platform
+
+    script_path = hermes_env / "scripts" / "alert.sh"
+    script_path.write_text("#!/bin/bash\necho 'RAM 92% on host'\n")
+    (hermes_env / ".env").write_text("TELEGRAM_HOME_CHANNEL=-2002\n")
+    monkeypatch.delenv("TELEGRAM_HOME_CHANNEL", raising=False)
+
+    job = create_job(
+        prompt=None,
+        schedule="every 5m",
+        script="alert.sh",
+        no_agent=True,
+        deliver="telegram",
+    )
+    pconfig = MagicMock()
+    pconfig.enabled = True
+    mock_cfg = MagicMock()
+    mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
+
+    with patch.object(sched, "get_due_jobs", return_value=[job]), \
+         patch.object(sched, "advance_next_run"), \
+         patch.object(sched, "load_config", return_value={"cron": {"wrap_response": False}}), \
+         patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+         patch("tools.send_message_tool._send_to_platform", new=AsyncMock(return_value={"success": True})) as send_mock, \
+         patch.object(sched, "mark_job_run") as mark_mock:
+        assert sched.tick(verbose=False) == 1
+
+    send_mock.assert_awaited_once()
+    args = send_mock.await_args.args
+    assert args[0] == Platform.TELEGRAM
+    assert args[2] == "-2002"
+    assert "RAM 92% on host" in args[3]
+    mark_mock.assert_called_once()
+    assert mark_mock.call_args.kwargs["delivery_error"] is None
 
 
 def test_run_job_no_agent_never_invokes_aiagent(hermes_env):

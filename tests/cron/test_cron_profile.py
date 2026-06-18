@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -435,3 +436,44 @@ class TestTickProfilePartition:
         main_thread_name = threading.current_thread().name
         profile_thread_name = next(thread for job_id, thread in calls if job_id == "a")
         assert profile_thread_name == main_thread_name
+
+    def test_profile_delivery_uses_profile_home_channel(
+        self, isolated_cron_profile_home, monkeypatch
+    ):
+        import cron.scheduler as sched
+        from gateway.config import Platform
+
+        root, profile_home = isolated_cron_profile_home
+        (profile_home / ".env").write_text("TELEGRAM_HOME_CHANNEL=-3030\n")
+        monkeypatch.delenv("TELEGRAM_HOME_CHANNEL", raising=False)
+
+        job = {
+            "id": "profile-deliver",
+            "name": "profile-deliver",
+            "profile": "support",
+            "deliver": "telegram",
+        }
+        pconfig = MagicMock()
+        pconfig.enabled = True
+        mock_cfg = MagicMock()
+        mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
+
+        with patch.object(sched, "get_due_jobs", return_value=[job]), \
+             patch.object(sched, "advance_next_run"), \
+             patch.object(sched, "run_job", return_value=(True, "output", "profile alert", None)), \
+             patch.object(sched, "save_job_output", return_value="/tmp/out.md"), \
+             patch.object(sched, "load_config", return_value={"cron": {"wrap_response": False}}), \
+             patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+             patch("tools.send_message_tool._send_to_platform", new=AsyncMock(return_value={"success": True})) as send_mock, \
+             patch.object(sched, "mark_job_run") as mark_mock:
+            assert sched.tick(verbose=False) == 1
+
+        send_mock.assert_awaited_once()
+        args = send_mock.await_args.args
+        assert args[0] == Platform.TELEGRAM
+        assert args[2] == "-3030"
+        assert args[3] == "profile alert"
+        mark_mock.assert_called_once()
+        assert mark_mock.call_args.kwargs["delivery_error"] is None
+        assert "TELEGRAM_HOME_CHANNEL" not in os.environ
+        assert sched._get_hermes_home() == root
