@@ -1678,7 +1678,40 @@ def _format_gateway_process_notification(evt: dict) -> "str | None":
         text += "]"
         return text
 
+    if evt_type == "async_delegation":
+        # Reuse the shared rich formatter (self-contained task-source block).
+        from tools.process_registry import format_process_notification
+        return format_process_notification(evt)
+
     return None
+
+
+def _drain_gateway_watch_events(completion_queue) -> "list[dict]":
+    """Drain gateway-owned watch events without spinning on requeued events.
+
+    Watch events are handled by the post-turn gateway drain. Process
+    completions are owned by their per-process watcher task, and async
+    delegation completions are owned by ``_async_delegation_watcher``.
+    Requeueing async events inside ``while not queue.empty()`` would make the
+    loop non-terminating, so detach the current batch first, then requeue any
+    events this drain does not own after the queue is empty.
+    """
+    watch_events: list[dict] = []
+    requeue: list[dict] = []
+    while not completion_queue.empty():
+        try:
+            evt = completion_queue.get_nowait()
+        except Exception:
+            break
+        evt_type = evt.get("type", "completion")
+        if evt_type in {"watch_match", "watch_disabled"}:
+            watch_events.append(evt)
+        elif evt_type == "async_delegation":
+            requeue.append(evt)
+        # else: process completion events are handled by the watcher task
+    for evt in requeue:
+        completion_queue.put(evt)
+    return watch_events
 
 
 # Module-level weak reference to the active GatewayRunner instance.
@@ -4783,6 +4816,12 @@ class GatewayRunner:
         # turn so the agent kicks off the new chat.
         asyncio.create_task(self._handoff_watcher())
 
+        # Start background async-delegation watcher — drains completion events
+        # from delegate_task(background=true) subagents and injects each
+        # result back into its originating session as a new turn, covering the
+        # idle case where the subagent finishes with no agent turn running.
+        asyncio.create_task(self._async_delegation_watcher())
+
         logger.info("Press Ctrl+C to stop")
         
         return True
@@ -5047,6 +5086,20 @@ class GatewayRunner:
 
                 for key, entry in _expired_entries:
                     try:
+                        try:
+                            from tools.async_delegation import interrupt_for_session
+
+                            interrupt_for_session(
+                                parent_session_ids=self._compression_lineage_ids(
+                                    entry.session_id
+                                ),
+                                reason="gateway_session_expiry",
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Failed to interrupt expired-session delegations",
+                                exc_info=True,
+                            )
                         try:
                             from hermes_cli.plugins import invoke_hook as _invoke_hook
                             _parts = key.split(":")
@@ -5382,6 +5435,16 @@ class GatewayRunner:
                         )
                 except Exception as _e:
                     logger.debug("process_registry.kill_all (%s) error: %s", phase, _e)
+                try:
+                    from tools.async_delegation import interrupt_all as _interrupt_async
+                    _async_n = _interrupt_async(reason=f"gateway shutdown ({phase})")
+                    if _async_n:
+                        logger.info(
+                            "Shutdown (%s): interrupted %d background delegation(s)",
+                            phase, _async_n,
+                        )
+                except Exception as _e:
+                    logger.debug("async interrupt_all (%s) error: %s", phase, _e)
                 try:
                     from tools.terminal_tool import cleanup_all_environments
                     cleanup_all_environments()
@@ -7099,6 +7162,52 @@ class GatewayRunner:
         if canonical == "reasoning":
             return await self._handle_reasoning_command(event)
 
+        if canonical == "learn":
+            from agent.learn_prompt import build_learn_prompt
+
+            learn_request = event.get_command_args().strip()
+            acknowledgement = (
+                "Learning a skill from what you described…"
+                if learn_request
+                else "Learning a skill from this conversation…"
+            )
+            try:
+                adapter = self.adapters.get(source.platform)
+                if adapter:
+                    metadata = self._thread_metadata_for_source(source)
+                    await adapter.send(
+                        str(source.chat_id), acknowledgement, metadata=metadata
+                    )
+            except Exception:
+                logger.debug("learn ack send failed", exc_info=True)
+            try:
+                event.text = build_learn_prompt(learn_request)
+                # Continue through the ordinary agent path with the expanded prompt.
+            except Exception:
+                return "Could not start /learn — please try again."
+
+        if canonical == "suggestions":
+            return await self._handle_suggestions_command(event)
+
+        if canonical == "blueprint":
+            blueprint_result = await self._handle_blueprint_command(event)
+            if blueprint_result.agent_seed:
+                if blueprint_result.text:
+                    try:
+                        adapter = self.adapters.get(source.platform)
+                        if adapter:
+                            metadata = self._thread_metadata_for_source(source)
+                            await adapter.send(
+                                str(source.chat_id),
+                                blueprint_result.text,
+                                metadata=metadata,
+                            )
+                    except Exception:
+                        logger.debug("blueprint ack send failed", exc_info=True)
+                event.text = blueprint_result.agent_seed
+            else:
+                return blueprint_result.text or None
+
         if canonical == "fast":
             return await self._handle_fast_command(event)
 
@@ -8164,9 +8273,15 @@ class GatewayRunner:
                                     skip_memory=True,
                                     enabled_toolsets=["memory"],
                                     session_id=session_entry.session_id,
+                                    session_db=getattr(self, "_session_db", None),
                                 )
                                 try:
                                     _hyg_agent._print_fn = lambda *a, **kw: None
+                                    # The hygiene transcript came from the
+                                    # durable store.  Legacy rotation must not
+                                    # append that loaded prefix back to the
+                                    # preserved parent before splitting.
+                                    _hyg_agent._last_flushed_db_idx = len(_hyg_msgs)
 
                                     loop = asyncio.get_running_loop()
                                     _compressed, _ = await loop.run_in_executor(
@@ -8181,20 +8296,38 @@ class GatewayRunner:
                                     # a new session_id.  Write compressed messages into
                                     # the NEW session so the old transcript stays intact
                                     # and searchable via session_search.
+                                    _hyg_parent_sid = session_entry.session_id
                                     _hyg_new_sid = _hyg_agent.session_id
-                                    if _hyg_new_sid != session_entry.session_id:
-                                        session_entry.session_id = _hyg_new_sid
-                                        self.session_store._save()
+                                    _hyg_rotated = _hyg_new_sid != _hyg_parent_sid
+                                    _hyg_in_place = bool(
+                                        getattr(_hyg_agent, "_last_compaction_in_place", False)
+                                    )
+                                    if _hyg_rotated:
+                                        # Commit order is deliberate: the child
+                                        # transcript must be durable before the
+                                        # gateway route can publish it.
+                                        try:
+                                            self.session_store.rewrite_transcript(
+                                                _hyg_new_sid, _compressed
+                                            )
+                                            session_entry = self.session_store.publish_compression_continuation(
+                                                session_key,
+                                                _hyg_parent_sid,
+                                                _hyg_new_sid,
+                                            )
+                                        except BaseException:
+                                            self._rollback_unpublished_compression(
+                                                _hyg_parent_sid, _hyg_new_sid
+                                            )
+                                            _hyg_agent.session_id = _hyg_parent_sid
+                                            raise
                                         self._sync_telegram_topic_binding(
                                             source, session_entry,
                                             reason="hygiene-compression",
                                         )
-
-                                    self.session_store.rewrite_transcript(
-                                        session_entry.session_id, _compressed
-                                    )
                                     # Reset stored token count — transcript was rewritten
-                                    session_entry.last_prompt_tokens = 0
+                                    if _hyg_in_place:
+                                        session_entry.last_prompt_tokens = 0
                                     history = _compressed
                                     _new_count = len(_compressed)
                                     _new_tokens = estimate_messages_tokens_rough(
@@ -8524,18 +8657,17 @@ class GatewayRunner:
                 logger.error("Process watcher setup error: %s", e)
 
             # Drain watch pattern notifications that arrived during the agent run.
-            # Watch events and completions share the same queue; completions are
-            # already handled by the per-process watcher task above, so we only
-            # inject watch-type events here.
+            # Watch events and completions share the same queue; process
+            # completions are already handled by the per-process watcher task
+            # above, so we only inject watch-type events here.
+            #
+            # Async-delegation completions ALSO ride this shared queue but are
+            # owned by the dedicated _async_delegation_watcher (started at
+            # boot), which covers both the idle and post-turn cases with a
+            # single consumer — so we leave them on the queue here.
             try:
                 from tools.process_registry import process_registry as _pr
-                _watch_events = []
-                while not _pr.completion_queue.empty():
-                    evt = _pr.completion_queue.get_nowait()
-                    evt_type = evt.get("type", "completion")
-                    if evt_type in {"watch_match", "watch_disabled"}:
-                        _watch_events.append(evt)
-                    # else: completion events are handled by the watcher task
+                _watch_events = _drain_gateway_watch_events(_pr.completion_queue)
                 for evt in _watch_events:
                     synth_text = _format_gateway_process_notification(evt)
                     if synth_text:
@@ -8948,6 +9080,18 @@ class GatewayRunner:
         # Snapshot the old entry so on_session_finalize can report the
         # expiring session id before reset_session() rotates it.
         old_entry = self.session_store._entries.get(session_key)
+        if old_entry is not None:
+            try:
+                from tools.async_delegation import interrupt_for_session
+
+                interrupt_for_session(
+                    parent_session_ids=self._compression_lineage_ids(
+                        old_entry.session_id
+                    ),
+                    reason="gateway_new_session",
+                )
+            except Exception:
+                logger.debug("Failed to interrupt old-session delegations", exc_info=True)
 
         # Close tool resources on the old agent (terminal sandboxes, browser
         # daemons, background processes) before evicting from cache.
@@ -10329,6 +10473,56 @@ class GatewayRunner:
         
         # Let the normal message handler process it
         return await self._handle_message(retry_event)
+
+    async def _handle_suggestions_command(self, event: MessageEvent) -> str:
+        """Review suggested automations for the current delivery origin."""
+        args = (event.get_command_args() or "").strip()
+        source = event.source
+        platform = getattr(source.platform, "value", None) or str(
+            getattr(source, "platform", "") or ""
+        )
+        chat_id = getattr(source, "chat_id", None)
+        origin = None
+        if platform and chat_id:
+            origin = {
+                "platform": platform,
+                "chat_id": str(chat_id),
+                "chat_name": getattr(source, "chat_name", None),
+                "thread_id": getattr(source, "thread_id", None),
+            }
+        try:
+            from hermes_cli.suggestions_cmd import handle_suggestions_command
+
+            return handle_suggestions_command(args, origin=origin, surface="gateway")
+        except Exception as exc:
+            logger.debug("suggestions command failed: %s", exc)
+            return f"Suggestions command failed: {exc}"
+
+    async def _handle_blueprint_command(self, event: MessageEvent):
+        """Resolve or instantiate a blueprint for the current chat origin."""
+        from hermes_cli.blueprint_cmd import BlueprintCommandResult
+
+        args = (event.get_command_args() or "").strip()
+        source = event.source
+        platform = getattr(source.platform, "value", None) or str(
+            getattr(source, "platform", "") or ""
+        )
+        chat_id = getattr(source, "chat_id", None)
+        origin = None
+        if platform and chat_id:
+            origin = {
+                "platform": platform,
+                "chat_id": str(chat_id),
+                "chat_name": getattr(source, "chat_name", None),
+                "thread_id": getattr(source, "thread_id", None),
+            }
+        try:
+            from hermes_cli.blueprint_cmd import handle_blueprint_command
+
+            return handle_blueprint_command(args, origin=origin, surface="gateway")
+        except Exception as exc:
+            logger.debug("blueprint command failed: %s", exc)
+            return BlueprintCommandResult(f"Cron blueprint command failed: {exc}")
 
     # ────────────────────────────────────────────────────────────────
     # /goal — persistent cross-turn goals (Ralph-style loop)
@@ -11948,9 +12142,25 @@ class GatewayRunner:
                 skip_memory=True,
                 enabled_toolsets=["memory"],
                 session_id=session_entry.session_id,
+                session_db=getattr(self, "_session_db", None),
             )
             try:
                 tmp_agent._print_fn = lambda *a, **kw: None
+                if partial:
+                    # Partial compression summarizes only ``head`` and rejoins
+                    # ``tail`` in the gateway. In-place persistence inside the
+                    # agent would therefore install an incomplete live set
+                    # before the tail exists. Keep this mode on the legacy
+                    # rotation path: the full parent remains intact and the
+                    # completed head+tail transcript is written to its child.
+                    tmp_agent.compression_in_place = False
+
+                # ``head`` is wholly loaded from SQLite.  In legacy rotation
+                # mode the compression helper preserves only messages after
+                # this cursor in the parent; starting at zero duplicates the
+                # loaded history (and partial compression would duplicate the
+                # summarized head specifically).
+                tmp_agent._last_flushed_db_idx = len(head)
 
                 # Estimate with system prompt + tool schemas included so the
                 # figure reflects real request pressure, not a transcript-only
@@ -11981,19 +12191,40 @@ class GatewayRunner:
                 # (preserving its full transcript in SQLite) and creates a new
                 # session_id for the continuation.  Write the compressed messages
                 # into the NEW session so the original history stays searchable.
+                parent_session_id = session_entry.session_id
                 new_session_id = tmp_agent.session_id
-                if new_session_id != session_entry.session_id:
-                    session_entry.session_id = new_session_id
-                    self.session_store._save()
+                rotated = new_session_id != parent_session_id
+                compacted_in_place = bool(
+                    getattr(tmp_agent, "_last_compaction_in_place", False)
+                )
+                if rotated:
+                    try:
+                        self.session_store.rewrite_transcript(
+                            new_session_id, compressed
+                        )
+                        session_entry = self.session_store.publish_compression_continuation(
+                            session_entry.session_key,
+                            parent_session_id,
+                            new_session_id,
+                        )
+                    except BaseException:
+                        self._rollback_unpublished_compression(
+                            parent_session_id, new_session_id
+                        )
+                        tmp_agent.session_id = parent_session_id
+                        raise
                     self._sync_telegram_topic_binding(
                         source, session_entry, reason="compress-command",
                     )
 
-                self.session_store.rewrite_transcript(new_session_id, compressed)
+                if not (rotated or compacted_in_place):
+                    return "Compression did not produce a durable session update."
+
                 # Reset stored token count — transcript changed, old value is stale
-                self.session_store.update_session(
-                    session_entry.session_key, last_prompt_tokens=0
-                )
+                if compacted_in_place:
+                    self.session_store.update_session(
+                        session_entry.session_key, last_prompt_tokens=0
+                    )
                 new_tokens = estimate_request_tokens_rough(
                     compressed, system_prompt=_sys_prompt, tools=_tools
                 )
@@ -14629,7 +14860,7 @@ class GatewayRunner:
             user_name=str(evt.get("user_name") or "").strip() or None,
         )
 
-    async def _inject_watch_notification(self, synth_text: str, evt: dict) -> None:
+    async def _inject_watch_notification(self, synth_text: str, evt: dict) -> bool:
         """Inject a watch-pattern notification as a synthetic message event.
 
         Routing must come from the queued watch event itself, not from whatever
@@ -14641,7 +14872,7 @@ class GatewayRunner:
                 "Dropping watch notification with no routing metadata for process %s",
                 evt.get("session_id", "unknown"),
             )
-            return
+            return False
         platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
         adapter = None
         for p, a in self.adapters.items():
@@ -14649,7 +14880,7 @@ class GatewayRunner:
                 adapter = a
                 break
         if not adapter:
-            return
+            return False
         try:
             synth_event = MessageEvent(
                 text=synth_text,
@@ -14665,8 +14896,157 @@ class GatewayRunner:
                 source.thread_id,
             )
             await adapter.handle_message(synth_event)
+            return True
         except Exception as e:
             logger.error("Watch notification injection error: %s", e)
+            return False
+
+    def _enrich_async_delegation_routing(self, evt: dict) -> None:
+        """Fill platform/chat_id/thread_id/chat_type on an async-delegation event.
+
+        Async-delegation completion events only carry ``session_key`` (the
+        daemon worker has no access to the per-message routing metadata the
+        terminal background watcher captures at spawn time). Parse the
+        session_key into the routing fields ``_build_process_event_source``
+        expects. Best-effort: a CLI-origin event (empty session_key) is left
+        as-is and simply won't route on the gateway.
+        """
+        if evt.get("platform"):
+            return  # already enriched
+        parsed = _parse_session_key(evt.get("session_key", "") or "")
+        if not parsed:
+            return
+        evt["platform"] = parsed.get("platform", "")
+        evt["chat_type"] = parsed.get("chat_type", "")
+        evt["chat_id"] = parsed.get("chat_id", "")
+        if parsed.get("thread_id"):
+            evt["thread_id"] = parsed["thread_id"]
+
+    def _async_delegation_owned_by_current_session(self, evt: dict) -> bool:
+        """Require the event's durable parent or compression tip to own its route."""
+        session_key = str(evt.get("session_key") or "")
+        parent_session_id = str(evt.get("parent_session_id") or "")
+        if not session_key or not parent_session_id:
+            return False
+        try:
+            entry = self.session_store._entries.get(session_key)
+        except Exception:
+            return False
+        if not entry:
+            return False
+        current_session_id = str(entry.session_id or "")
+        if current_session_id == parent_session_id:
+            return True
+
+        # Legacy compression rotates the durable session id while preserving
+        # the gateway route. Accept only the verified compression descendant;
+        # the same stable route after /new is deliberately not sufficient.
+        db = getattr(self, "_session_db", None) or getattr(
+            self.session_store, "_db", None
+        )
+        if db is None or not hasattr(db, "get_compression_tip"):
+            return False
+        try:
+            return str(db.get_compression_tip(parent_session_id) or "") == current_session_id
+        except Exception:
+            return False
+
+    def _compression_lineage_ids(self, session_id: str) -> List[str]:
+        """Return compression ancestors/continuations for one durable session.
+
+        Cancellation must cover delegations launched before a legacy
+        compression rotation, while excluding ordinary branches and delegate
+        child sessions that merely share ``parent_session_id``.
+        """
+        sid = str(session_id or "")
+        if not sid:
+            return []
+        db = getattr(self, "_session_db", None) or getattr(
+            self.session_store, "_db", None
+        )
+        if db is None or not hasattr(db, "get_compression_lineage"):
+            return [sid]
+        try:
+            lineage = [str(value) for value in db.get_compression_lineage(sid)]
+        except Exception:
+            return [sid]
+        return [value for value in lineage if value] or [sid]
+
+    def _rollback_unpublished_compression(
+        self, parent_session_id: str, child_session_id: str
+    ) -> None:
+        """Best-effort rollback after child persistence/route publication fails."""
+        db = getattr(self, "_session_db", None) or getattr(
+            self.session_store, "_db", None
+        )
+        if db is None or not hasattr(db, "rollback_compression_rotation"):
+            return
+        try:
+            db.rollback_compression_rotation(parent_session_id, child_session_id)
+        except Exception:
+            logger.warning(
+                "Failed to roll back unpublished compression continuation %s -> %s",
+                parent_session_id,
+                child_session_id,
+                exc_info=True,
+            )
+
+    async def _async_delegation_watcher(self, interval: float = 2.0) -> None:
+        """Drain async-delegation completions and inject them as new turns.
+
+        Background subagents (``delegate_task(background=true)``) run on the
+        async-delegation daemon executor — they have no per-process watcher
+        task, so their completion events would only be seen by the post-turn
+        queue drain. This watcher covers the IDLE case: when a background
+        subagent finishes while no agent turn is running, its result still
+        re-enters the originating session promptly.
+
+        Mirrors the CLI's idle ``process_loop`` drain. Stays silent when the
+        queue has nothing for us; ignores non-async event types (those are
+        handled by ``_run_process_watcher`` / the post-turn drain).
+        """
+        await asyncio.sleep(3)  # let platforms finish connecting
+        from tools.process_registry import process_registry as _pr
+        while self._running:
+            try:
+                # Peek the queue for async-delegation events. We must NOT
+                # consume watch/completion events here (other drains own them),
+                # so requeue anything that isn't ours.
+                requeue = []
+                async_events = []
+                while not _pr.completion_queue.empty():
+                    try:
+                        evt = _pr.completion_queue.get_nowait()
+                    except Exception:
+                        break
+                    if evt.get("type") == "async_delegation":
+                        async_events.append(evt)
+                    else:
+                        requeue.append(evt)
+                for evt in requeue:
+                    _pr.completion_queue.put(evt)
+                for evt in async_events:
+                    if not self._async_delegation_owned_by_current_session(evt):
+                        logger.info(
+                            "Deferring async delegation %s: origin session is no longer current",
+                            evt.get("delegation_id"),
+                        )
+                        continue
+                    self._enrich_async_delegation_routing(evt)
+                    synth_text = _format_gateway_process_notification(evt)
+                    if not synth_text:
+                        continue
+                    try:
+                        delivered = await self._inject_watch_notification(synth_text, evt)
+                        if delivered:
+                            from tools.async_delegation import mark_completion_delivered
+
+                            mark_completion_delivered(str(evt.get("delegation_id") or ""))
+                    except Exception as e:
+                        logger.error("Async delegation injection error: %s", e)
+            except Exception as e:
+                logger.debug("Async delegation watcher error: %s", e)
+            await asyncio.sleep(interval)
 
     async def _run_process_watcher(self, watcher: dict) -> None:
         """
@@ -17123,6 +17503,9 @@ class GatewayRunner:
             # the compressed transcript, not the stale pre-compression one.
             agent = agent_holder[0]
             _session_was_split = False
+            _compacted_in_place = bool(
+                getattr(agent, "_last_compaction_in_place", False)
+            ) if agent else False
             if agent and session_key and hasattr(agent, 'session_id') and agent.session_id != session_id:
                 _session_was_split = True
                 logger.info(
@@ -17172,7 +17555,9 @@ class GatewayRunner:
             # empty new_messages slice, causing the gateway to write only a
             # user/assistant pair — losing the compressed summary and tail.
             # Reset to 0 so the gateway writes ALL compressed messages.
-            _effective_history_offset = 0 if _session_was_split else len(agent_history)
+            _effective_history_offset = (
+                0 if (_session_was_split or _compacted_in_place) else len(agent_history)
+            )
 
             # Auto-generate session title after first exchange (non-blocking)
             if final_response and self._session_db:
@@ -17228,6 +17613,7 @@ class GatewayRunner:
                 "interrupt_message": result_holder[0].get("interrupt_message") if result_holder[0] else None,
                 "tools": tools_holder[0] or [],
                 "history_offset": _effective_history_offset,
+                "compacted_in_place": _compacted_in_place,
                 "last_prompt_tokens": _last_prompt_toks,
                 "input_tokens": _input_toks,
                 "output_tokens": _output_toks,

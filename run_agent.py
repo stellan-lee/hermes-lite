@@ -4618,6 +4618,17 @@ class AIAgent:
         invocation paths (concurrent, sequential, inline).
         """
         from tools.delegate_tool import delegate_task as _delegate_task
+        # Delegations from the top-level MODEL always run in the background —
+        # the model does not get to choose. delegate_task returns immediately
+        # with one handle, and its result re-enters the conversation when it
+        # finishes. A fan-out batch runs its children concurrently and returns
+        # one consolidated completion after every child finishes. The exception:
+        #   - A delegation from an ORCHESTRATOR SUBAGENT (depth > 0) stays
+        #     synchronous: the orchestrator needs its workers' results within
+        #     its own turn to compose a summary, and a subagent doesn't own the
+        #     gateway session the async result would route back to.
+        # The schema-level `background` param is intentionally ignored here.
+        _is_subagent = getattr(self, "_delegate_depth", 0) > 0
         return _delegate_task(
             goal=function_args.get("goal"),
             context=function_args.get("context"),
@@ -4627,6 +4638,7 @@ class AIAgent:
             acp_command=function_args.get("acp_command"),
             acp_args=function_args.get("acp_args"),
             role=function_args.get("role"),
+            background=(not _is_subagent),
             parent_agent=self,
         )
 

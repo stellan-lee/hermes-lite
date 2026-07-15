@@ -5,6 +5,9 @@ import logging
 import os
 import stat
 import tempfile
+import threading
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Union
 from urllib.parse import urlparse
@@ -15,6 +18,117 @@ logger = logging.getLogger(__name__)
 
 
 TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on"})
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+    try:
+        import msvcrt
+    except ImportError:  # pragma: no cover - unusual Python platform
+        msvcrt = None
+else:
+    msvcrt = None
+
+
+@dataclass
+class _FileLockState:
+    pid: int
+    owner_thread_id: int
+    depth: int = 1
+    handle: Any = None
+
+
+_file_lock_condition = threading.Condition(threading.RLock())
+_file_lock_states: dict[str, _FileLockState] = {}
+
+
+@contextmanager
+def interprocess_file_lock(lock_path: Union[str, Path]):
+    """Block on an exclusive advisory lock for a sibling state file.
+
+    Uses the same stdlib-only ``fcntl``/``msvcrt`` strategy as the existing
+    auth, memory, scheduler, and skill-usage stores.  The lock file is stable;
+    callers should keep the critical section to one read/verify/write cycle.
+    """
+    path = Path(lock_path).expanduser().absolute()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    key = os.path.normcase(os.path.normpath(str(path)))
+    pid = os.getpid()
+    thread_id = threading.get_ident()
+    nested = False
+
+    # OS advisory locks alone do not provide the semantics we need inside one
+    # process (notably POSIX flock ownership is process/open-file-description
+    # dependent). Serialize peer threads explicitly and make same-thread
+    # nesting a depth increment that reuses the outer OS lock.
+    with _file_lock_condition:
+        while True:
+            state = _file_lock_states.get(key)
+            if state is None or state.pid != pid:
+                _file_lock_states[key] = _FileLockState(pid, thread_id)
+                break
+            if state.owner_thread_id == thread_id:
+                state.depth += 1
+                nested = True
+                break
+            _file_lock_condition.wait()
+
+    if nested:
+        try:
+            yield
+        finally:
+            with _file_lock_condition:
+                state = _file_lock_states.get(key)
+                if (
+                    state is not None
+                    and state.pid == pid
+                    and state.owner_thread_id == thread_id
+                ):
+                    state.depth -= 1
+        return
+
+    handle = None
+    try:
+        if fcntl is not None or msvcrt is not None:
+            handle = path.open("a+b")
+            if msvcrt:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b" ")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            with _file_lock_condition:
+                state = _file_lock_states.get(key)
+                if state is not None:
+                    state.handle = handle
+        yield
+    finally:
+        if handle is not None and fcntl:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except (OSError, IOError):
+                pass
+        elif handle is not None and msvcrt:
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            except (OSError, IOError):
+                pass
+        if handle is not None:
+            handle.close()
+        with _file_lock_condition:
+            state = _file_lock_states.get(key)
+            if (
+                state is not None
+                and state.pid == pid
+                and state.owner_thread_id == thread_id
+            ):
+                del _file_lock_states[key]
+            _file_lock_condition.notify_all()
 
 
 def is_truthy_value(value: Any, default: bool = False) -> bool:

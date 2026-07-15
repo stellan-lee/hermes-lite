@@ -1785,6 +1785,27 @@ def cmd_chat(args):
         # If resolution fails, keep the original value — _init_agent will
         # report "Session not found" with the original input
 
+    # Session<->workspace binding: cd back into a resumed session's recorded cwd
+    # so it resumes in the repo it belonged to. Opt out with --no-restore-cwd;
+    # skipped under --worktree (that path owns its own dir). Best-effort — a
+    # missing dir warns and stays put rather than failing the resume.
+    if (
+        getattr(args, "resume", None)
+        and not getattr(args, "no_restore_cwd", False)
+        and not getattr(args, "worktree", False)
+    ):
+        try:
+            from hermes_state import SessionDB
+
+            _saved_cwd = ((SessionDB().get_session(args.resume) or {}).get("cwd") or "").strip()
+            if _saved_cwd and not os.path.isdir(_saved_cwd):
+                print(f"⚠ session's recorded dir is gone ({_saved_cwd}); staying in {os.getcwd()}")
+            elif _saved_cwd and os.path.realpath(_saved_cwd) != os.path.realpath(os.getcwd()):
+                os.chdir(_saved_cwd)
+                print(f"↪ restored workspace dir: {_saved_cwd}")
+        except Exception:
+            pass  # never let cwd-restore break a resume
+
     # xAI retirement warning — one-shot, non-blocking, never fails startup
     try:
         from hermes_cli.xai_retirement import (
@@ -11115,6 +11136,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "computer-use",
         "config", "cron", "curator", "dashboard", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
+        "journey", "learning", "memory-graph",
         "login", "logout", "logs", "lsp", "mcp", "memory", "migrate",
         "model", "pairing", "plugins", "portal", "postinstall", "profile", "proxy",
         "prompt-size",
@@ -13180,6 +13202,25 @@ Examples:
         logging.getLogger(__name__).debug("curator CLI wiring failed: %s", _exc)
 
     # =========================================================================
+    # journey command — learned skills + memories over time
+    # =========================================================================
+    journey_parser = subparsers.add_parser(
+        "journey",
+        aliases=["learning", "memory-graph"],
+        help="Timeline of learned skills + memories over time",
+        description=(
+            "A terminal timeline of learned skills and memories over time, "
+            "with a playable constellation scrubber."
+        ),
+    )
+    try:
+        from hermes_cli.journey import register_cli as _register_journey_cli
+
+        _register_journey_cli(journey_parser)
+    except Exception as _exc:
+        logging.getLogger(__name__).debug("journey CLI wiring failed: %s", _exc)
+
+    # =========================================================================
     # memory command
     # =========================================================================
     memory_parser = subparsers.add_parser(
@@ -13550,6 +13591,11 @@ Examples:
     sessions_list.add_argument(
         "--limit", type=int, default=20, help="Max sessions to show"
     )
+    sessions_list.add_argument(
+        "--workspace",
+        metavar="NEEDLE",
+        help="Filter by git repo root or project directory",
+    )
 
     sessions_export = sessions_subparsers.add_parser(
         "export", help="Export sessions to a JSONL file"
@@ -13629,13 +13675,50 @@ Examples:
         _exclude = None if _source else ["tool"]
 
         if action == "list":
+            from hermes_state import workspace_key as _workspace_key
+
             sessions = db.list_sessions_rich(
                 source=args.source, exclude_sources=_exclude, limit=args.limit
             )
+            workspace_filter = (getattr(args, "workspace", None) or "").strip()
+            if workspace_filter:
+                needle = workspace_filter.lower()
+                sessions = [
+                    session
+                    for session in sessions
+                    if (key := (_workspace_key(session) or "").lower())
+                    and (
+                        needle in key
+                        or needle == os.path.basename(key.rstrip("/\\"))
+                    )
+                ]
             if not sessions:
                 print("No sessions found.")
                 return
+            has_workspaces = bool(workspace_filter) or any(
+                _workspace_key(session) for session in sessions
+            )
             has_titles = any(s.get("title") for s in sessions)
+            if has_workspaces:
+                if has_titles:
+                    print(f"{'Title':<28} {'Workspace':<18} {'Last Active':<13} {'ID'}")
+                    print("─" * 110)
+                else:
+                    print(f"{'Preview':<38} {'Workspace':<18} {'Last Active':<13} {'Src':<6} {'ID'}")
+                    print("─" * 100)
+                for session in sessions:
+                    key = _workspace_key(session)
+                    workspace = (
+                        os.path.basename(key.rstrip("/\\")) or key if key else "—"
+                    )[:16]
+                    last_active = _relative_time(session.get("last_active"))
+                    if has_titles:
+                        title = (session.get("title") or "—")[:26]
+                        print(f"{title:<28} {workspace:<18} {last_active:<13} {session['id']}")
+                    else:
+                        preview = session.get("preview", "")[:36]
+                        print(f"{preview:<38} {workspace:<18} {last_active:<13} {session['source']:<6} {session['id']}")
+                return
             if has_titles:
                 print(f"{'Title':<32} {'Preview':<40} {'Last Active':<13} {'ID'}")
                 print("─" * 110)

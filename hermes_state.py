@@ -9,7 +9,7 @@ history, and model configuration for CLI and gateway sessions.
 Key design decisions:
 - WAL mode for concurrent readers + one writer (gateway multi-platform)
 - FTS5 virtual table for fast text search across all session messages
-- Compression-triggered session splitting via parent_session_id chains
+- Compression-triggered session splitting via explicitly marked parent chains
 - Batch runner and RL trajectories are NOT stored here (separate systems)
 - Session source tagging ('cli', 'telegram', 'discord', etc.) for filtering
 """
@@ -29,11 +29,23 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 logger = logging.getLogger(__name__)
 
+
+def workspace_key(row: Dict[str, Any]) -> Optional[str]:
+    """Return a session's repo root, falling back to its working directory."""
+    root = (row.get("git_repo_root") or "").strip()
+    if root:
+        return root
+    cwd = (row.get("cwd") or "").strip()
+    return cwd or None
+
+
 T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
+
+COMPRESSION_CONTINUATION = "compression"
 
 # ---------------------------------------------------------------------------
 # WAL-compatibility fallback
@@ -231,6 +243,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     model_config TEXT,
     system_prompt TEXT,
     parent_session_id TEXT,
+    continuation_type TEXT,
     started_at REAL NOT NULL,
     ended_at REAL,
     end_reason TEXT,
@@ -278,7 +291,8 @@ CREATE TABLE IF NOT EXISTS messages (
     codex_message_items TEXT,
     platform_message_id TEXT,
     observed INTEGER DEFAULT 0,
-    active INTEGER NOT NULL DEFAULT 1
+    active INTEGER NOT NULL DEFAULT 1,
+    compacted INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS state_meta (
@@ -307,6 +321,9 @@ CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(ex
 DEFERRED_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_messages_session_active
     ON messages(session_id, active, timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_compression_continuation
+    ON sessions(parent_session_id)
+    WHERE continuation_type = 'compression';
 """
 
 FTS_SQL = """
@@ -861,6 +878,40 @@ class SessionDB:
                     )
                 except sqlite3.OperationalError:
                     pass
+            if current_version < 15:
+                # v15: explicitly identify legacy compression continuations.
+                # Old rows only had parent_session_id + timestamps.  Backfill
+                # conservatively: the earliest child created within 5 seconds
+                # of a compression boundary is the only legacy shape produced
+                # by the synchronous rotation code.  Later branch/delegate
+                # children remain unmarked rather than being guessed into the
+                # compression chain.
+                cursor.execute(
+                    """
+                    UPDATE sessions AS child
+                    SET continuation_type = 'compression'
+                    WHERE child.continuation_type IS NULL
+                      AND child.id = (
+                          SELECT candidate.id
+                          FROM sessions AS candidate
+                          JOIN sessions AS parent
+                            ON parent.id = candidate.parent_session_id
+                          WHERE candidate.parent_session_id = child.parent_session_id
+                            AND candidate.continuation_type IS NULL
+                            AND parent.end_reason = 'compression'
+                            AND parent.ended_at IS NOT NULL
+                            AND candidate.started_at >= parent.ended_at
+                            AND candidate.started_at <= parent.ended_at + 5.0
+                          ORDER BY candidate.started_at, candidate.id
+                          LIMIT 1
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM sessions AS marked
+                          WHERE marked.parent_session_id = child.parent_session_id
+                            AND marked.continuation_type = 'compression'
+                      )
+                    """
+                )
             if current_version < SCHEMA_VERSION and fts_migrations_complete:
                 cursor.execute(
                     "UPDATE schema_version SET version = ?",
@@ -934,6 +985,107 @@ class SessionDB:
         """Create a new session record. Returns the session_id."""
         self._insert_session_row(session_id, source, **kwargs)
         return session_id
+
+    def rotate_session_for_compression(
+        self,
+        parent_session_id: str,
+        child_session_id: str,
+        *,
+        source: str,
+        model: str = None,
+        model_config: Dict[str, Any] = None,
+        system_prompt: str = None,
+        user_id: str = None,
+        cwd: str = None,
+    ) -> str:
+        """Atomically end a parent and create its marked continuation.
+
+        The child marker and parent boundary commit together.  Callers must
+        not publish ``child_session_id`` to in-memory routing before this
+        method returns successfully.
+        """
+        if not parent_session_id or not child_session_id:
+            raise ValueError("compression rotation requires parent and child ids")
+        if parent_session_id == child_session_id:
+            raise ValueError("compression parent and child ids must differ")
+
+        def _do(conn):
+            parent = conn.execute(
+                "SELECT ended_at, end_reason FROM sessions WHERE id = ?",
+                (parent_session_id,),
+            ).fetchone()
+            if parent is None:
+                raise ValueError(f"compression parent not found: {parent_session_id}")
+            ended_at = parent["ended_at"] if hasattr(parent, "keys") else parent[0]
+            end_reason = parent["end_reason"] if hasattr(parent, "keys") else parent[1]
+            if ended_at is not None and end_reason != COMPRESSION_CONTINUATION:
+                raise ValueError(
+                    f"compression parent already ended with reason {end_reason!r}"
+                )
+
+            boundary = ended_at if ended_at is not None else time.time()
+            if ended_at is None:
+                conn.execute(
+                    "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?",
+                    (boundary, COMPRESSION_CONTINUATION, parent_session_id),
+                )
+            conn.execute(
+                """INSERT INTO sessions (
+                       id, source, user_id, model, model_config, system_prompt,
+                       parent_session_id, continuation_type, cwd, started_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    child_session_id,
+                    source,
+                    user_id,
+                    model,
+                    json.dumps(model_config) if model_config else None,
+                    system_prompt,
+                    parent_session_id,
+                    COMPRESSION_CONTINUATION,
+                    cwd,
+                    max(time.time(), float(boundary)),
+                ),
+            )
+            return child_session_id
+
+        return self._execute_write(_do)
+
+    def rollback_compression_rotation(
+        self, parent_session_id: str, child_session_id: str
+    ) -> bool:
+        """Remove an unpublished continuation and reopen its parent.
+
+        This is used when a gateway cannot durably install the compressed
+        child transcript or cannot durably publish its route.  The original
+        parent transcript is preserved, so deleting the derived child is a
+        lossless rollback.
+        """
+        def _do(conn):
+            child = conn.execute(
+                "SELECT parent_session_id, continuation_type FROM sessions WHERE id = ?",
+                (child_session_id,),
+            ).fetchone()
+            if child is None:
+                return False
+            child_parent = child[0]
+            child_type = child[1]
+            if (
+                child_parent != parent_session_id
+                or child_type != COMPRESSION_CONTINUATION
+            ):
+                return False
+            conn.execute("DELETE FROM messages WHERE session_id = ?", (child_session_id,))
+            conn.execute("DELETE FROM sessions WHERE id = ?", (child_session_id,))
+            conn.execute(
+                "UPDATE sessions SET ended_at = NULL, end_reason = NULL "
+                "WHERE id = ? AND end_reason = ?",
+                (parent_session_id, COMPRESSION_CONTINUATION),
+            )
+            return True
+
+        return bool(self._execute_write(_do))
+
     def end_session(self, session_id: str, end_reason: str) -> None:
         """Mark a session as ended.
 
@@ -1509,16 +1661,63 @@ class SessionDB:
 
         return f"{base} #{max_num + 1}"
 
+    def _get_compression_child_id(self, parent_session_id: str) -> Optional[str]:
+        """Return the explicit continuation, with conservative legacy fallback."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM sessions "
+                "WHERE parent_session_id = ? AND continuation_type = ? "
+                "ORDER BY started_at, id LIMIT 1",
+                (parent_session_id, COMPRESSION_CONTINUATION),
+            ).fetchone()
+            if row is None:
+                # Legacy rows predate continuation_type.  The old synchronous
+                # split created its child immediately after ending the parent;
+                # accept only the earliest unmarked child in that narrow
+                # window.  A later branch/delegate can never displace it.
+                row = self._conn.execute(
+                    "SELECT child.id FROM sessions AS child "
+                    "JOIN sessions AS parent ON parent.id = child.parent_session_id "
+                    "WHERE child.parent_session_id = ? "
+                    "  AND child.continuation_type IS NULL "
+                    "  AND parent.end_reason = 'compression' "
+                    "  AND parent.ended_at IS NOT NULL "
+                    "  AND child.started_at >= parent.ended_at "
+                    "  AND child.started_at <= parent.ended_at + 5.0 "
+                    "ORDER BY child.started_at, child.id LIMIT 1",
+                    (parent_session_id,),
+                ).fetchone()
+        if row is None:
+            return None
+        return row["id"] if hasattr(row, "keys") else row[0]
+
+    def _get_compression_parent_id(self, child_session_id: str) -> Optional[str]:
+        """Return a child's compression parent without crossing generic edges."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT parent_session_id, continuation_type "
+                "FROM sessions WHERE id = ?",
+                (child_session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        parent_id = row["parent_session_id"] if hasattr(row, "keys") else row[0]
+        continuation_type = row["continuation_type"] if hasattr(row, "keys") else row[1]
+        if not parent_id:
+            return None
+        if continuation_type == COMPRESSION_CONTINUATION:
+            return parent_id
+        if continuation_type is not None:
+            return None
+        # For legacy rows, require this child to be the conservative forward
+        # candidate.  This keeps forward and backward traversal identical.
+        return parent_id if self._get_compression_child_id(parent_id) == child_session_id else None
+
     def get_compression_tip(self, session_id: str) -> Optional[str]:
         """Walk the compression-continuation chain forward and return the tip.
 
-        A compression continuation is a child session where:
-        1. The parent's ``end_reason = 'compression'``
-        2. The child was created AFTER the parent was ended (started_at >= ended_at)
-
-        The second condition distinguishes compression continuations from
-        delegate subagents or branch children, which can also have a
-        ``parent_session_id`` but were created while the parent was still live.
+        New continuations carry ``continuation_type='compression'``. Legacy
+        rows use the conservative fallback in :meth:`_get_compression_child_id`.
 
         Returns the session_id of the latest continuation in the chain, or the
         input ``session_id`` if it isn't part of a compression chain (or if the
@@ -1528,22 +1727,52 @@ class SessionDB:
         # Bound the walk defensively — compression chains this deep are
         # pathological and shouldn't happen in practice. 100 = plenty.
         for _ in range(100):
-            with self._lock:
-                cursor = self._conn.execute(
-                    "SELECT id FROM sessions "
-                    "WHERE parent_session_id = ? "
-                    "  AND started_at >= ("
-                    "      SELECT ended_at FROM sessions "
-                    "      WHERE id = ? AND end_reason = 'compression'"
-                    "  ) "
-                    "ORDER BY started_at DESC LIMIT 1",
-                    (current, current),
-                )
-                row = cursor.fetchone()
-            if row is None:
+            child = self._get_compression_child_id(current)
+            if child is None:
                 return current
-            current = row["id"]
+            current = child
         return current
+
+    def get_compression_lineage(self, session_id: str) -> List[str]:
+        """Return the compression-only lineage containing ``session_id``.
+
+        Generic ``parent_session_id`` edges also represent branches and
+        delegated agents. Explicit continuation metadata is authoritative;
+        conservative legacy fallback is identical in both directions.
+        """
+        if not session_id:
+            return []
+
+        current = session_id
+        seen = {current}
+        ancestors: List[str] = []
+        # Walk to the compression root first so callers at a continuation can
+        # still address delegations captured against an older ancestor.
+        for _ in range(100):
+            parent = self._get_compression_parent_id(current)
+            if parent is None:
+                break
+            if not parent or parent in seen:
+                break
+            ancestors.append(parent)
+            seen.add(parent)
+            current = parent
+
+        lineage = list(reversed(ancestors))
+        lineage.append(session_id)
+        current = session_id
+        # Continue forward using exactly the existing compression-child
+        # discriminator.  Branch and delegate children are never candidates.
+        for _ in range(100):
+            child = self._get_compression_child_id(current)
+            if child is None:
+                break
+            if not child or child in seen:
+                break
+            lineage.append(child)
+            seen.add(child)
+            current = child
+        return lineage
 
     def list_sessions_rich(
         self,
@@ -1627,9 +1856,8 @@ class SessionDB:
             #
             # The CTE seeds from rows the outer WHERE admits (roots + branch
             # children), then recursively joins forward through
-            # compression-continuation edges using the same criteria as
-            # get_compression_tip (parent.end_reason='compression' AND
-            # child.started_at >= parent.ended_at).
+            # compression-continuation edges using explicit metadata, with
+            # the same conservative legacy fallback as get_compression_tip.
             query = f"""
                 WITH RECURSIVE chain(root_id, cur_id) AS (
                     SELECT s.id, s.id FROM sessions s {where_sql}
@@ -1639,7 +1867,31 @@ class SessionDB:
                     JOIN sessions parent ON parent.id = c.cur_id
                     JOIN sessions child ON child.parent_session_id = c.cur_id
                     WHERE parent.end_reason = 'compression'
-                      AND child.started_at >= parent.ended_at
+                      AND (
+                          child.continuation_type = 'compression'
+                          OR (
+                              child.continuation_type IS NULL
+                              AND child.started_at >= parent.ended_at
+                              AND child.started_at <= parent.ended_at + 5.0
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM sessions marked
+                                  WHERE marked.parent_session_id = parent.id
+                                    AND marked.continuation_type = 'compression'
+                              )
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM sessions earlier
+                                  WHERE earlier.parent_session_id = parent.id
+                                    AND earlier.continuation_type IS NULL
+                                    AND earlier.started_at >= parent.ended_at
+                                    AND earlier.started_at <= parent.ended_at + 5.0
+                                    AND (
+                                        earlier.started_at < child.started_at
+                                        OR (earlier.started_at = child.started_at
+                                            AND earlier.id < child.id)
+                                    )
+                              )
+                          )
+                      )
                 ),
                 chain_max AS (
                     SELECT
@@ -1923,12 +2175,101 @@ class SessionDB:
 
         return self._execute_write(_do)
 
+    def _insert_message_rows(self, conn, session_id: str, messages: List[Dict[str, Any]]) -> tuple[int, int]:
+        """Insert *messages* as fresh active rows for *session_id*.
+
+        Shared by :meth:`replace_messages` (delete-then-insert) and
+        :meth:`archive_and_compact` (soft-archive-then-insert). Runs inside the
+        caller's write transaction (takes the live ``conn``). Returns
+        ``(active_count, active_tool_call_count)``. Does NOT touch sessions.* counters
+        — the caller owns that, since the two flows reconcile counts differently.
+        """
+        now_ts = time.time()
+        active_count = 0
+        tool_calls_total = 0
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            tool_calls = msg.get("tool_calls")
+            message_timestamp = now_ts
+            if msg.get("timestamp") is not None:
+                try:
+                    ts_value = msg.get("timestamp")
+                    if hasattr(ts_value, "timestamp"):
+                        message_timestamp = float(ts_value.timestamp())
+                    else:
+                        message_timestamp = float(ts_value)
+                except (TypeError, ValueError):
+                    logger.debug("Ignoring invalid explicit message timestamp: %r", msg.get("timestamp"))
+            reasoning_details = msg.get("reasoning_details") if role == "assistant" else None
+            codex_reasoning_items = (
+                msg.get("codex_reasoning_items") if role == "assistant" else None
+            )
+            codex_message_items = (
+                msg.get("codex_message_items") if role == "assistant" else None
+            )
+            reasoning_details_json = (
+                json.dumps(reasoning_details) if reasoning_details else None
+            )
+            codex_items_json = (
+                json.dumps(codex_reasoning_items) if codex_reasoning_items else None
+            )
+            codex_message_items_json = (
+                json.dumps(codex_message_items) if codex_message_items else None
+            )
+            tool_calls_json = json.dumps(tool_calls) if tool_calls else None
+            # Accept either `platform_message_id` (new explicit name) or
+            # `message_id` (yuanbao's existing convention on message dicts).
+            platform_msg_id = (
+                msg.get("platform_message_id") or msg.get("message_id")
+            )
+
+            conn.execute(
+                """INSERT INTO messages (session_id, role, content, tool_call_id,
+                   tool_calls, tool_name, timestamp, token_count, finish_reason,
+                   reasoning, reasoning_content, reasoning_details, codex_reasoning_items,
+                   codex_message_items, platform_message_id, observed, active, compacted)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    role,
+                    self._encode_content(msg.get("content")),
+                    msg.get("tool_call_id"),
+                    tool_calls_json,
+                    msg.get("tool_name"),
+                    message_timestamp,
+                    msg.get("token_count"),
+                    msg.get("finish_reason"),
+                    msg.get("reasoning") if role == "assistant" else None,
+                    msg.get("reasoning_content") if role == "assistant" else None,
+                    reasoning_details_json,
+                    codex_items_json,
+                    codex_message_items_json,
+                    platform_msg_id,
+                    1 if msg.get("observed") else 0,
+                    0 if msg.get("active") in (0, False) else 1,
+                    1 if msg.get("compacted") in (1, True) else 0,
+                ),
+            )
+            is_active = msg.get("active") not in (0, False)
+            if is_active:
+                active_count += 1
+            if is_active and tool_calls is not None:
+                tool_calls_total += (
+                    len(tool_calls) if isinstance(tool_calls, list) else 1
+                )
+            now_ts = max(now_ts + 1e-6, message_timestamp + 1e-6)
+        return active_count, tool_calls_total
+
     def replace_messages(self, session_id: str, messages: List[Dict[str, Any]]) -> None:
         """Atomically replace every message for a session.
 
         Used by transcript-rewrite flows such as /retry, /undo, and /compress.
         The delete + reinsert sequence must commit as one transaction so a
         mid-rewrite failure does not leave SQLite with a partial transcript.
+
+        DESTRUCTIVE: the prior rows are DELETEd (and drop out of the FTS index).
+        For compaction that must preserve the pre-compaction transcript under
+        the same id, use :meth:`archive_and_compact` instead.
         """
 
         def _do(conn):
@@ -1939,75 +2280,38 @@ class SessionDB:
                 "UPDATE sessions SET message_count = 0, tool_call_count = 0 WHERE id = ?",
                 (session_id,),
             )
-
-            now_ts = time.time()
-            total_messages = 0
-            total_tool_calls = 0
-            for msg in messages:
-                role = msg.get("role", "unknown")
-                tool_calls = msg.get("tool_calls")
-                reasoning_details = msg.get("reasoning_details") if role == "assistant" else None
-                codex_reasoning_items = (
-                    msg.get("codex_reasoning_items") if role == "assistant" else None
-                )
-                codex_message_items = (
-                    msg.get("codex_message_items") if role == "assistant" else None
-                )
-
-                reasoning_details_json = (
-                    json.dumps(reasoning_details) if reasoning_details else None
-                )
-                codex_items_json = (
-                    json.dumps(codex_reasoning_items) if codex_reasoning_items else None
-                )
-                codex_message_items_json = (
-                    json.dumps(codex_message_items) if codex_message_items else None
-                )
-                tool_calls_json = json.dumps(tool_calls) if tool_calls else None
-                # Accept either `platform_message_id` (new explicit name) or
-                # `message_id` (yuanbao's existing convention on message dicts).
-                platform_msg_id = (
-                    msg.get("platform_message_id") or msg.get("message_id")
-                )
-
-                conn.execute(
-                    """INSERT INTO messages (session_id, role, content, tool_call_id,
-                       tool_calls, tool_name, timestamp, token_count, finish_reason,
-                       reasoning, reasoning_content, reasoning_details, codex_reasoning_items,
-                       codex_message_items, platform_message_id, observed)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        session_id,
-                        role,
-                        self._encode_content(msg.get("content")),
-                        msg.get("tool_call_id"),
-                        tool_calls_json,
-                        msg.get("tool_name"),
-                        now_ts,
-                        msg.get("token_count"),
-                        msg.get("finish_reason"),
-                        msg.get("reasoning") if role == "assistant" else None,
-                        msg.get("reasoning_content") if role == "assistant" else None,
-                        reasoning_details_json,
-                        codex_items_json,
-                        codex_message_items_json,
-                        platform_msg_id,
-                        1 if msg.get("observed") else 0,
-                    ),
-                )
-                total_messages += 1
-                if tool_calls is not None:
-                    total_tool_calls += (
-                        len(tool_calls) if isinstance(tool_calls, list) else 1
-                    )
-                now_ts += 1e-6
-
+            total_messages, total_tool_calls = self._insert_message_rows(
+                conn, session_id, messages
+            )
             conn.execute(
                 "UPDATE sessions SET message_count = ?, tool_call_count = ? WHERE id = ?",
                 (total_messages, total_tool_calls, session_id),
             )
 
         self._execute_write(_do)
+
+    def archive_and_compact(
+        self, session_id: str, compacted_messages: List[Dict[str, Any]]
+    ) -> int:
+        """Soft-archive live turns and install a compacted live transcript."""
+
+        def _do(conn):
+            conn.execute(
+                "UPDATE messages SET active = 0, compacted = 1 "
+                "WHERE session_id = ? AND active = 1",
+                (session_id,),
+            )
+            inserted, tool_calls_total = self._insert_message_rows(
+                conn, session_id, compacted_messages
+            )
+            conn.execute(
+                "UPDATE sessions SET message_count = ?, tool_call_count = ? WHERE id = ?",
+                (inserted, tool_calls_total, session_id),
+            )
+            return inserted
+
+        return self._execute_write(_do)
+
 
     def get_messages(
         self, session_id: str, include_inactive: bool = False
@@ -2243,68 +2547,37 @@ class SessionDB:
         }
 
     def resolve_resume_session_id(self, session_id: str) -> str:
-        """Redirect a resume target to the descendant session that holds the messages.
+        """Resolve a resume target to its latest populated compression continuation.
 
-        Context compression ends the current session and forks a new child session
-        (linked via ``parent_session_id``). The flush cursor is reset, so the
-        child is where new messages actually land — the parent ends up with
-        ``message_count = 0`` rows unless messages had already been flushed to
-        it before compression. See #15000.
-
-        This helper walks ``parent_session_id`` forward from ``session_id`` and
-        returns the first descendant in the chain that has at least one message
-        row. If the original session already has messages, or no descendant
-        has any, the original ``session_id`` is returned unchanged.
-
-        The chain is always walked via the child whose ``started_at`` is
-        latest; that matches the single-chain shape that compression creates.
-        A depth cap (32) guards against accidental loops in malformed data.
+        Preserved pre-compression parents intentionally keep their messages,
+        so message presence on the requested row is not evidence that it is
+        still the live target.  Follow only compression-continuation edges;
+        generic branch and delegate children must never capture a resume.
         """
         if not session_id:
             return session_id
 
-        with self._lock:
-            # If this session already has messages, nothing to redirect.
+        try:
+            lineage = self.get_compression_lineage(session_id)
+            start = lineage.index(session_id)
+        except (Exception, ValueError):
+            return session_id
+
+        # Prefer the deepest populated continuation.  If a crash left the tip
+        # empty, resume the last durable continuation instead of falling back
+        # to an older preserved parent or crossing into an unrelated child.
+        for candidate in reversed(lineage[start + 1 :]):
             try:
-                row = self._conn.execute(
-                    "SELECT 1 FROM messages WHERE session_id = ? LIMIT 1",
-                    (session_id,),
-                ).fetchone()
+                with self._lock:
+                    row = self._conn.execute(
+                        "SELECT 1 FROM messages "
+                        "WHERE session_id = ? AND active = 1 LIMIT 1",
+                        (candidate,),
+                    ).fetchone()
             except Exception:
                 return session_id
             if row is not None:
-                return session_id
-
-            # Walk descendants: at each step, pick the most-recently-started
-                # child session; stop once we find one with messages.
-            current = session_id
-            seen = {current}
-            for _ in range(32):
-                try:
-                    child_row = self._conn.execute(
-                        "SELECT id FROM sessions "
-                        "WHERE parent_session_id = ? "
-                        "ORDER BY started_at DESC, id DESC LIMIT 1",
-                        (current,),
-                    ).fetchone()
-                except Exception:
-                    return session_id
-                if child_row is None:
-                    return session_id
-                child_id = child_row["id"] if hasattr(child_row, "keys") else child_row[0]
-                if not child_id or child_id in seen:
-                    return session_id
-                seen.add(child_id)
-                try:
-                    msg_row = self._conn.execute(
-                        "SELECT 1 FROM messages WHERE session_id = ? LIMIT 1",
-                        (child_id,),
-                    ).fetchone()
-                except Exception:
-                    return session_id
-                if msg_row is not None:
-                    return child_id
-                current = child_id
+                return candidate
         return session_id
 
     def get_messages_as_conversation(
@@ -2720,8 +2993,12 @@ class SessionDB:
         ignores ``sort``. The trigram CJK path honours ``sort`` like the main
         FTS5 path.
 
-        Rewound (``active=0``) rows are excluded by default. Pass
-        ``include_inactive=True`` to search every row.
+        Rewound (``active=0``, ``compacted=0``) rows are excluded by default —
+        the user took those back. Compaction-archived rows (``active=0``,
+        ``compacted=1``) ARE included by default: they were summarized away from
+        the live context but remain part of the conversation's record, so the
+        pre-compaction transcript stays discoverable after in-place compaction
+        (#38763). Pass ``include_inactive=True`` to search every row regardless.
         """
         if not self._fts_enabled:
             return []
@@ -2756,7 +3033,10 @@ class SessionDB:
         where_clauses = ["messages_fts MATCH ?"]
         params: list = [query]
         if not include_inactive:
-            where_clauses.append("m.active = 1")
+            # Live rows (active=1) AND compaction-archived rows (compacted=1)
+            # are discoverable; only rewind/undo rows (active=0, compacted=0)
+            # are hidden. See archive_and_compact() / #38763.
+            where_clauses.append("(m.active = 1 OR m.compacted = 1)")
 
         if source_filter is not None:
             source_placeholders = ",".join("?" for _ in source_filter)
@@ -2837,7 +3117,7 @@ class SessionDB:
                 tri_where = ["messages_fts_trigram MATCH ?"]
                 tri_params: list = [trigram_query]
                 if not include_inactive:
-                    tri_where.append("m.active = 1")
+                    tri_where.append("(m.active = 1 OR m.compacted = 1)")
                 if source_filter is not None:
                     tri_where.append(f"s.source IN ({','.join('?' for _ in source_filter)})")
                     tri_params.extend(source_filter)
@@ -3087,7 +3367,7 @@ class SessionDB:
         session = self.get_session(session_id)
         if not session:
             return None
-        messages = self.get_messages(session_id)
+        messages = self.get_messages(session_id, include_inactive=True)
         return {**session, "messages": messages}
 
     def export_all(self, source: str = None) -> List[Dict[str, Any]]:
@@ -3098,9 +3378,249 @@ class SessionDB:
         sessions = self.search_sessions(source=source, limit=100000)
         results = []
         for session in sessions:
-            messages = self.get_messages(session["id"])
+            messages = self.get_messages(session["id"], include_inactive=True)
             results.append({**session, "messages": messages})
         return results
+
+    @staticmethod
+    def _json_text_or_none(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value)
+        except (TypeError, ValueError):
+            return str(value)
+
+    @staticmethod
+    def _float_or_none(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _int_or_default(value: Any, default: int = 0) -> int:
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _reasoning_json_value(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
+
+    def import_sessions(self, sessions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Import sessions exported by :meth:`export_session` or ``export_all``.
+
+        Existing session IDs are skipped. Imported child sessions keep their
+        parent only when that parent already exists or is included in the same
+        import payload; otherwise the child is detached so partial imports don't
+        fail foreign-key validation. Gateway routing, handoff, rewind, and other
+        live runtime state are intentionally reset: this restores conversation
+        history, not ownership of a live channel or process.
+        """
+        if not isinstance(sessions, list):
+            raise ValueError("sessions must be a list")
+        if len(sessions) > 500:
+            raise ValueError("sessions must contain at most 500 entries")
+
+        normalized: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        for index, raw in enumerate(sessions):
+            if not isinstance(raw, dict):
+                errors.append({"index": index, "error": "session must be an object"})
+                continue
+            session_id = str(raw.get("id") or "").strip()
+            if not session_id:
+                errors.append({"index": index, "error": "session id is required"})
+                continue
+            if session_id in seen_ids:
+                errors.append(
+                    {"index": index, "session_id": session_id, "error": "duplicate session id"}
+                )
+                continue
+            messages = raw.get("messages") or []
+            if not isinstance(messages, list):
+                errors.append(
+                    {"index": index, "session_id": session_id, "error": "messages must be a list"}
+                )
+                continue
+            if any(not isinstance(msg, dict) for msg in messages):
+                errors.append(
+                    {
+                        "index": index,
+                        "session_id": session_id,
+                        "error": "messages must contain only objects",
+                    }
+                )
+                continue
+            seen_ids.add(session_id)
+            normalized.append({"index": index, "session": raw, "messages": messages})
+
+        if errors:
+            return {
+                "ok": False,
+                "imported": 0,
+                "skipped": 0,
+                "detached": 0,
+                "errors": errors,
+            }
+
+        def _do(conn):
+            imported_ids: List[str] = []
+            skipped_ids: List[str] = []
+            parent_updates: List[tuple[str, str, Optional[str]]] = []
+            detached = 0
+
+            for item in normalized:
+                raw = item["session"]
+                messages = item["messages"]
+                session_id = str(raw.get("id") or "").strip()
+                exists = conn.execute(
+                    "SELECT 1 FROM sessions WHERE id = ? LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+                if exists:
+                    skipped_ids.append(session_id)
+                    continue
+
+                started_at = self._float_or_none(raw.get("started_at"))
+                if started_at is None:
+                    started_at = time.time()
+                archived = 1 if raw.get("archived") else 0
+
+                conn.execute(
+                    """INSERT INTO sessions (
+                           id, source, user_id, model, model_config, system_prompt,
+                           parent_session_id, continuation_type, started_at,
+                           ended_at, end_reason,
+                           message_count, tool_call_count, input_tokens, output_tokens,
+                           cache_read_tokens, cache_write_tokens, reasoning_tokens,
+                           cwd,
+                           billing_provider, billing_base_url, billing_mode,
+                           estimated_cost_usd, actual_cost_usd, cost_status, cost_source,
+                           pricing_version, title, api_call_count, archived
+                       )
+                       VALUES (
+                           :id, :source, :user_id, :model, :model_config,
+                           :system_prompt, NULL, NULL, :started_at, :ended_at,
+                           :end_reason, 0, 0, :input_tokens, :output_tokens,
+                           :cache_read_tokens, :cache_write_tokens,
+                           :reasoning_tokens, :cwd,
+                           :billing_provider, :billing_base_url, :billing_mode,
+                           :estimated_cost_usd, :actual_cost_usd, :cost_status,
+                           :cost_source, :pricing_version, :title,
+                           :api_call_count, :archived
+                       )""",
+                    {
+                        "id": session_id,
+                        "source": str(raw.get("source") or "import"),
+                        "user_id": raw.get("user_id"),
+                        "model": raw.get("model"),
+                        "model_config": self._json_text_or_none(raw.get("model_config")),
+                        "system_prompt": raw.get("system_prompt"),
+                        "started_at": started_at,
+                        "ended_at": self._float_or_none(raw.get("ended_at")),
+                        "end_reason": raw.get("end_reason"),
+                        "input_tokens": self._int_or_default(raw.get("input_tokens")),
+                        "output_tokens": self._int_or_default(raw.get("output_tokens")),
+                        "cache_read_tokens": self._int_or_default(
+                            raw.get("cache_read_tokens")
+                        ),
+                        "cache_write_tokens": self._int_or_default(
+                            raw.get("cache_write_tokens")
+                        ),
+                        "reasoning_tokens": self._int_or_default(
+                            raw.get("reasoning_tokens")
+                        ),
+                        "cwd": raw.get("cwd"),
+                        "billing_provider": raw.get("billing_provider"),
+                        "billing_base_url": raw.get("billing_base_url"),
+                        "billing_mode": raw.get("billing_mode"),
+                        "estimated_cost_usd": self._float_or_none(
+                            raw.get("estimated_cost_usd")
+                        ),
+                        "actual_cost_usd": self._float_or_none(
+                            raw.get("actual_cost_usd")
+                        ),
+                        "cost_status": raw.get("cost_status"),
+                        "cost_source": raw.get("cost_source"),
+                        "pricing_version": raw.get("pricing_version"),
+                        "title": raw.get("title"),
+                        "api_call_count": self._int_or_default(raw.get("api_call_count")),
+                        "archived": archived,
+                    },
+                )
+
+                sanitized_messages: List[Dict[str, Any]] = []
+                for msg in messages:
+                    clean = dict(msg)
+                    for key in (
+                        "reasoning_details",
+                        "codex_reasoning_items",
+                        "codex_message_items",
+                    ):
+                        clean[key] = self._reasoning_json_value(clean.get(key))
+                    sanitized_messages.append(clean)
+
+                total_messages, total_tool_calls = self._insert_message_rows(
+                    conn,
+                    session_id,
+                    sanitized_messages,
+                )
+                conn.execute(
+                    "UPDATE sessions SET message_count = ?, tool_call_count = ? WHERE id = ?",
+                    (total_messages, total_tool_calls, session_id),
+                )
+
+                parent_id = str(raw.get("parent_session_id") or "").strip()
+                if parent_id and parent_id != session_id:
+                    continuation_type = raw.get("continuation_type")
+                    if continuation_type != COMPRESSION_CONTINUATION:
+                        continuation_type = None
+                    parent_updates.append(
+                        (session_id, parent_id, continuation_type)
+                    )
+                imported_ids.append(session_id)
+
+            for session_id, parent_id, continuation_type in parent_updates:
+                parent_exists = conn.execute(
+                    "SELECT 1 FROM sessions WHERE id = ? LIMIT 1",
+                    (parent_id,),
+                ).fetchone()
+                if parent_exists:
+                    conn.execute(
+                        "UPDATE sessions SET parent_session_id = ?, "
+                        "continuation_type = ? WHERE id = ?",
+                        (parent_id, continuation_type, session_id),
+                    )
+                else:
+                    detached += 1
+
+            return {
+                "ok": True,
+                "imported": len(imported_ids),
+                "skipped": len(skipped_ids),
+                "detached": detached,
+                "imported_ids": imported_ids,
+                "skipped_ids": skipped_ids,
+                "errors": [],
+            }
+
+        return self._execute_write(_do)
 
     def clear_messages(self, session_id: str) -> None:
         """Delete all messages for a session and reset its counters."""

@@ -308,6 +308,7 @@ async def test_session_hygiene_messages_stay_in_originating_topic(monkeypatch, t
         last_instance = None
 
         def __init__(self, **kwargs):
+            self.init_kwargs = kwargs
             self.model = kwargs.get("model")
             self.session_id = kwargs.get("session_id", "fake-session")
             self._print_fn = None
@@ -336,7 +337,7 @@ async def test_session_hygiene_messages_stay_in_originating_topic(monkeypatch, t
     runner._voice_mode = {}
     runner.hooks = SimpleNamespace(emit=AsyncMock(), loaded_hooks=False)
     runner.session_store = MagicMock()
-    runner.session_store.get_or_create_session.return_value = SessionEntry(
+    session_entry = SessionEntry(
         session_key="agent:main:telegram:group:-1001:17585",
         session_id="sess-1",
         created_at=datetime.now(),
@@ -344,14 +345,22 @@ async def test_session_hygiene_messages_stay_in_originating_topic(monkeypatch, t
         platform=Platform.TELEGRAM,
         chat_type="group",
     )
+    runner.session_store.get_or_create_session.return_value = session_entry
     runner.session_store.load_transcript.return_value = _make_history(6, content_size=400)
     runner.session_store.has_any_sessions.return_value = True
     runner.session_store.rewrite_transcript = MagicMock()
+    runner.session_store.publish_compression_continuation.side_effect = (
+        lambda _key, parent, child: (
+            setattr(session_entry, "session_id", child) or session_entry
+            if session_entry.session_id == parent
+            else (_ for _ in ()).throw(AssertionError("route changed"))
+        )
+    )
     runner.session_store.append_to_transcript = MagicMock()
     runner._running_agents = {}
     runner._pending_messages = {}
     runner._pending_approvals = {}
-    runner._session_db = None
+    runner._session_db = MagicMock(name="durable_session_db")
     runner._is_user_authorized = lambda _source: True
     runner._set_session_env = lambda _context: None
     runner._run_agent = AsyncMock(
@@ -386,6 +395,9 @@ async def test_session_hygiene_messages_stay_in_originating_topic(monkeypatch, t
 
     result = await runner._handle_message(event)
 
+    assert FakeCompressAgent.last_instance.init_kwargs["session_db"] is runner._session_db
+    assert FakeCompressAgent.last_instance._last_flushed_db_idx == 6
+
     assert result == "ok"
     # Compression warnings are no longer sent to users — compression
     # happens silently with server-side logging only.
@@ -393,6 +405,125 @@ async def test_session_hygiene_messages_stay_in_originating_topic(monkeypatch, t
     assert FakeCompressAgent.last_instance is not None
     FakeCompressAgent.last_instance.shutdown_memory_provider.assert_called_once()
     FakeCompressAgent.last_instance.close.assert_called_once()
+
+
+@pytest.mark.parametrize("failure_stage", ["sqlite", "route_file"])
+@pytest.mark.asyncio
+async def test_session_hygiene_retains_parent_route_on_persistence_failure(
+    monkeypatch, tmp_path, failure_stage
+):
+    fake_dotenv = types.ModuleType("dotenv")
+    fake_dotenv.load_dotenv = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "dotenv", fake_dotenv)
+
+    class FakeCompressAgent:
+        last_instance = None
+
+        def __init__(self, **kwargs):
+            self.model = kwargs.get("model")
+            self.session_id = kwargs.get("session_id", "fake-session")
+            self._print_fn = None
+            self.shutdown_memory_provider = MagicMock()
+            self.close = MagicMock()
+            self.context_compressor = SimpleNamespace(
+                _last_compress_aborted=False,
+                _last_summary_error=None,
+                _last_aux_model_failure_model=None,
+            )
+            type(self).last_instance = self
+
+        def _compress_context(self, messages, *_args, **_kwargs):
+            self.session_id = f"{self.session_id}_compressed"
+            return ([{"role": "assistant", "content": "compressed"}], None)
+
+    fake_run_agent = types.ModuleType("run_agent")
+    fake_run_agent.AIAgent = FakeCompressAgent
+    monkeypatch.setitem(sys.modules, "run_agent", fake_run_agent)
+
+    gateway_run = importlib.import_module("gateway.run")
+    GatewayRunner = gateway_run.GatewayRunner
+    adapter = HygieneCaptureAdapter()
+    runner = object.__new__(GatewayRunner)
+    runner.config = GatewayConfig(
+        platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="fake-token")}
+    )
+    runner.adapters = {Platform.TELEGRAM: adapter}
+    runner._voice_mode = {}
+    runner.hooks = SimpleNamespace(emit=AsyncMock(), loaded_hooks=False)
+    runner.session_store = MagicMock()
+    session_entry = SessionEntry(
+        session_key="agent:main:telegram:group:-1001:17585",
+        session_id="sess-1",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="group",
+    )
+    session_entry.last_prompt_tokens = 77
+    runner.session_store.get_or_create_session.return_value = session_entry
+    runner.session_store.load_transcript.return_value = _make_history(
+        6, content_size=400
+    )
+    runner.session_store.has_any_sessions.return_value = True
+    if failure_stage == "sqlite":
+        runner.session_store.rewrite_transcript.side_effect = OSError(
+            "simulated SQLite write failure"
+        )
+    else:
+        runner.session_store.rewrite_transcript = MagicMock()
+        runner.session_store.publish_compression_continuation.side_effect = OSError(
+            "simulated sessions.json fsync failure"
+        )
+    runner.session_store.append_to_transcript = MagicMock()
+    runner._running_agents = {}
+    runner._pending_messages = {}
+    runner._pending_approvals = {}
+    runner._session_db = MagicMock(name="durable_session_db")
+    runner._is_user_authorized = lambda _source: True
+    runner._set_session_env = lambda _context: None
+    runner._run_agent = AsyncMock(
+        return_value={
+            "final_response": "ok",
+            "messages": [],
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 0,
+        }
+    )
+
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(
+        gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "fake"}
+    )
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length",
+        lambda *_args, **_kwargs: 100,
+    )
+    monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "795544298")
+    event = MessageEvent(
+        text="hello",
+        source=SessionSource(
+            platform=Platform.TELEGRAM,
+            chat_id="-1001",
+            chat_type="group",
+            thread_id="17585",
+            user_id="12345",
+        ),
+        message_id="1",
+    )
+
+    result = await runner._handle_message(event)
+
+    assert result == "ok"
+    assert session_entry.session_id == "sess-1"
+    assert session_entry.last_prompt_tokens == 77
+    assert FakeCompressAgent.last_instance.session_id == "sess-1"
+    runner._session_db.rollback_compression_rotation.assert_called_once_with(
+        "sess-1", "sess-1_compressed"
+    )
+    assert adapter.sent == []
+    if failure_stage == "sqlite":
+        runner.session_store.publish_compression_continuation.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -445,7 +576,7 @@ async def test_session_hygiene_warns_user_when_compression_aborts(monkeypatch, t
     runner._voice_mode = {}
     runner.hooks = SimpleNamespace(emit=AsyncMock(), loaded_hooks=False)
     runner.session_store = MagicMock()
-    runner.session_store.get_or_create_session.return_value = SessionEntry(
+    session_entry = SessionEntry(
         session_key="agent:main:telegram:group:-1001:17585",
         session_id="sess-1",
         created_at=datetime.now(),
@@ -453,9 +584,17 @@ async def test_session_hygiene_warns_user_when_compression_aborts(monkeypatch, t
         platform=Platform.TELEGRAM,
         chat_type="group",
     )
+    runner.session_store.get_or_create_session.return_value = session_entry
     runner.session_store.load_transcript.return_value = _make_history(6, content_size=400)
     runner.session_store.has_any_sessions.return_value = True
     runner.session_store.rewrite_transcript = MagicMock()
+    runner.session_store.publish_compression_continuation.side_effect = (
+        lambda _key, parent, child: (
+            setattr(session_entry, "session_id", child) or session_entry
+            if session_entry.session_id == parent
+            else (_ for _ in ()).throw(AssertionError("route changed"))
+        )
+    )
     runner.session_store.append_to_transcript = MagicMock()
     runner._running_agents = {}
     runner._pending_messages = {}
@@ -565,7 +704,7 @@ async def test_session_hygiene_informs_user_when_aux_model_fails_but_recovers(mo
     runner._voice_mode = {}
     runner.hooks = SimpleNamespace(emit=AsyncMock(), loaded_hooks=False)
     runner.session_store = MagicMock()
-    runner.session_store.get_or_create_session.return_value = SessionEntry(
+    session_entry = SessionEntry(
         session_key="agent:main:telegram:group:-1001:17585",
         session_id="sess-1",
         created_at=datetime.now(),
@@ -573,9 +712,17 @@ async def test_session_hygiene_informs_user_when_aux_model_fails_but_recovers(mo
         platform=Platform.TELEGRAM,
         chat_type="group",
     )
+    runner.session_store.get_or_create_session.return_value = session_entry
     runner.session_store.load_transcript.return_value = _make_history(6, content_size=400)
     runner.session_store.has_any_sessions.return_value = True
     runner.session_store.rewrite_transcript = MagicMock()
+    runner.session_store.publish_compression_continuation.side_effect = (
+        lambda _key, parent, child: (
+            setattr(session_entry, "session_id", child) or session_entry
+            if session_entry.session_id == parent
+            else (_ for _ in ()).throw(AssertionError("route changed"))
+        )
+    )
     runner.session_store.append_to_transcript = MagicMock()
     runner._running_agents = {}
     runner._pending_messages = {}
@@ -653,6 +800,14 @@ async def test_session_hygiene_honors_configurable_hard_message_limit(
     fake_dotenv.load_dotenv = lambda *args, **kwargs: None
     monkeypatch.setitem(sys.modules, "dotenv", fake_dotenv)
 
+    from hermes_state import SessionDB
+
+    history = _make_history(12, content_size=40)
+    db = SessionDB(db_path=tmp_path / "state.db")
+    db.create_session(session_id="sess-1", source="telegram")
+    for message in history:
+        db.append_message("sess-1", message["role"], message["content"])
+
     class FakeCompressAgent:
         last_instance = None
 
@@ -662,11 +817,13 @@ async def test_session_hygiene_honors_configurable_hard_message_limit(
             self._print_fn = None
             self.shutdown_memory_provider = MagicMock()
             self.close = MagicMock()
+            self._last_compaction_in_place = True
             type(self).last_instance = self
 
         def _compress_context(self, messages, *_args, **_kwargs):
-            self.session_id = f"{self.session_id}_compressed"
-            return ([{"role": "assistant", "content": "compressed"}], None)
+            compressed = [{"role": "assistant", "content": "compressed"}]
+            db.archive_and_compact("sess-1", compressed)
+            return (compressed, None)
 
     fake_run_agent = types.ModuleType("run_agent")
     fake_run_agent.AIAgent = FakeCompressAgent
@@ -702,9 +859,9 @@ async def test_session_hygiene_honors_configurable_hard_message_limit(
     )
     # 12 messages: below 400 default → no compression without override,
     # but above the configured limit of 10 → should compress.
-    runner.session_store.load_transcript.return_value = _make_history(12, content_size=40)
+    runner.session_store.load_transcript.return_value = history
     runner.session_store.has_any_sessions.return_value = True
-    runner.session_store.rewrite_transcript = MagicMock()
+    runner.session_store.rewrite_transcript = MagicMock(side_effect=db.replace_messages)
     runner.session_store.append_to_transcript = MagicMock()
     runner._running_agents = {}
     runner._pending_messages = {}
@@ -754,6 +911,12 @@ async def test_session_hygiene_honors_configurable_hard_message_limit(
         "Expected hygiene compression to fire when message count (12) "
         "exceeds configured hygiene_hard_message_limit (10)"
     )
+    # In-place compression already soft-archived the original rows. Hygiene
+    # must not follow it with rewrite_transcript(), which is a hard delete.
+    runner.session_store.rewrite_transcript.assert_not_called()
+    all_rows = db.get_messages("sess-1", include_inactive=True)
+    assert len(all_rows) == len(history) + 1
+    assert sum(not row["active"] for row in all_rows) == len(history)
 
 
 @pytest.mark.asyncio

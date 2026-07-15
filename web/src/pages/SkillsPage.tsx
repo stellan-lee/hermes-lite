@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Package,
   Search,
@@ -16,6 +17,7 @@ import {
   Filter,
   Download,
   RefreshCw,
+  Sparkles,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { SkillInfo, ToolsetInfo, SkillHubResult } from "@/lib/api";
@@ -96,6 +98,15 @@ function toolsetIcon(
 /* ------------------------------------------------------------------ */
 
 export default function SkillsPage() {
+  const navigate = useNavigate();
+  const openLearn = useCallback(() => {
+    const description = window.prompt(
+      "What should Hermes learn from? Describe a local path, URL, pasted notes, or this conversation.",
+    )?.trim();
+    if (description) {
+      navigate(`/chat?learn=${encodeURIComponent(description.replace(/\s*\n\s*/g, " "))}`);
+    }
+  }, [navigate]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [toolsets, setToolsets] = useState<ToolsetInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -390,11 +401,16 @@ export default function SkillsPage() {
                         )
                       : t.skills.all}
                   </CardTitle>
-                  <Badge tone="secondary" className="text-xs">
-                    {t.skills.skillCount
-                      .replace("{count}", String(activeSkills.length))
-                      .replace("{s}", activeSkills.length !== 1 ? "s" : "")}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" outlined onClick={openLearn} prefix={<Sparkles />}>
+                      Learn a skill
+                    </Button>
+                    <Badge tone="secondary" className="text-xs">
+                      {t.skills.skillCount
+                        .replace("{count}", String(activeSkills.length))
+                        .replace("{s}", activeSkills.length !== 1 ? "s" : "")}
+                    </Badge>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="px-4 pb-4">

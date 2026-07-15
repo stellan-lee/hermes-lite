@@ -480,6 +480,7 @@ class TestPreflightCompression:
         # First pass must have received the full oversized history.
         assert mock_compress.call_count >= 1, "Preflight compression never ran"
         first_call_messages = mock_compress.call_args_list[0].args[0]
+        assert agent._last_flushed_db_idx == len(big_history)
         assert len(first_call_messages) >= 40, (
             f"First preflight pass should see the full history, got "
             f"{len(first_call_messages)} messages"

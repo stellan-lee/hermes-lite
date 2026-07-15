@@ -342,6 +342,53 @@ class TestWebServerEndpoints:
         resp = self.client.patch("/api/sessions/does-not-exist", json={"title": "x"})
         assert resp.status_code == 404
 
+    def test_import_sessions_endpoint_imports_exported_json(self):
+        from hermes_state import SessionDB
+
+        payload = {
+            "id": "imported-web-session",
+            "source": "cli",
+            "title": "Imported from dashboard",
+            "started_at": 100.0,
+            "ended_at": 110.0,
+            "end_reason": "complete",
+            "messages": [
+                {"role": "user", "content": "hello", "timestamp": 101.0},
+                {"role": "assistant", "content": "hi", "timestamp": 102.0},
+            ],
+        }
+
+        resp = self.client.post("/api/sessions/import", json={"sessions": [payload]})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["imported"] == 1
+        assert data["skipped"] == 0
+
+        db = SessionDB()
+        try:
+            session = db.get_session("imported-web-session")
+            assert session["title"] == "Imported from dashboard"
+            assert session["message_count"] == 2
+            assert [m["content"] for m in db.get_messages("imported-web-session")] == [
+                "hello",
+                "hi",
+            ]
+        finally:
+            db.close()
+
+        duplicate = self.client.post("/api/sessions/import", json={"sessions": [payload]})
+        assert duplicate.status_code == 200
+        assert duplicate.json()["skipped_ids"] == ["imported-web-session"]
+
+        invalid = self.client.post(
+            "/api/sessions/import",
+            json={"sessions": [{"source": "cli", "messages": []}]},
+        )
+        assert invalid.status_code == 400
+        assert invalid.json()["detail"]["errors"] == [
+            {"index": 0, "error": "session id is required"}
+        ]
+
     def test_archive_session_via_patch(self):
         """PATCH archived=true soft-hides a session; archived=false restores it."""
         from hermes_state import SessionDB
@@ -1281,6 +1328,44 @@ class TestNewEndpoints:
     def test_cron_job_not_found(self):
         resp = self.client.get("/api/cron/jobs/nonexistent-id")
         assert resp.status_code == 404
+
+    # --- Automation Blueprints ---
+
+    def test_cron_blueprints_list(self):
+        resp = self.client.get("/api/cron/blueprints")
+        assert resp.status_code == 200
+        blueprints = resp.json()["blueprints"]
+        assert len(blueprints) >= 1
+        first = blueprints[0]
+        assert "fields" in first
+        deliver = next(field for field in first["fields"] if field["name"] == "deliver")
+        assert "all" in deliver["options"]
+        assert first["command"].startswith("/blueprint")
+        assert first["appUrl"].startswith("hermes://")
+
+    def test_blueprint_instantiate_creates_job(self):
+        resp = self.client.post(
+            "/api/cron/blueprints/instantiate",
+            json={"blueprint": "morning-brief", "values": {"time": "07:30", "deliver": "local"}},
+        )
+        assert resp.status_code == 200
+        job = resp.json()
+        assert (job.get("schedule_display") or "").strip() == "30 7 * * *" or \
+            (job.get("schedule", {}) or {}).get("expr") == "30 7 * * *"
+
+    def test_blueprint_instantiate_unknown_404(self):
+        resp = self.client.post(
+            "/api/cron/blueprints/instantiate",
+            json={"blueprint": "does-not-exist", "values": {}},
+        )
+        assert resp.status_code == 404
+
+    def test_blueprint_instantiate_bad_value_422(self):
+        resp = self.client.post(
+            "/api/cron/blueprints/instantiate",
+            json={"blueprint": "morning-brief", "values": {"time": "99:99"}},
+        )
+        assert resp.status_code == 422
 
     # --- Profiles ---
 

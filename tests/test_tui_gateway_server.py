@@ -947,6 +947,27 @@ def test_notification_event_routing_by_session_key(monkeypatch):
     assert server._notification_event_belongs_elsewhere(mine, {"session_key": "ghost"}) is False
 
 
+def test_async_notification_requires_exact_live_session_ownership(monkeypatch):
+    agent_a = type("Agent", (), {"session_id": "parent-a"})()
+    agent_b = type("Agent", (), {"session_id": "parent-b"})()
+    session_a = _session(session_key="parent-a", agent=agent_a)
+    session_b = _session(session_key="parent-b", agent=agent_b)
+    monkeypatch.setattr(server, "_sessions", {"ui-a": session_a, "ui-b": session_b})
+    event = {
+        "type": "async_delegation",
+        "origin_ui_session_id": "ui-a",
+        "parent_session_id": "parent-a",
+        "session_key": "parent-a",
+    }
+
+    assert server._notification_event_belongs_elsewhere(session_a, event) is False
+    assert server._notification_event_belongs_elsewhere(session_b, event) is True
+    assert server._notification_event_belongs_elsewhere(
+        session_b,
+        {**event, "origin_ui_session_id": "", "parent_session_id": "missing"},
+    ) is True
+
+
 def test_session_create_does_not_persist_empty_row(monkeypatch):
     """session.create must NOT eagerly write a DB row.
 
@@ -5456,3 +5477,210 @@ def test_notification_poller_requeues_when_busy(monkeypatch):
         assert requeued["session_id"] == "proc_busy_test"
     finally:
         server._sessions.pop("sid_busy", None)
+
+
+def _async_tui_event(delegation_id="deleg-tui"):
+    return {
+        "type": "async_delegation",
+        "delegation_id": delegation_id,
+        "session_key": "session-key",
+        "parent_session_id": "session-key",
+        "origin_ui_session_id": "sid_async",
+        "goal": "background work",
+        "status": "completed",
+        "summary": "done",
+    }
+
+
+def _prepare_immediate_tui_turn(monkeypatch, *, result=None, persist=True):
+    class FakeDB:
+        def __init__(self):
+            self.messages = []
+
+        def get_messages_as_conversation(self, _session_id, **_kwargs):
+            return list(self.messages)
+
+    db = FakeDB()
+
+    class Agent:
+        session_id = "session-key"
+        model = "test-model"
+        provider = "test"
+        base_url = ""
+        api_key = ""
+        _session_db = db
+
+        def run_conversation(self, prompt, **kwargs):
+            turn_result = result or {
+                "final_response": "processed",
+                "messages": [
+                    {"role": "user", "content": str(prompt)},
+                    {"role": "assistant", "content": "processed"},
+                ],
+            }
+            if persist and isinstance(turn_result, dict):
+                db.messages = list(turn_result.get("messages") or [])
+            return turn_result
+
+    class ImmediateThread:
+        def __init__(self, target=None, daemon=None, args=()):
+            self.target = target
+            self.args = args
+
+        def start(self):
+            self.target(*self.args)
+
+    session = _session(agent=Agent())
+    monkeypatch.setattr(server.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "make_stream_renderer", lambda cols: None)
+    monkeypatch.setattr(server, "render_message", lambda raw, cols: None)
+    monkeypatch.setattr(server, "_get_usage", lambda agent: {})
+    monkeypatch.setattr(server, "_session_info", lambda agent, session: {})
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+    return session
+
+
+def test_tui_shutdown_drain_acknowledges_after_success(monkeypatch):
+    from tools import async_delegation
+    from tools.process_registry import process_registry
+
+    session = _prepare_immediate_tui_turn(monkeypatch)
+    server._sessions["sid_async"] = session
+    queue = __import__("queue").Queue()
+    monkeypatch.setattr(process_registry, "completion_queue", queue)
+    acknowledgements = []
+    monkeypatch.setattr(
+        async_delegation,
+        "mark_completion_delivered",
+        lambda ident: acknowledgements.append(ident) or True,
+    )
+    queue.put(_async_tui_event("deleg-shutdown"))
+    stop = threading.Event()
+    stop.set()
+    try:
+        server._notification_poller_loop(stop, "sid_async", session)
+        assert acknowledgements == ["deleg-shutdown"]
+    finally:
+        server._sessions.pop("sid_async", None)
+
+
+def test_tui_live_poller_does_not_ack_failed_turn(monkeypatch):
+    from tools import async_delegation
+    from tools.process_registry import process_registry
+
+    failed = {
+        "final_response": "",
+        "messages": [],
+        "failed": True,
+        "error": "synthetic turn failed",
+    }
+    session = _prepare_immediate_tui_turn(monkeypatch, result=failed)
+    server._sessions["sid_async"] = session
+    queue = __import__("queue").Queue()
+    monkeypatch.setattr(process_registry, "completion_queue", queue)
+    acknowledgements = []
+    monkeypatch.setattr(
+        async_delegation,
+        "mark_completion_delivered",
+        lambda ident: acknowledgements.append(ident) or True,
+    )
+    queue.put(_async_tui_event("deleg-failed"))
+    stop = threading.Event()
+
+    original_run = session["agent"].run_conversation
+
+    def run_and_stop(*args, **kwargs):
+        stop.set()
+        return original_run(*args, **kwargs)
+
+    session["agent"].run_conversation = run_and_stop
+    try:
+        server._notification_poller_loop(stop, "sid_async", session)
+        assert acknowledgements == []
+    finally:
+        server._sessions.pop("sid_async", None)
+
+
+def test_tui_live_poller_leaves_completion_pending_when_db_append_failed(monkeypatch):
+    from tools import async_delegation
+    from tools.process_registry import process_registry
+
+    session = _prepare_immediate_tui_turn(monkeypatch, persist=False)
+    server._sessions["sid_async"] = session
+    queue = __import__("queue").Queue()
+    monkeypatch.setattr(process_registry, "completion_queue", queue)
+    acknowledgements = []
+    monkeypatch.setattr(
+        async_delegation,
+        "mark_completion_delivered",
+        lambda ident: acknowledgements.append(ident) or True,
+    )
+    queue.put(_async_tui_event("deleg-db-failed"))
+    stop = threading.Event()
+    original_run = session["agent"].run_conversation
+
+    def run_and_stop(*args, **kwargs):
+        stop.set()
+        return original_run(*args, **kwargs)
+
+    session["agent"].run_conversation = run_and_stop
+    try:
+        server._notification_poller_loop(stop, "sid_async", session)
+        assert acknowledgements == []
+    finally:
+        server._sessions.pop("sid_async", None)
+
+
+def test_tui_mid_turn_drain_acknowledges_nested_success(monkeypatch):
+    from tools import async_delegation
+    from tools.process_registry import process_registry
+
+    session = _prepare_immediate_tui_turn(monkeypatch)
+    server._sessions["sid_async"] = session
+    acknowledgements = []
+    monkeypatch.setattr(
+        async_delegation,
+        "mark_completion_delivered",
+        lambda ident: acknowledgements.append(ident) or True,
+    )
+    drains = iter([
+        [(_async_tui_event("deleg-mid-turn"), "synthetic completion")],
+        [],
+    ])
+    monkeypatch.setattr(
+        process_registry, "drain_notifications", lambda: next(drains, [])
+    )
+    try:
+        server._run_prompt_submit("rid", "sid_async", session, "parent turn")
+        assert acknowledgements == ["deleg-mid-turn"]
+    finally:
+        server._sessions.pop("sid_async", None)
+
+
+def test_tui_async_owner_accepts_only_verified_compression_descendant(tmp_path):
+    from hermes_state import SessionDB
+
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("captured-parent", source="tui")
+    db.rotate_session_for_compression(
+        "captured-parent", "compression-child", source="tui"
+    )
+    db.create_session(
+        "later-delegate", source="tui", parent_session_id="captured-parent"
+    )
+    agent = types.SimpleNamespace(
+        session_id="compression-child",
+        _session_db=db,
+    )
+    session = _session(agent=agent, session_key="compression-child")
+    server._sessions["sid_async"] = session
+    try:
+        event = _async_tui_event()
+        event["parent_session_id"] = "captured-parent"
+        assert server._async_notification_owned_by_session(session, event)
+        assert db.get_compression_tip("captured-parent") == "compression-child"
+        event["parent_session_id"] = "unrelated-parent"
+        assert not server._async_notification_owned_by_session(session, event)
+    finally:
+        server._sessions.pop("sid_async", None)

@@ -153,6 +153,7 @@ _LONG_HANDLERS = frozenset(
         "session.compress",
         "session.resume",
         "shell.exec",
+        "learning.frames",
         "skills.manage",
         "slash.exec",
     }
@@ -1482,6 +1483,14 @@ def _get_usage(agent) -> dict:
             usage["context_max"] = ctx_max
             usage["context_percent"] = max(0, min(100, round(ctx_used / ctx_max * 100)))
         usage["compressions"] = getattr(comp, "compression_count", 0) or 0
+    # Live count of background/async subagents still running (delegate_task
+    # batches + background single delegations). Mirrors the classic CLI status
+    # bar's ⛓ indicator; sourced from the same async_delegation registry.
+    try:
+        from tools.async_delegation import active_count as _async_active_count
+        usage["active_subagents"] = _async_active_count()
+    except Exception:
+        pass
     try:
         from agent.usage_pricing import CanonicalUsage, estimate_usage_cost
 
@@ -3505,6 +3514,21 @@ def _(rid, params: dict) -> dict:
     session = _sessions.pop(sid, None)
     if not session:
         return _ok(rid, {"closed": False})
+    try:
+        from tools.async_delegation import interrupt_for_session
+
+        interrupt_for_session(
+            session_key=str(session.get("session_key") or ""),
+            origin_ui_session_id=str(sid or ""),
+            parent_session_id=str(
+                getattr(session.get("agent"), "session_id", None)
+                or session.get("session_key")
+                or ""
+            ),
+            reason="tui_close",
+        )
+    except Exception:
+        pass
     _finalize_session(session)
     try:
         from tools.approval import unregister_gateway_notify
@@ -3939,6 +3963,8 @@ def _notification_event_belongs_elsewhere(session: dict, evt: dict) -> bool:
     and global/system events (empty ``session_key``) return False so the
     current poller still handles them rather than losing them.
     """
+    if evt.get("type") == "async_delegation":
+        return not _async_notification_owned_by_session(session, evt)
     evt_key = str(evt.get("session_key") or "")
     if not evt_key:
         return False
@@ -3955,6 +3981,115 @@ def _notification_event_belongs_elsewhere(session: dict, evt: dict) -> bool:
         s is not session and str(s.get("session_key") or "") == evt_key
         for s in snapshot
     )
+
+
+def _async_notification_owned_by_session(session: dict, evt: dict) -> bool:
+    """Match every supplied async ownership identifier to this live session."""
+    origin_ui = str(evt.get("origin_ui_session_id") or "")
+    parent = str(evt.get("parent_session_id") or "")
+    if not origin_ui and not parent:
+        return False
+    live_sid = next((sid for sid, value in _sessions.items() if value is session), "")
+    if origin_ui and origin_ui != live_sid:
+        return False
+    if parent:
+        agent_sid = str(getattr(session.get("agent"), "session_id", None) or "")
+        session_key = str(session.get("session_key") or "")
+        current_ids = {value for value in (agent_sid, session_key) if value}
+        if parent not in current_ids:
+            # A legacy compression may have rotated the durable id after the
+            # delegation was launched. Verify the continuation in SQLite;
+            # origin_ui alone is not enough because /new reuses the same tab.
+            db = getattr(session.get("agent"), "_session_db", None) or _db
+            if db is None or not hasattr(db, "get_compression_tip"):
+                return False
+            try:
+                tip = str(db.get_compression_tip(parent) or "")
+            except Exception:
+                return False
+            if tip not in current_ids:
+                return False
+    return True
+
+
+def _async_notification_has_live_owner(evt: dict) -> bool:
+    return any(
+        _async_notification_owned_by_session(session, evt)
+        for session in list(_sessions.values())
+    )
+
+
+def _durable_completion_callback(evt: dict):
+    """Acknowledge a durable delegation only after its synthetic turn succeeds."""
+    if evt.get("type") != "async_delegation":
+        return None
+    delegation_id = str(evt.get("delegation_id") or "")
+    if not delegation_id:
+        return None
+
+    def _complete(success: bool) -> None:
+        if not success:
+            return
+        from tools.async_delegation import mark_completion_delivered
+
+        mark_completion_delivered(delegation_id)
+
+    return _complete
+
+
+def _durable_persistence_snapshot(agent) -> Optional[list]:
+    """Read the complete durable lineage before a synthetic turn."""
+    db = getattr(agent, "_session_db", None) or _db
+    session_id = str(getattr(agent, "session_id", None) or "")
+    if db is None or not session_id or not hasattr(
+        db, "get_messages_as_conversation"
+    ):
+        return None
+    try:
+        return db.get_messages_as_conversation(
+            session_id,
+            include_ancestors=True,
+            include_inactive=True,
+        )
+    except Exception:
+        return None
+
+
+def _durable_turn_persisted(
+    agent, result: Any, submitted: Any, before: Optional[list]
+) -> bool:
+    """Verify the synthetic user/assistant pair reached the durable store."""
+    if (
+        before is None
+        or not isinstance(result, dict)
+        or not isinstance(submitted, str)
+    ):
+        return False
+    response = result.get("final_response")
+    if not isinstance(response, str) or not response:
+        return False
+    persisted = _durable_persistence_snapshot(agent)
+    if persisted is None:
+        return False
+
+    def _pair_count(messages: list) -> int:
+        user_seen = False
+        count = 0
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") == "user" and message.get("content") == submitted:
+                user_seen = True
+            elif (
+                user_seen
+                and message.get("role") == "assistant"
+                and message.get("content") == response
+            ):
+                count += 1
+                user_seen = False
+        return count
+
+    return _pair_count(persisted) > _pair_count(before)
 
 
 def _notification_poller_loop(
@@ -3985,8 +4120,9 @@ def _notification_poller_loop(
         # session's poller happened to wake first (Ben's "reported in a
         # different session" bug). Leave foreign events for their owner.
         if _notification_event_belongs_elsewhere(session, evt):
-            process_registry.completion_queue.put(evt)
-            time.sleep(0.1)
+            if evt.get("type") != "async_delegation" or _async_notification_has_live_owner(evt):
+                process_registry.completion_queue.put(evt)
+                time.sleep(0.1)
             continue
 
         _evt_sid = evt.get("session_id", "")
@@ -4008,7 +4144,13 @@ def _notification_poller_loop(
         rid = f"__notif__{int(time.time() * 1000)}"
         try:
             _emit("message.start", sid)
-            _run_prompt_submit(rid, sid, session, text)
+            _run_prompt_submit(
+                rid,
+                sid,
+                session,
+                text,
+                on_complete=_durable_completion_callback(evt),
+            )
         except Exception as exc:
             print(
                 f"[tui_gateway] notification poller dispatch failed: "
@@ -4028,7 +4170,8 @@ def _notification_poller_loop(
         except Exception:
             break
         if _notification_event_belongs_elsewhere(session, evt):
-            deferred.append(evt)
+            if evt.get("type") != "async_delegation" or _async_notification_has_live_owner(evt):
+                deferred.append(evt)
             continue
         _evt_sid = evt.get("session_id", "")
         if evt.get("type") == "completion" and process_registry.is_completion_consumed(_evt_sid):
@@ -4048,7 +4191,13 @@ def _notification_poller_loop(
         rid = f"__notif__{int(time.time() * 1000)}"
         try:
             _emit("message.start", sid)
-            _run_prompt_submit(rid, sid, session, text)
+            _run_prompt_submit(
+                rid,
+                sid,
+                session,
+                text,
+                on_complete=_durable_completion_callback(evt),
+            )
         except Exception as exc:
             print(
                 f"[tui_gateway] notification poller dispatch failed: "
@@ -4075,7 +4224,14 @@ def _start_notification_poller(sid: str, session: dict) -> threading.Event:
     return stop
 
 
-def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
+def _run_prompt_submit(
+    rid,
+    sid: str,
+    session: dict,
+    text: Any,
+    *,
+    on_complete=None,
+) -> None:
     with session["history_lock"]:
         history = list(session["history"])
         history_version = int(session.get("history_version", 0))
@@ -4090,6 +4246,11 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
         approval_token = None
         session_tokens = []
         goal_followup = None  # set by the post-turn goal hook below
+        turn_succeeded = False
+        completion_succeeded = False
+        durable_before = None
+        result = None
+        run_message: Any = None
         try:
             from tools.approval import (
                 reset_current_session_key,
@@ -4209,6 +4370,8 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                     run_kwargs["task_id"] = session["session_key"]
             except (TypeError, ValueError):
                 pass
+            if on_complete is not None:
+                durable_before = _durable_persistence_snapshot(agent)
             result = agent.run_conversation(run_message, **run_kwargs)
 
             last_reasoning = None
@@ -4286,6 +4449,11 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
             with session["history_lock"]:
                 _clear_inflight_turn(session)
             _emit("message.complete", sid, payload)
+            turn_succeeded = status == "complete" and status_note is None
+            if turn_succeeded and on_complete is not None:
+                completion_succeeded = _durable_turn_persisted(
+                    agent, result, run_message, durable_before
+                )
 
             # ── /goal continuation (Ralph-style loop) ─────────────────
             # After every TUI turn, if a /goal is active, ask the judge
@@ -4425,6 +4593,15 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                 session["last_active"] = time.time()
                 _clear_inflight_turn(session)
             _emit("session.info", sid, _session_info(agent, session))
+            if on_complete is not None:
+                try:
+                    on_complete(completion_succeeded)
+                except Exception as callback_exc:
+                    print(
+                        f"[tui_gateway] completion callback failed: "
+                        f"{type(callback_exc).__name__}: {callback_exc}",
+                        file=sys.stderr,
+                    )
 
         # Chain a goal-continuation turn if the judge said so. We do
         # this AFTER the finally releases session["running"], so the
@@ -4458,6 +4635,10 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
             from tools.process_registry import process_registry
 
             for _evt, synth in process_registry.drain_notifications():
+                if _notification_event_belongs_elsewhere(session, _evt):
+                    if _evt.get("type") != "async_delegation" or _async_notification_has_live_owner(_evt):
+                        process_registry.completion_queue.put(_evt)
+                    continue
                 with session["history_lock"]:
                     if session.get("running"):
                         process_registry.completion_queue.put(_evt)
@@ -4465,7 +4646,13 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                     session["running"] = True
                 try:
                     _emit("message.start", sid)
-                    _run_prompt_submit(rid, sid, session, synth)
+                    _run_prompt_submit(
+                        rid,
+                        sid,
+                        session,
+                        synth,
+                        on_complete=_durable_completion_callback(_evt),
+                    )
                 except Exception as _n_exc:
                     print(
                         f"[tui_gateway] completion notification dispatch failed: "
@@ -5878,6 +6065,15 @@ def _(rid, params: dict) -> dict:
         if not arg:
             return _err(rid, 4004, "usage: /queue <prompt>")
         return _ok(rid, {"type": "send", "message": arg})
+
+    if name == "learn":
+        # Open-ended: build the standards-guided prompt and submit it as a
+        # normal agent turn. The live agent gathers whatever the user
+        # described (dirs, URLs, this conversation, pasted text) with its own
+        # tools and authors the skill via skill_manage. Works on any backend.
+        from agent.learn_prompt import build_learn_prompt
+
+        return _ok(rid, {"type": "send", "message": build_learn_prompt(arg)})
 
     if name == "retry":
         if not session:
@@ -7846,6 +8042,68 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 4016, f"unknown cron action: {action}")
     except Exception as e:
         return _err(rid, 5023, str(e))
+
+
+@method("learning.frames")
+def _(rid, params: dict) -> dict:
+    """Pre-render the learning timeline for the TUI journey overlay."""
+    try:
+        cols = int(params.get("cols", 80) or 80)
+        rows = int(params.get("rows", 24) or 24)
+        frames = int(params.get("frames", 48) or 48)
+    except (TypeError, ValueError):
+        cols, rows, frames = 80, 24, 48
+    try:
+        from agent.learning_graph import build_learning_graph
+        from agent.learning_graph_render import render_frames
+
+        payload = build_learning_graph()
+        return _ok(
+            rid,
+            render_frames(
+                payload,
+                cols=max(20, cols),
+                rows=max(10, rows),
+                frames=frames,
+            ),
+        )
+    except Exception as exc:
+        return _err(rid, 5000, f"learning.frames failed: {exc}")
+
+
+@method("learning.detail")
+def _(rid, params: dict) -> dict:
+    try:
+        from agent.learning_mutations import node_detail
+
+        return _ok(rid, node_detail(str(params.get("id", ""))))
+    except Exception as exc:
+        return _err(rid, 5000, f"learning.detail failed: {exc}")
+
+
+@method("learning.delete")
+def _(rid, params: dict) -> dict:
+    try:
+        from agent.learning_mutations import delete_node
+
+        return _ok(rid, delete_node(str(params.get("id", ""))))
+    except Exception as exc:
+        return _err(rid, 5000, f"learning.delete failed: {exc}")
+
+
+@method("learning.edit")
+def _(rid, params: dict) -> dict:
+    try:
+        from agent.learning_mutations import edit_node
+
+        return _ok(
+            rid,
+            edit_node(
+                str(params.get("id", "")), str(params.get("content", ""))
+            ),
+        )
+    except Exception as exc:
+        return _err(rid, 5000, f"learning.edit failed: {exc}")
 
 
 @method("skills.manage")

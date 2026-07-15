@@ -88,6 +88,64 @@ except Exception:
 import threading
 import queue
 
+
+class _PendingProcessNotification:
+    """Queue item that keeps a durable completion id attached to its turn."""
+
+    __slots__ = ("text", "delegation_id")
+
+    def __init__(self, text: str, delegation_id: str = ""):
+        self.text = text
+        self.delegation_id = delegation_id
+
+
+def _queue_cli_process_notifications(
+    pending_input, current_session_id: str, session_db=None
+) -> int:
+    """Drain notifications owned by the current classic-CLI session."""
+    from tools.process_registry import process_registry
+
+    queued = 0
+    for evt, synth in process_registry.drain_notifications():
+        if evt.get("type") == "async_delegation":
+            parent = str(evt.get("parent_session_id") or "")
+            current = str(current_session_id or "")
+            if not parent or not current:
+                continue
+            if parent != current:
+                # Compression rotates the durable session id while preserving
+                # the CLI conversation. Accept only a verified compression
+                # continuation; generic parent edges also include branches and
+                # delegated children and must not grant ownership.
+                if session_db is None or not hasattr(
+                    session_db, "get_compression_tip"
+                ):
+                    continue
+                try:
+                    tip = str(session_db.get_compression_tip(parent) or "")
+                except Exception:
+                    continue
+                if tip != current:
+                    continue
+            pending_input.put(
+                _PendingProcessNotification(
+                    synth, str(evt.get("delegation_id") or "")
+                )
+            )
+        else:
+            pending_input.put(synth)
+        queued += 1
+    return queued
+
+
+def _acknowledge_completion_after_turn(delegation_id: str, turn_succeeded: bool) -> bool:
+    """Acknowledge only after the synthetic turn completed and persisted."""
+    if not delegation_id or not turn_succeeded:
+        return False
+    from tools.async_delegation import mark_completion_delivered
+
+    return mark_completion_delivered(delegation_id)
+
 def CanonicalUsage(*args, **kwargs):
     from agent.usage_pricing import CanonicalUsage as _CanonicalUsage
 
@@ -946,6 +1004,11 @@ def _run_cleanup():
 
     try:
         _cleanup_all_terminals()
+    except Exception:
+        pass
+    try:
+        from tools.async_delegation import interrupt_all as _interrupt_async_delegations
+        _interrupt_async_delegations(reason="CLI shutdown")
     except Exception:
         pass
     try:
@@ -3364,6 +3427,7 @@ class HermesCLI:
         # the next submitted input, whether it's the selection or anything
         # else). See #34584.
         self._pending_resume_sessions = None
+        self._pending_agent_seed = None
         self._secret_state = None
         self._secret_deadline = 0
         self._spinner_text: str = ""  # thinking spinner text for TUI
@@ -3637,6 +3701,7 @@ class HermesCLI:
             "compressions": 0,
             "active_background_tasks": 0,
             "active_background_processes": 0,
+            "active_background_subagents": 0,
         }
 
         # Count live /background tasks. The dict entry is removed in the
@@ -3654,6 +3719,16 @@ class HermesCLI:
         try:
             from tools.process_registry import process_registry
             snapshot["active_background_processes"] = process_registry.count_running()
+        except Exception:
+            pass
+
+        # Count live background/async subagents (delegate_task batches and
+        # background single delegations tracked by tools.async_delegation).
+        # active_count() iterates an in-memory records dict under a lock —
+        # cheap and only counts records still in the "running" state.
+        try:
+            from tools.async_delegation import active_count as _async_active_count
+            snapshot["active_background_subagents"] = _async_active_count()
         except Exception:
             pass
 
@@ -3908,6 +3983,9 @@ class HermesCLI:
                 bg_proc_count = snapshot.get("active_background_processes", 0)
                 if bg_proc_count:
                     parts.append(f"⚙ {bg_proc_count}")
+                bg_subagent_count = snapshot.get("active_background_subagents", 0)
+                if bg_subagent_count:
+                    parts.append(f"⛓ {bg_subagent_count}")
                 parts.append(duration_label)
                 if yolo_active:
                     parts.append("⚠ YOLO")
@@ -3930,6 +4008,9 @@ class HermesCLI:
             bg_proc_count = snapshot.get("active_background_processes", 0)
             if bg_proc_count:
                 parts.append(f"⚙ {bg_proc_count}")
+            bg_subagent_count = snapshot.get("active_background_subagents", 0)
+            if bg_subagent_count:
+                parts.append(f"⛓ {bg_subagent_count}")
             parts.append(duration_label)
             prompt_elapsed = snapshot.get("prompt_elapsed")
             if prompt_elapsed:
@@ -3972,6 +4053,7 @@ class HermesCLI:
                     compressions = snapshot.get("compressions", 0)
                     bg_count = snapshot.get("active_background_tasks", 0)
                     bg_proc_count = snapshot.get("active_background_processes", 0)
+                    bg_subagent_count = snapshot.get("active_background_subagents", 0)
                     frags = [
                         ("class:status-bar", " ⚕ "),
                         ("class:status-bar-strong", snapshot["model_short"]),
@@ -3987,6 +4069,9 @@ class HermesCLI:
                     if bg_proc_count:
                         frags.append(("class:status-bar-dim", " · "))
                         frags.append(("class:status-bar-strong", f"⚙ {bg_proc_count}"))
+                    if bg_subagent_count:
+                        frags.append(("class:status-bar-dim", " · "))
+                        frags.append(("class:status-bar-strong", f"⛓ {bg_subagent_count}"))
                     frags.extend([
                         ("class:status-bar-dim", " · "),
                         ("class:status-bar-dim", duration_label),
@@ -4007,6 +4092,7 @@ class HermesCLI:
                     compressions = snapshot.get("compressions", 0)
                     bg_count = snapshot.get("active_background_tasks", 0)
                     bg_proc_count = snapshot.get("active_background_processes", 0)
+                    bg_subagent_count = snapshot.get("active_background_subagents", 0)
                     frags = [
                         ("class:status-bar", " ⚕ "),
                         ("class:status-bar-strong", snapshot["model_short"]),
@@ -4026,6 +4112,9 @@ class HermesCLI:
                     if bg_proc_count:
                         frags.append(("class:status-bar-dim", " │ "))
                         frags.append(("class:status-bar-strong", f"⚙ {bg_proc_count}"))
+                    if bg_subagent_count:
+                        frags.append(("class:status-bar-dim", " │ "))
+                        frags.append(("class:status-bar-strong", f"⛓ {bg_subagent_count}"))
                     frags.extend([
                         ("class:status-bar-dim", " │ "),
                         ("class:status-bar-dim", duration_label),
@@ -5769,13 +5858,20 @@ class HermesCLI:
         processes = process_registry.list_sessions()
         running = [p for p in processes if p.get("status") == "running"]
 
-        if not running:
-            print("  No running background processes.")
+        from tools.async_delegation import active_count, interrupt_all
+
+        async_running = active_count()
+        if not running and not async_running:
+            print("  No running background processes or subagents.")
             return
 
-        print(f"  Stopping {len(running)} background process(es)...")
+        print(
+            f"  Stopping {len(running)} background process(es) and "
+            f"{async_running} background subagent(s)..."
+        )
         killed = process_registry.kill_all()
-        print(f"  ✅ Stopped {killed} process(es).")
+        interrupted = interrupt_all(reason="/stop")
+        print(f"  ✅ Stopped {killed} process(es) and {interrupted} subagent(s).")
 
     def _handle_agents_command(self):
         """Handle /agents — show background processes and agent status."""
@@ -5793,6 +5889,18 @@ class HermesCLI:
 
         if finished:
             _cprint(f"  Recently finished: {len(finished)}")
+
+        try:
+            from tools.async_delegation import list_async_delegations
+
+            delegations = list_async_delegations()
+            async_running = [d for d in delegations if d.get("status") == "running"]
+            _cprint(f"  Background subagents: {len(async_running)}")
+            for d in async_running:
+                goal = str(d.get("goal") or "")[:80]
+                _cprint(f"    {d.get('delegation_id', '?')} · {goal}")
+        except Exception:
+            pass
 
         agent_running = getattr(self, "_agent_running", False)
         _cprint(f"  Agent: {'running' if agent_running else 'idle'}")
@@ -6543,6 +6651,16 @@ class HermesCLI:
             self._notify_session_boundary("on_session_finalize")
 
         old_session_id = self.session_id
+        if old_session_id:
+            try:
+                from tools.async_delegation import interrupt_for_session
+
+                interrupt_for_session(
+                    parent_session_id=old_session_id,
+                    reason="cli_new_session",
+                )
+            except Exception:
+                pass
         if self._session_db and old_session_id:
             try:
                 self._session_db.end_session(old_session_id, "new_session")
@@ -6867,6 +6985,15 @@ class HermesCLI:
             return
 
         old_session_id = self.session_id
+        try:
+            from tools.async_delegation import interrupt_for_session
+
+            interrupt_for_session(
+                parent_session_id=old_session_id,
+                reason="cli_resume_other",
+            )
+        except Exception:
+            pass
         # End current session
         try:
             self._session_db.end_session(self.session_id, "resumed_other")
@@ -7041,6 +7168,16 @@ class HermesCLI:
 
         # Save the current session's state before branching
         parent_session_id = self.session_id
+
+        try:
+            from tools.async_delegation import interrupt_for_session
+
+            interrupt_for_session(
+                parent_session_id=parent_session_id,
+                reason="cli_branch",
+            )
+        except Exception:
+            pass
 
         # End the old session
         try:
@@ -8488,6 +8625,42 @@ class HermesCLI:
         print(f"(._.) Unknown cron command: {subcommand}")
         print("  Available: list, add, edit, pause, resume, run, remove")
 
+    def _handle_suggestions_command(self, cmd: str):
+        """Review, accept, or dismiss suggested automations."""
+        import shlex
+
+        try:
+            tokens = shlex.split(cmd)[1:] if cmd else []
+        except ValueError:
+            tokens = (cmd or "").split()[1:]
+        try:
+            from hermes_cli.suggestions_cmd import handle_suggestions_command
+
+            output = handle_suggestions_command(" ".join(tokens))
+        except Exception as exc:
+            output = f"Suggestions command failed: {exc}"
+        self._console_print(output)
+
+    def _handle_blueprint_command(self, cmd: str):
+        """List or instantiate a parameterized automation blueprint."""
+        import shlex
+
+        try:
+            tokens = shlex.split(cmd)[1:] if cmd else []
+        except ValueError:
+            tokens = (cmd or "").split()[1:]
+        args = " ".join(shlex.quote(token) for token in tokens)
+        try:
+            from hermes_cli.blueprint_cmd import handle_blueprint_command
+
+            result = handle_blueprint_command(args)
+        except Exception as exc:
+            self._console_print(f"Cron blueprint command failed: {exc}")
+            return
+        self._console_print(result.text)
+        if result.agent_seed:
+            self._pending_agent_seed = result.agent_seed
+
     def _handle_curator_command(self, cmd: str):
         """Handle /curator slash command.
 
@@ -8514,6 +8687,15 @@ class HermesCLI:
         """Handle /skills slash command — delegates to hermes_cli.skills_hub."""
         from hermes_cli.skills_hub import handle_skills_slash
         handle_skills_slash(cmd, ChatConsole())
+
+    def _handle_learn_command(self, cmd: str):
+        """Queue a standards-guided skill-authoring turn."""
+        from agent.learn_prompt import build_learn_prompt
+
+        parts = cmd.strip().split(None, 1)
+        user_request = parts[1] if len(parts) > 1 else ""
+        self._console_print("  Learning from your description…")
+        self._pending_input.put(build_learn_prompt(user_request))
 
     def _show_gateway_status(self):
         """Show status of the gateway and connected messaging platforms."""
@@ -8820,11 +9002,17 @@ class HermesCLI:
             self.save_conversation()
         elif canonical == "cron":
             self._handle_cron_command(cmd_original)
+        elif canonical == "suggestions":
+            self._handle_suggestions_command(cmd_original)
+        elif canonical == "blueprint":
+            self._handle_blueprint_command(cmd_original)
         elif canonical == "curator":
             self._handle_curator_command(cmd_original)
         elif canonical == "skills":
             with self._busy_command(self._slow_command_status(cmd_original)):
                 self._handle_skills_command(cmd_original)
+        elif canonical == "learn":
+            self._handle_learn_command(cmd_original)
         elif canonical == "platforms":
             self._show_gateway_status()
         elif canonical == "status":
@@ -8906,6 +9094,22 @@ class HermesCLI:
             self._handle_stop_command()
         elif canonical == "agents":
             self._handle_agents_command()
+        elif canonical == "journey":
+            try:
+                import argparse
+                import shlex
+
+                from hermes_cli.journey import register_cli as _register_journey_cli
+
+                parser = argparse.ArgumentParser(prog="/journey", add_help=False)
+                _register_journey_cli(parser)
+                argv = shlex.split(cmd_original.split(None, 1)[1]) if len(cmd_original.split(None, 1)) > 1 else []
+                args = parser.parse_args(argv)
+                args.func(args)
+            except SystemExit:
+                pass
+            except Exception as exc:
+                _cprint(f"  /journey failed: {exc}")
         elif canonical == "background":
             self._handle_background_command(cmd_original)
         elif canonical == "queue":
@@ -11982,6 +12186,7 @@ class HermesCLI:
         # this to True. Early returns (credential refresh failure, etc.)
         # leave it False, which is correct — those aren't user interrupts.
         self._last_turn_interrupted = False
+        self._last_chat_turn_succeeded = False
 
         # Refresh provider credentials if needed (handles key rotation transparently)
         if not self._ensure_runtime_credentials():
@@ -12377,6 +12582,13 @@ class HermesCLI:
 
             # Update history with full conversation
             self.conversation_history = result.get("messages", self.conversation_history) if result else self.conversation_history
+            self._last_chat_turn_succeeded = bool(
+                result
+                and result.get("completed")
+                and not result.get("failed")
+                and not result.get("partial")
+                and not result.get("interrupted")
+            )
 
             # If auto-compression fired mid-turn, the agent created a new
             # continuation session and mutated self.agent.session_id. Sync
@@ -14847,9 +15059,11 @@ class HermesCLI:
                             # Check for background process notifications (completions
                             # and watch pattern matches) while agent is idle.
                             try:
-                                from tools.process_registry import process_registry
-                                for _evt, _synth in process_registry.drain_notifications():
-                                    self._pending_input.put(_synth)
+                                _queue_cli_process_notifications(
+                                    self._pending_input,
+                                    self.session_id,
+                                    self._session_db,
+                                )
                             except Exception:
                                 pass
                         continue
@@ -14863,6 +15077,10 @@ class HermesCLI:
 
                     # Unpack image payload: (text, [Path, ...]) or plain str
                     submit_images = []
+                    durable_completion_id = ""
+                    if isinstance(user_input, _PendingProcessNotification):
+                        durable_completion_id = user_input.delegation_id
+                        user_input = user_input.text
                     if isinstance(user_input, tuple):
                         user_input, submit_images = user_input
 
@@ -14915,7 +15133,13 @@ class HermesCLI:
                             # session. Without this guard a KeyboardInterrupt unwinds
                             # to the outer prompt_toolkit loop and the session dies.
                             _cprint("\n[dim]Command interrupted.[/dim]")
-                        continue
+                            continue
+                        seed = self._pending_agent_seed
+                        if seed:
+                            self._pending_agent_seed = None
+                            user_input = seed
+                        else:
+                            continue
                     
                     # Expand paste references back to full content
                     _paste_ref_re = re.compile(r'\[Pasted text #\d+: \d+ lines \u2192 (.+?)\]')
@@ -14936,6 +15160,10 @@ class HermesCLI:
 
                     try:
                         self.chat(user_input, images=submit_images or None)
+                        _acknowledge_completion_after_turn(
+                            durable_completion_id,
+                            bool(getattr(self, "_last_chat_turn_succeeded", False)),
+                        )
                     finally:
                         self._agent_running = False
                         self._spinner_text = ""
@@ -14975,9 +15203,11 @@ class HermesCLI:
                         # Drain process notifications (completions + watch matches)
                         # that arrived while the agent was running.
                         try:
-                            from tools.process_registry import process_registry
-                            for _evt, _synth in process_registry.drain_notifications():
-                                self._pending_input.put(_synth)
+                            _queue_cli_process_notifications(
+                                self._pending_input,
+                                self.session_id,
+                                self._session_db,
+                            )
                         except Exception:
                             pass  # Non-fatal — don't break the main loop
 
@@ -15228,6 +15458,15 @@ class HermesCLI:
             set_secret_capture_callback(None)
             # Close session in SQLite
             if hasattr(self, '_session_db') and self._session_db and self.agent:
+                try:
+                    from tools.async_delegation import interrupt_for_session
+
+                    interrupt_for_session(
+                        parent_session_id=self.agent.session_id,
+                        reason="cli_close",
+                    )
+                except Exception:
+                    pass
                 try:
                     self._session_db.end_session(self.agent.session_id, "cli_close")
                 except (Exception, KeyboardInterrupt) as e:

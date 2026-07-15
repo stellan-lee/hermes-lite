@@ -29,6 +29,8 @@ import { Label } from "@nous-research/ui/ui/components/label";
 import { useI18n } from "@/i18n";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { PluginSlot } from "@/plugins";
+import { Segmented } from "@nous-research/ui/ui/components/segmented";
+import { AutomationBlueprints } from "@/components/AutomationBlueprints";
 import { cn, themedBody } from "@/lib/utils";
 
 function formatTime(iso?: string | null): string {
@@ -119,6 +121,7 @@ export default function CronPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [selectedProfile, setSelectedProfile] = useState("all");
+  const [view, setView] = useState<"jobs" | "blueprints">("jobs");
   const [loading, setLoading] = useState(true);
   const { toast, showToast } = useToast();
   const { t, locale } = useI18n();
@@ -351,6 +354,23 @@ export default function CronPage() {
     <div className="flex flex-col gap-6">
       <PluginSlot name="cron:top" />
       <Toast toast={toast} />
+
+      <Segmented
+        value={view}
+        onChange={(v) => setView(v as "jobs" | "blueprints")}
+        options={[
+          { value: "jobs", label: "Jobs" },
+          { value: "blueprints", label: "Blueprints" },
+        ]}
+      />
+
+      {view === "blueprints" && (
+        <AutomationBlueprints
+          profile={selectedProfile === "all" ? "default" : selectedProfile}
+          onCreated={loadJobs}
+        />
+      )}
+
 
       <DeleteConfirmDialog
         open={jobDelete.isOpen}
@@ -587,6 +607,7 @@ export default function CronPage() {
         </div>
       )}
 
+      {view === "jobs" && (
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <H2
@@ -722,6 +743,7 @@ export default function CronPage() {
           );
         })}
       </div>
+      )}
 
       <PluginSlot name="cron:bottom" />
     </div>

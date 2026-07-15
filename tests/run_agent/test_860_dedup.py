@@ -10,7 +10,7 @@ Verifies that:
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 
@@ -160,6 +160,139 @@ class TestFlushDeduplication:
             # Old session should still have its 2 messages
             old_rows = db.get_messages(old_session)
             assert len(old_rows) == 2
+
+    def test_legacy_compression_preserves_parent_without_loaded_history_duplicates(self):
+        """Only messages beyond the durable-prefix cursor reach the old parent."""
+        from hermes_state import SessionDB
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = SessionDB(db_path=Path(tmpdir) / "test.db")
+            agent = self._make_agent(db)
+            loaded = [
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ]
+            agent._flush_messages_to_session_db(loaded, [])
+            parent = agent.session_id
+
+            compressor = MagicMock()
+            compressor.compress.return_value = [
+                {"role": "user", "content": "[summary]"}
+            ]
+            compressor._last_summary_error = None
+            compressor._last_compress_aborted = False
+            compressor._last_aux_model_failure_model = None
+            compressor._last_aux_model_failure_error = None
+            agent.context_compressor = compressor
+            agent.compression_in_place = False
+
+            with patch.object(agent, "_build_system_prompt", return_value="sys"):
+                compressed, _ = agent._compress_context(loaded, "sys")
+
+            assert db.message_count(parent) == len(loaded)
+            agent._flush_messages_to_session_db(compressed)
+            assert [
+                row["content"] for row in db.get_messages(agent.session_id)
+            ] == ["[summary]"]
+
+    def test_in_place_compaction_then_normal_flush_does_not_duplicate(self):
+        """Compacted rows are already durable when the eventual flush runs."""
+        from hermes_state import SessionDB
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = SessionDB(db_path=Path(tmpdir) / "test.db")
+            agent = self._make_agent(db)
+            original = [
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ]
+            agent._flush_messages_to_session_db(original, [])
+
+            compacted = [{"role": "user", "content": "[summary]"}]
+            compressor = MagicMock()
+            compressor.compress.return_value = compacted
+            compressor.compression_count = 1
+            compressor.last_prompt_tokens = 0
+            compressor.last_completion_tokens = 0
+            compressor._last_summary_error = None
+            compressor._last_compress_aborted = False
+            compressor._last_aux_model_failure_model = None
+            compressor._last_aux_model_failure_error = None
+            agent.context_compressor = compressor
+            agent.compression_in_place = True
+            with patch.object(agent, "_build_system_prompt", return_value="sys"):
+                compacted_result, _ = agent._compress_context(
+                    original, "sys", approx_tokens=100
+                )
+            assert agent._last_flushed_db_idx == len(compacted_result)
+
+            final_messages = compacted_result + [
+                {"role": "assistant", "content": "continued answer"}
+            ]
+            agent._flush_messages_to_session_db(final_messages)
+
+            active = db.get_messages(agent.session_id)
+            assert [row["content"] for row in active] == [
+                "[summary]",
+                "continued answer",
+            ]
+            archived = db.get_messages(agent.session_id, include_inactive=True)
+            assert len(archived) == 4
+
+    def test_in_place_persistence_failure_rolls_back_compression_state(self):
+        """A failed archive transaction must leave memory and cursors unchanged."""
+        from hermes_state import SessionDB
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = SessionDB(db_path=Path(tmpdir) / "test.db")
+            agent = self._make_agent(db)
+            original = [
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ]
+            agent._flush_messages_to_session_db(original, [])
+            original_cursor = agent._last_flushed_db_idx
+            agent._cached_system_prompt = "original system prompt"
+
+            compressor = MagicMock()
+            compressor.compress.return_value = [
+                {"role": "user", "content": "compressed summary"}
+            ]
+            compressor.compression_count = 7
+            compressor.last_prompt_tokens = 123
+            compressor.last_completion_tokens = 9
+            compressor.last_total_tokens = 132
+            compressor.last_compression_rough_tokens = 88
+            compressor.awaiting_real_usage_after_compression = False
+            compressor._ineffective_compression_count = 1
+            compressor._last_compression_savings_pct = 25.0
+            compressor._last_summary_error = None
+            compressor._last_compress_aborted = False
+            compressor._last_aux_model_failure_model = None
+            compressor._last_aux_model_failure_error = None
+            agent.context_compressor = compressor
+            agent.compression_in_place = True
+
+            with patch.object(
+                db, "archive_and_compact", side_effect=OSError("disk full")
+            ):
+                result, system_prompt = agent._compress_context(
+                    original, "original system prompt", approx_tokens=100
+                )
+
+            assert result is original
+            assert system_prompt == "original system prompt"
+            assert agent._cached_system_prompt == "original system prompt"
+            assert agent._last_flushed_db_idx == original_cursor
+            assert agent._last_compaction_in_place is False
+            assert compressor.compression_count == 7
+            assert compressor.last_prompt_tokens == 123
+            assert compressor.awaiting_real_usage_after_compression is False
+            assert [row["content"] for row in db.get_messages(agent.session_id)] == [
+                "old question",
+                "old answer",
+            ]
+            assert db.get_compression_lock_holder(agent.session_id) is None
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Tests that /new (and its /reset alias) clears session-scoped overrides."""
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -103,6 +103,32 @@ async def test_new_command_no_override_is_noop():
 
     assert session_key not in runner._session_model_overrides
     assert session_key not in runner._session_reasoning_overrides
+
+
+@pytest.mark.asyncio
+async def test_new_command_cancels_delegations_across_compression_lineage(tmp_path):
+    from hermes_state import SessionDB
+
+    runner = _make_runner()
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("compression-parent", source="telegram")
+    db.rotate_session_for_compression(
+        "compression-parent", "sess-1", source="telegram"
+    )
+    db.create_session(
+        "later-delegate", source="telegram", parent_session_id="compression-parent"
+    )
+    runner._session_db = db
+
+    with patch(
+        "tools.async_delegation.interrupt_for_session"
+    ) as interrupt_for_session:
+        await runner._handle_reset_command(_make_event("/new"))
+
+    interrupt_for_session.assert_called_once_with(
+        parent_session_ids=["compression-parent", "sess-1"],
+        reason="gateway_new_session",
+    )
 
 
 @pytest.mark.asyncio

@@ -1083,6 +1083,8 @@ DEFAULT_CONFIG = {
                                       # Default False matches historical behavior; set to
                                       # True if you'd rather pause than silently lose
                                       # context turns when your aux model is flaky.
+        "in_place": True,             # Keep one durable session id while soft-archiving
+                                      # pre-compaction turns for search/recovery.
     },
 
     # Anthropic prompt caching (Claude via OpenRouter or native Anthropic API).
@@ -1243,6 +1245,20 @@ DEFAULT_CONFIG = {
             "base_url": "",
             "api_key": "",
             "timeout": 600,
+            "extra_body": {},
+        },
+        # Monitor — urgency/importance classifier used by the important-mail
+        # monitor catalog automation (cron/scripts/classify_items.py). Scores
+        # candidate items 0-10 against the user's criteria so only above-
+        # threshold items get delivered. "auto" = main chat model; override to
+        # a cheap fast model (e.g. openrouter google/gemini-3-flash-preview,
+        # haiku) since per-item scoring is high-volume and a small model is fine.
+        "monitor": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 60,
             "extra_body": {},
         },
     },
@@ -1610,6 +1626,7 @@ DEFAULT_CONFIG = {
         "reasoning_effort": "",  # reasoning effort for subagents: "xhigh", "high", "medium",
                                  # "low", "minimal", "none" (empty = inherit parent's level)
         "max_concurrent_children": 3,  # max parallel children per batch; floor of 1 enforced, no ceiling
+        "max_async_children": 3,  # max detached background delegation units
         # Orchestrator role controls (see tools/delegate_tool.py:_get_max_spawn_depth
         # and _get_orchestrator_enabled).  Values are clamped to [1, 3] with a
         # warning log if out of range.

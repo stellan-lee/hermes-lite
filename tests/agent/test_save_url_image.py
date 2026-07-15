@@ -15,6 +15,7 @@ from __future__ import annotations
 import http.server
 import socketserver
 import threading
+from unittest.mock import patch
 
 import pytest
 
@@ -157,6 +158,26 @@ class TestSaveUrlImage:
             save_url_image(f"{base}/oversize", max_bytes=1024 * 1024)
         after = set(cache_dir.glob("*"))
         assert after == before, "partial file leaked into cache after oversize cap"
+
+    def test_stream_failure_never_publishes_partial_destination(self, http_server):
+        from agent.image_gen_provider import save_url_image, _images_cache_dir
+
+        class BrokenResponse:
+            headers = {"Content-Type": "image/png"}
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield PNG_1PX[:16]
+                raise OSError("connection reset")
+
+        cache_dir = _images_cache_dir()
+        before = set(cache_dir.iterdir())
+        with patch("requests.get", return_value=BrokenResponse()):
+            with pytest.raises(OSError, match="connection reset"):
+                save_url_image("https://example.invalid/partial.png", prefix="partial")
+        assert set(cache_dir.iterdir()) == before
 
     def test_unique_filenames_avoid_collision(self, http_server):
         """Two back-to-back saves of the same URL must produce different paths."""

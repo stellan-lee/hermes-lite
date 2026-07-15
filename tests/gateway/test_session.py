@@ -544,6 +544,39 @@ class TestSessionStoreRewriteTranscript:
         reloaded = store.load_transcript(session_id)
         assert reloaded == []
 
+    def test_rewrite_propagates_sqlite_failure(self, store, monkeypatch):
+        monkeypatch.setattr(
+            store._db,
+            "replace_messages",
+            MagicMock(side_effect=OSError("simulated SQLite failure")),
+        )
+
+        with pytest.raises(OSError, match="SQLite failure"):
+            store.rewrite_transcript("child", [{"role": "assistant", "content": "x"}])
+
+    def test_publish_rolls_back_in_memory_route_when_disk_save_fails(
+        self, store, monkeypatch
+    ):
+        source = SessionSource(
+            platform=Platform.TELEGRAM,
+            chat_id="chat",
+            user_id="user",
+        )
+        entry = store.get_or_create_session(source)
+        parent_id = entry.session_id
+        old_tokens = entry.last_prompt_tokens
+        monkeypatch.setattr(
+            store, "_save", MagicMock(side_effect=OSError("simulated fsync failure"))
+        )
+
+        with pytest.raises(OSError, match="fsync failure"):
+            store.publish_compression_continuation(
+                entry.session_key, parent_id, "compression-child"
+            )
+
+        assert entry.session_id == parent_id
+        assert entry.last_prompt_tokens == old_tokens
+
 
 class TestLoadTranscriptDBOnly:
     """After spec 002, load_transcript reads only from state.db."""

@@ -1286,13 +1286,50 @@ class SessionStore:
         """Replace the entire transcript for a session with new messages.
 
         Used by /retry, /undo, and /compress to persist modified conversation
-        history. state.db is the canonical store.
+        history. state.db is the canonical store. Success returns normally;
+        an unavailable store or failed transaction raises so callers cannot
+        publish routing or report success before the rewrite is durable.
         """
-        if self._db:
+        if not self._db:
+            raise RuntimeError("SQLite session store is unavailable")
+        self._db.replace_messages(session_id, messages)
+
+    def publish_compression_continuation(
+        self,
+        session_key: str,
+        parent_session_id: str,
+        child_session_id: str,
+    ) -> SessionEntry:
+        """Durably route a gateway key to an already-persisted child.
+
+        The in-memory mutation is rolled back if ``sessions.json`` cannot be
+        saved. Callers must install the child transcript before invoking this
+        method.
+        """
+        with self._lock:
+            self._ensure_loaded_locked()
+            entry = self._entries.get(session_key)
+            if entry is None:
+                raise KeyError(f"gateway session route not found: {session_key}")
+            if entry.session_id != parent_session_id:
+                raise RuntimeError(
+                    "gateway session route changed during compression: "
+                    f"expected {parent_session_id}, found {entry.session_id}"
+                )
+            old_session_id = entry.session_id
+            old_prompt_tokens = entry.last_prompt_tokens
+            old_updated_at = entry.updated_at
+            entry.session_id = child_session_id
+            entry.last_prompt_tokens = 0
+            entry.updated_at = _now()
             try:
-                self._db.replace_messages(session_id, messages)
-            except Exception as e:
-                logger.debug("Failed to rewrite transcript in DB: %s", e)
+                self._save()
+            except BaseException:
+                entry.session_id = old_session_id
+                entry.last_prompt_tokens = old_prompt_tokens
+                entry.updated_at = old_updated_at
+                raise
+            return entry
 
     def load_transcript(self, session_id: str) -> List[Dict[str, Any]]:
         """Load all messages from a session's transcript.

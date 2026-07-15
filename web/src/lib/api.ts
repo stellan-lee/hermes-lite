@@ -250,6 +250,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     }),
+  importSessions: (sessions: Array<Record<string, unknown>>) =>
+    fetchJSON<SessionImportResponse>("/api/sessions/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessions }),
+    }),
   renameSession: (id: string, title: string) =>
     fetchJSON<{ ok: boolean; title: string }>(
       `/api/sessions/${encodeURIComponent(id)}`,
@@ -360,6 +366,18 @@ export const api = {
     fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(id)}/trigger?profile=${encodeURIComponent(profile)}`, { method: "POST" }),
   deleteCronJob: (id: string, profile = "default") =>
     fetchJSON<{ ok: boolean }>(`/api/cron/jobs/${encodeURIComponent(id)}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" }),
+
+  getAutomationBlueprints: () =>
+    fetchJSON<{ blueprints: AutomationBlueprint[] }>("/api/cron/blueprints"),
+  instantiateAutomationBlueprint: (
+    body: { blueprint: string; values: Record<string, string> },
+    profile = "default",
+  ) =>
+    fetchJSON<CronJob>(`/api/cron/blueprints/instantiate?profile=${encodeURIComponent(profile)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 
   // Profiles (minimal)
   getProfiles: () =>
@@ -808,6 +826,16 @@ export interface SessionStoreStats {
   archived: number;
   messages: number;
   by_source: Record<string, number>;
+}
+
+export interface SessionImportResponse {
+  ok: boolean;
+  imported: number;
+  skipped: number;
+  detached: number;
+  imported_ids: string[];
+  skipped_ids: string[];
+  errors: Array<Record<string, unknown>>;
 }
 
 export interface SkillHubResult {
@@ -1301,6 +1329,28 @@ export interface CronJob {
   last_run_at?: string | null;
   next_run_at?: string | null;
   last_error?: string | null;
+}
+
+export interface AutomationBlueprintField {
+  name: string;
+  type: "time" | "enum" | "text" | "weekdays";
+  label: string;
+  default: string | null;
+  options: string[];
+  optional: boolean;
+  strict?: boolean;
+  help: string;
+}
+
+export interface AutomationBlueprint {
+  key: string;
+  title: string;
+  description: string;
+  category: string;
+  tags: string[];
+  fields: AutomationBlueprintField[];
+  command: string;
+  appUrl: string;
 }
 
 export interface SkillInfo {

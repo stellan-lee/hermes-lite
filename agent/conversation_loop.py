@@ -586,6 +586,14 @@ def run_conversation(
     # Initialize conversation (copy to avoid mutating the caller's list)
     messages = list(conversation_history) if conversation_history else []
 
+    # ``conversation_history`` is the durable prefix reloaded by the caller.
+    # Rebase the in-memory append cursor to that prefix before any preflight or
+    # mid-turn compression can preserve the legacy parent session.  A fresh
+    # agent starts this cursor at zero; without the rebase, legacy compression
+    # appends the already-loaded transcript to the parent a second time.
+    if conversation_history:
+        agent._last_flushed_db_idx = len(conversation_history)
+
     # Hydrate todo store from conversation history (gateway creates a fresh
     # AIAgent per message, so the in-memory store is empty -- we need to
     # recover the todo state from the most recent todo tool response in history)

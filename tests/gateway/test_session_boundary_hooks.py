@@ -210,6 +210,9 @@ async def test_idle_expiry_fires_finalize_hook(mock_invoke_hook):
     runner.session_store._lock.__enter__ = MagicMock(return_value=None)
     runner.session_store._lock.__exit__ = MagicMock(return_value=None)
     runner.session_store._save = MagicMock()
+    runner._session_db = SimpleNamespace(
+        get_compression_lineage=lambda sid: ["sess-ancestor", sid]
+    )
 
     runner._evict_cached_agent = MagicMock()
     runner._cleanup_agent_resources = MagicMock()
@@ -230,7 +233,9 @@ async def test_idle_expiry_fires_finalize_hook(mock_invoke_hook):
 
     mock_invoke_hook.side_effect = _hook_and_stop
 
-    with patch("gateway.run.asyncio.sleep", side_effect=_fast_sleep):
+    with patch("gateway.run.asyncio.sleep", side_effect=_fast_sleep), patch(
+        "tools.async_delegation.interrupt_for_session"
+    ) as interrupt_for_session:
         await runner._session_expiry_watcher(interval=0)
 
     # Look for the finalize call targeting the expired session.
@@ -242,4 +247,8 @@ async def test_idle_expiry_fires_finalize_hook(mock_invoke_hook):
     assert "sess-expired" in session_ids, (
         f"on_session_finalize was not fired during idle expiry; "
         f"got session_ids={session_ids} (regression of #14981)"
+    )
+    interrupt_for_session.assert_called_once_with(
+        parent_session_ids=["sess-ancestor", "sess-expired"],
+        reason="gateway_session_expiry",
     )

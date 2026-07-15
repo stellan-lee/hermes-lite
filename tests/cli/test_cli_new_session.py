@@ -175,6 +175,19 @@ def test_new_command_creates_real_fresh_session_and_resets_agent_state(tmp_path)
     cli.agent._invalidate_system_prompt.assert_called_once()
 
 
+def test_new_command_interrupts_background_children_of_old_session(tmp_path):
+    cli = _prepare_cli_with_active_session(tmp_path)
+    old_session_id = cli.session_id
+
+    with patch("tools.async_delegation.interrupt_for_session") as interrupt:
+        cli.process_command("/new")
+
+    interrupt.assert_called_once_with(
+        parent_session_id=old_session_id,
+        reason="cli_new_session",
+    )
+
+
 def test_new_command_rotates_hermes_session_id_env_and_context(tmp_path):
     from gateway.session_context import _VAR_MAP, get_session_env
 
