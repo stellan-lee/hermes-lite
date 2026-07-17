@@ -177,6 +177,15 @@ CLARIFY_GUIDANCE = (
     "choices=[\"Approve\", \"Deny\"]."
 )
 
+ADMIN_APPROVAL_GUIDANCE = (
+    "When an action requires administrator authorization and no automatic "
+    "tool safety prompt covers it, call request_admin_approval with the exact "
+    "action, target, reason, and material impact before acting. Treat "
+    "approved=false, timeout, delivery failure, or missing configuration as "
+    "a definitive denial: do not perform, retry, rephrase, or bypass the "
+    "action. Approval is one-shot and covers only the action described."
+)
+
 SKILLS_GUIDANCE = (
     "After completing a complex task (5+ tool calls), fixing a tricky error, "
     "or discovering a non-trivial workflow, save the approach as a "

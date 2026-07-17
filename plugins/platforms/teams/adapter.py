@@ -639,6 +639,7 @@ class TeamsAdapter(BasePlatformAdapter):
         # Maps chat_id → ConversationReference captured from incoming messages.
         # Used to send cards with the correct conversation type (personal/group/channel).
         self._conv_refs: Dict[str, Any] = {}
+        self._approval_state: Dict[str, Dict[str, str]] = {}
 
     async def connect(self) -> bool:
         if not TEAMS_SDK_AVAILABLE:
@@ -828,42 +829,72 @@ class TeamsAdapter(BasePlatformAdapter):
         data = action.data or {}
         hermes_action = data.get("hermes_action", "")
         session_key = data.get("session_key", "")
+        request_id = str(data.get("request_id") or "")
+        approval_state = self._approval_state.get(request_id, {}) if request_id else {}
 
         if not hermes_action or not session_key:
             return InvokeResponse(
                 status=200,
                 body=AdaptiveCardActionMessageResponse(value="Unknown action."),
             )
+        if request_id and not approval_state:
+            return InvokeResponse(
+                status=200,
+                body=AdaptiveCardActionMessageResponse(
+                    value="⚠️ Approval already resolved or expired."
+                ),
+            )
+        if approval_state.get("session_key"):
+            session_key = str(approval_state["session_key"])
 
         # Only authorized users may click approval buttons.
         # Default-deny: require either TEAMS_ALLOWED_USERS or an explicit
         # TEAMS_ALLOW_ALL_USERS=true opt-in. Without one of these set, the
         # bot silently treated every clicker as authorized — meaning any
         # Teams user who could message the bot could approve dangerous commands.
-        allowed_csv = os.getenv("TEAMS_ALLOWED_USERS", "").strip()
-        allow_all = os.getenv("TEAMS_ALLOW_ALL_USERS", "").strip().lower() in {"1", "true", "yes"}
-
-        if not allow_all:
-            if not allowed_csv:
+        from_account = ctx.activity.from_
+        clicker_ids = {
+            str(value).strip()
+            for value in (
+                getattr(from_account, "aad_object_id", None),
+                getattr(from_account, "id", None),
+            )
+            if value is not None and str(value).strip()
+        }
+        expected_admin = str(approval_state.get("authorized_user_id") or "")
+        if expected_admin:
+            if expected_admin not in clicker_ids:
                 logger.warning(
-                    "[teams] card action rejected: TEAMS_ALLOWED_USERS not configured "
-                    "and TEAMS_ALLOW_ALL_USERS not set — default deny"
+                    "[teams] Unauthorized admin card action by %s",
+                    next(iter(clicker_ids), "<unknown>"),
                 )
-                return InvokeResponse(
-                    status=200,
-                    body=AdaptiveCardActionMessageResponse(
-                        value="⛔ Approval buttons require TEAMS_ALLOWED_USERS to be configured."
-                    ),
-                )
-            from_account = ctx.activity.from_
-            clicker_id = getattr(from_account, "aad_object_id", None) or getattr(from_account, "id", "")
-            allowed_ids = {uid.strip() for uid in allowed_csv.split(",") if uid.strip()}
-            if "*" not in allowed_ids and clicker_id not in allowed_ids:
-                logger.warning("[teams] Unauthorized card action by %s — ignoring", clicker_id)
                 return InvokeResponse(
                     status=200,
                     body=AdaptiveCardActionMessageResponse(value="⛔ Not authorized."),
                 )
+        else:
+            allowed_csv = os.getenv("TEAMS_ALLOWED_USERS", "").strip()
+            allow_all = os.getenv("TEAMS_ALLOW_ALL_USERS", "").strip().lower() in {"1", "true", "yes"}
+
+            if not allow_all:
+                if not allowed_csv:
+                    logger.warning(
+                        "[teams] card action rejected: TEAMS_ALLOWED_USERS not configured "
+                        "and TEAMS_ALLOW_ALL_USERS not set — default deny"
+                    )
+                    return InvokeResponse(
+                        status=200,
+                        body=AdaptiveCardActionMessageResponse(
+                            value="⛔ Approval buttons require TEAMS_ALLOWED_USERS to be configured."
+                        ),
+                    )
+                allowed_ids = {uid.strip() for uid in allowed_csv.split(",") if uid.strip()}
+                if "*" not in allowed_ids and not (clicker_ids & allowed_ids):
+                    logger.warning("[teams] Unauthorized card action by %s — ignoring", next(iter(clicker_ids), "<unknown>"))
+                    return InvokeResponse(
+                        status=200,
+                        body=AdaptiveCardActionMessageResponse(value="⛔ Not authorized."),
+                    )
 
         choice_map = {
             "approve_once": "once",
@@ -888,7 +919,14 @@ class TeamsAdapter(BasePlatformAdapter):
                 ),
             )
 
-        resolve_gateway_approval(session_key, choice)
+        if request_id:
+            resolved = resolve_gateway_approval(
+                session_key, choice, request_id=request_id
+            )
+        else:
+            resolved = resolve_gateway_approval(session_key, choice)
+        if resolved and request_id:
+            self._approval_state.pop(request_id, None)
 
         label_map = {
             "once": "✅ Allowed (once)",
@@ -920,6 +958,10 @@ class TeamsAdapter(BasePlatformAdapter):
         session_key: str,
         description: str = "dangerous command",
         metadata: Optional[Dict[str, Any]] = None,
+        request_id: str = "",
+        authorized_user_id: str = "",
+        binary: bool = False,
+        title: str = "Command Approval Required",
     ) -> SendResult:
         """Send an Adaptive Card approval prompt with Allow/Deny buttons."""
         if not self._app:
@@ -931,23 +973,19 @@ class TeamsAdapter(BasePlatformAdapter):
             "session_key": session_key,
             "cmd": command[:200] + "..." if len(command) > 200 else command,
             "desc": description,
+            "request_id": request_id,
         }
 
-        card = (
-            AdaptiveCard()
-            .with_version("1.4")
-            .with_body([
-                TextBlock(text="⚠️ Command Approval Required", wrap=True, weight="Bolder"),
-                TextBlock(text=f"```\n{cmd_preview}\n```", wrap=True),
-                TextBlock(text=f"Reason: {description}", wrap=True, isSubtle=True),
-            ])
-            .with_actions([
-                ExecuteAction(
-                    title="Allow Once",
-                    verb="hermes_approve",
-                    data={**btn_data_base, "hermes_action": "approve_once"},
-                    style="positive",
-                ),
+        actions = [
+            ExecuteAction(
+                title="Approve" if binary else "Allow Once",
+                verb="hermes_approve",
+                data={**btn_data_base, "hermes_action": "approve_once"},
+                style="positive",
+            ),
+        ]
+        if not binary:
+            actions.extend([
                 ExecuteAction(
                     title="Allow Session",
                     verb="hermes_approve",
@@ -958,20 +996,39 @@ class TeamsAdapter(BasePlatformAdapter):
                     verb="hermes_approve",
                     data={**btn_data_base, "hermes_action": "approve_always"},
                 ),
-                ExecuteAction(
-                    title="Deny",
-                    verb="hermes_approve",
-                    data={**btn_data_base, "hermes_action": "deny"},
-                    style="destructive",
-                ),
             ])
+        actions.append(
+            ExecuteAction(
+                title="Decline" if binary else "Deny",
+                verb="hermes_approve",
+                data={**btn_data_base, "hermes_action": "deny"},
+                style="destructive",
+            )
+        )
+
+        card = (
+            AdaptiveCard()
+            .with_version("1.4")
+            .with_body([
+                TextBlock(text=f"⚠️ {title}", wrap=True, weight="Bolder"),
+                TextBlock(text=f"```\n{cmd_preview}\n```", wrap=True),
+                TextBlock(text=f"Reason: {description}", wrap=True, isSubtle=True),
+            ])
+            .with_actions(actions)
         )
 
         try:
+            if request_id:
+                self._approval_state[request_id] = {
+                    "session_key": session_key,
+                    "authorized_user_id": authorized_user_id,
+                }
             result = await self._send_card(chat_id, card)
             message_id = getattr(result, "id", None) if result else None
             return SendResult(success=True, message_id=message_id)
         except Exception as e:
+            if request_id:
+                self._approval_state.pop(request_id, None)
             logger.error("[teams] send_exec_approval failed: %s", e, exc_info=True)
             return SendResult(success=False, error=str(e), retryable=True)
 

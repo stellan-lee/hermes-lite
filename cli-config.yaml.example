@@ -516,6 +516,24 @@ session_reset:
 # explicitly want one shared "room brain" per group/channel.
 group_sessions_per_user: true
 
+# =============================================================================
+# Privileged Action Approvals
+# =============================================================================
+# Optional exact-user route for dangerous commands, execute_code, and explicit
+# request_admin_approval tool calls in gateway sessions. Configure the trusted
+# platform user ID locally; the trusted user can then run /set-admin-channel to
+# bind the delivery chat/thread without changing the authorization identity.
+approvals:
+  mode: manual
+  timeout: 60
+  cron_mode: deny
+  admin:
+    enabled: false
+    platform: ""       # telegram, discord, slack, feishu, matrix, teams, or qqbot
+    user_id: ""        # stable platform user ID; this is the authorization boundary
+    chat_id: ""        # destination chat/channel ID
+    thread_id: null     # optional thread/topic ID
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Gateway Streaming
 # ─────────────────────────────────────────────────────────────────────────────

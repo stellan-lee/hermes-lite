@@ -4064,6 +4064,10 @@ class DiscordAdapter(BasePlatformAdapter):
         self, chat_id: str, command: str, session_key: str,
         description: str = "dangerous command",
         metadata: Optional[dict] = None,
+        request_id: str = "",
+        authorized_user_id: str = "",
+        binary: bool = False,
+        title: str = "Command Approval Required",
     ) -> SendResult:
         """
         Send a button-based exec approval prompt for a dangerous command.
@@ -4088,7 +4092,7 @@ class DiscordAdapter(BasePlatformAdapter):
             max_desc = 4088
             cmd_display = command if len(command) <= max_desc else command[: max_desc - 3] + "..."
             embed = discord.Embed(
-                title="⚠️ Command Approval Required",
+                title=f"⚠️ {title}",
                 description=f"```\n{cmd_display}\n```",
                 color=discord.Color.orange(),
             )
@@ -4098,6 +4102,9 @@ class DiscordAdapter(BasePlatformAdapter):
                 session_key=session_key,
                 allowed_user_ids=self._allowed_user_ids,
                 allowed_role_ids=self._allowed_role_ids,
+                request_id=request_id,
+                authorized_user_id=authorized_user_id,
+                binary=binary,
             )
 
             msg = await channel.send(embed=embed, view=view)
@@ -5046,7 +5053,7 @@ def _define_discord_view_classes() -> None:
         """
         Interactive button view for exec approval of dangerous commands.
 
-        Shows four buttons: Allow Once, Allow Session, Always Allow, Deny.
+        Shows the four legacy grant buttons or binary Approve/Decline buttons.
         Clicking a button calls ``resolve_gateway_approval()`` to unblock the
         waiting agent thread — the same mechanism as the text ``/approve`` flow.
         Only users in the allowed list can click.  Times out after 5 minutes.
@@ -5057,15 +5064,39 @@ def _define_discord_view_classes() -> None:
             session_key: str,
             allowed_user_ids: set,
             allowed_role_ids: Optional[set] = None,
+            request_id: str = "",
+            authorized_user_id: str = "",
+            binary: bool = False,
         ):
             super().__init__(timeout=300)  # 5-minute timeout
             self.session_key = session_key
             self.allowed_user_ids = allowed_user_ids
             self.allowed_role_ids = allowed_role_ids or set()
+            self.request_id = request_id
+            self.authorized_user_id = str(authorized_user_id or "")
+            self.binary = binary
             self.resolved = False
+            if binary:
+                # Work with instantiated child components instead of decorated
+                # method attributes. This is correct for discord.py and keeps
+                # the view compatible with the lightweight SDK shim in tests.
+                for child in list(self.children):
+                    label = str(getattr(child, "label", "") or "")
+                    if label in {"Allow Session", "Always Allow"}:
+                        self.remove_item(child)
+                    elif label == "Allow Once":
+                        child.label = "Approve"
+                    elif label == "Deny":
+                        child.label = "Decline"
 
         def _check_auth(self, interaction: discord.Interaction) -> bool:
             """Verify the user clicking is authorized."""
+            if self.authorized_user_id:
+                user = getattr(interaction, "user", None)
+                return bool(
+                    user is not None
+                    and str(getattr(user, "id", "")) == self.authorized_user_id
+                )
             return _component_check_auth(
                 interaction, self.allowed_user_ids, self.allowed_role_ids,
             )
@@ -5104,7 +5135,12 @@ def _define_discord_view_classes() -> None:
             # Unblock the waiting agent thread via the gateway approval queue
             try:
                 from tools.approval import resolve_gateway_approval
-                count = resolve_gateway_approval(self.session_key, choice)
+                if self.request_id:
+                    count = resolve_gateway_approval(
+                        self.session_key, choice, request_id=self.request_id
+                    )
+                else:
+                    count = resolve_gateway_approval(self.session_key, choice)
                 logger.info(
                     "Discord button resolved %d approval(s) for session %s (choice=%s, user=%s)",
                     count, self.session_key, choice, interaction.user.display_name,

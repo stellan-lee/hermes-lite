@@ -4,7 +4,7 @@ import json
 import sys
 import types
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -294,6 +294,80 @@ class TestTeamsAdapterInit:
     def test_platform_value(self):
         adapter = TeamsAdapter(_make_config(client_id="id", client_secret="secret", tenant_id="tenant"))
         assert adapter.platform.value == "teams"
+
+
+class TestTeamsAdminApproval:
+    @pytest.mark.asyncio
+    async def test_admin_card_is_binary_and_request_scoped(self, monkeypatch):
+        adapter = TeamsAdapter(
+            _make_config(
+                client_id="id",
+                client_secret="secret",
+                tenant_id="tenant",
+            )
+        )
+        adapter._app = MagicMock()
+        adapter._send_card = AsyncMock(return_value=SimpleNamespace(id="message-1"))
+        execute_action = MagicMock(side_effect=lambda **kwargs: SimpleNamespace(**kwargs))
+        monkeypatch.setattr(_teams_mod, "ExecuteAction", execute_action)
+
+        result = await adapter.send_exec_approval(
+            chat_id="admin-chat",
+            command="deploy production",
+            session_key="requester-session",
+            request_id="request-123",
+            authorized_user_id="aad-admin",
+            binary=True,
+            title="Admin Approval Required",
+        )
+
+        assert result.success is True
+        assert execute_action.call_count == 2
+        actions = [
+            call.kwargs["data"]["hermes_action"]
+            for call in execute_action.call_args_list
+        ]
+        assert actions == ["approve_once", "deny"]
+        assert adapter._approval_state["request-123"] == {
+            "session_key": "requester-session",
+            "authorized_user_id": "aad-admin",
+        }
+
+    @pytest.mark.asyncio
+    async def test_admin_card_action_requires_exact_identity_and_request(self):
+        adapter = TeamsAdapter(
+            _make_config(client_id="id", client_secret="secret", tenant_id="tenant")
+        )
+        adapter._approval_state["request-123"] = {
+            "session_key": "requester-session",
+            "authorized_user_id": "aad-admin",
+        }
+        action_data = {
+            "hermes_action": "approve_once",
+            "session_key": "forged-session",
+            "request_id": "request-123",
+        }
+        activity = SimpleNamespace(
+            value=SimpleNamespace(action=SimpleNamespace(data=action_data)),
+            from_=SimpleNamespace(aad_object_id="aad-attacker", id="attacker"),
+        )
+        ctx = SimpleNamespace(activity=activity)
+
+        with (
+            patch("tools.approval.has_blocking_approval", return_value=True),
+            patch("tools.approval.resolve_gateway_approval", return_value=1) as resolve,
+        ):
+            await adapter._on_card_action(ctx)
+            resolve.assert_not_called()
+            assert "request-123" in adapter._approval_state
+
+            activity.from_ = SimpleNamespace(aad_object_id="aad-admin", id="admin")
+            await adapter._on_card_action(ctx)
+
+        resolve.assert_called_once_with(
+            "requester-session", "once", request_id="request-123"
+        )
+        assert "request-123" not in adapter._approval_state
 
 
 # ---------------------------------------------------------------------------

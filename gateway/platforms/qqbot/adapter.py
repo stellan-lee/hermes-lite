@@ -260,6 +260,7 @@ class QQAdapter(BasePlatformAdapter):
         # box; callers can override with set_interaction_callback(None) or
         # register a custom handler.
         self._interaction_callback = self._default_interaction_dispatch
+        self._approval_state: Dict[str, Dict[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Properties
@@ -1123,7 +1124,11 @@ class QQAdapter(BasePlatformAdapter):
 
         approval = parse_approval_button_data(button_data)
         if approval is not None:
-            session_key, decision = approval
+            if len(approval) == 3:
+                session_key, decision, request_id = approval
+            else:
+                session_key, decision = approval
+                request_id = ""
             choice = self._APPROVAL_BUTTON_TO_CHOICE.get(decision)
             if choice is None:
                 logger.warning(
@@ -1131,7 +1136,22 @@ class QQAdapter(BasePlatformAdapter):
                     self._log_tag, decision, session_key,
                 )
                 return
-            if not self._is_authorized_interaction_for_session(event, session_key):
+            approval_state = self._approval_state.get(request_id, {}) if request_id else {}
+            if request_id and not approval_state:
+                logger.info(
+                    "[%s] Ignoring stale request-scoped approval %s",
+                    self._log_tag,
+                    request_id,
+                )
+                return
+            if approval_state.get("session_key"):
+                session_key = str(approval_state["session_key"])
+            expected_admin = str(approval_state.get("authorized_user_id") or "")
+            if expected_admin:
+                is_authorized = str(event.operator_openid or "").strip() == expected_admin
+            else:
+                is_authorized = self._is_authorized_interaction_for_session(event, session_key)
+            if not is_authorized:
                 logger.warning(
                     "[%s] Rejected unauthorized approval click for session %s "
                     "(operator=%s)",
@@ -1142,7 +1162,14 @@ class QQAdapter(BasePlatformAdapter):
                 # Import lazily to keep the adapter importable in tests that
                 # don't exercise the approval subsystem.
                 from tools.approval import resolve_gateway_approval
-                count = resolve_gateway_approval(session_key, choice)
+                if request_id:
+                    count = resolve_gateway_approval(
+                        session_key, choice, request_id=request_id
+                    )
+                else:
+                    count = resolve_gateway_approval(session_key, choice)
+                if count and request_id:
+                    self._approval_state.pop(request_id, None)
                 logger.info(
                     "[%s] Button resolved %d approval(s) for session %s "
                     "(choice=%s, operator=%s)",
@@ -2634,7 +2661,11 @@ class QQAdapter(BasePlatformAdapter):
         return await self.send_with_keyboard(
             chat_id,
             build_approval_text(req),
-            build_approval_keyboard(req.session_key),
+            build_approval_keyboard(
+                req.session_key,
+                request_id=req.request_id,
+                binary=req.binary,
+            ),
             reply_to=reply_to,
         )
 
@@ -2654,6 +2685,10 @@ class QQAdapter(BasePlatformAdapter):
             session_key: str,
             description: str = "dangerous command",
             metadata: Optional[Dict[str, Any]] = None,
+            request_id: str = "",
+            authorized_user_id: str = "",
+            binary: bool = False,
+            title: str = "Command Approval Required",
     ) -> SendResult:
         """Send a button-based exec-approval prompt for a dangerous command.
 
@@ -2671,14 +2706,24 @@ class QQAdapter(BasePlatformAdapter):
 
         req = ApprovalRequest(
             session_key=session_key,
-            title=f"Execute this command?",
+            title=title,
             description=description,
             command_preview=command,
             timeout_sec=self._APPROVAL_TIMEOUT_SECONDS,
+            request_id=request_id,
+            binary=binary,
         )
-        return await self.send_approval_request(
+        if request_id:
+            self._approval_state[request_id] = {
+                "session_key": session_key,
+                "authorized_user_id": authorized_user_id,
+            }
+        result = await self.send_approval_request(
             chat_id, req, reply_to=msg_id,
         )
+        if not result.success and request_id:
+            self._approval_state.pop(request_id, None)
+        return result
 
     _APPROVAL_TIMEOUT_SECONDS = 300  # matches gateway's default gateway_timeout
 

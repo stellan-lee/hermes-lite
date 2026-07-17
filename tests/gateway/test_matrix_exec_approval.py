@@ -58,3 +58,49 @@ class TestMatrixExecApprovalReactions:
         mock_resolve.assert_called_once_with("sess-1", "once")
         assert "$target" not in adapter._approval_prompts_by_event
         assert "sess-1" not in adapter._approval_prompt_by_session
+
+    @pytest.mark.asyncio
+    async def test_admin_reaction_requires_exact_identity_and_request_id(self):
+        from gateway.platforms.matrix import MatrixAdapter, _MatrixApprovalPrompt
+
+        adapter = MatrixAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="tok",
+                extra={"homeserver": "https://matrix.example.org"},
+            )
+        )
+        adapter._user_id = "@bot:example.org"
+        adapter._approval_prompts_by_event["$target"] = _MatrixApprovalPrompt(
+            session_key="requester-session",
+            chat_id="!admin:example.org",
+            message_id="$target",
+            request_id="request-123",
+            authorized_user_id="@admin:example.org",
+        )
+        adapter._approval_prompt_by_session["requester-session"] = "$target"
+        content = {"m.relates_to": {"event_id": "$target", "key": "✅"}}
+
+        with patch("tools.approval.resolve_gateway_approval", return_value=1) as resolve:
+            await adapter._on_reaction(
+                types.SimpleNamespace(
+                    sender="@attacker:example.org",
+                    event_id="$bad",
+                    room_id="!admin:example.org",
+                    content=content,
+                )
+            )
+            resolve.assert_not_called()
+
+            await adapter._on_reaction(
+                types.SimpleNamespace(
+                    sender="@admin:example.org",
+                    event_id="$good",
+                    room_id="!admin:example.org",
+                    content=content,
+                )
+            )
+
+        resolve.assert_called_once_with(
+            "requester-session", "once", request_id="request-123"
+        )

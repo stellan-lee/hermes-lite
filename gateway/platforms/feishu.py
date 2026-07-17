@@ -1861,6 +1861,10 @@ class FeishuAdapter(BasePlatformAdapter):
         self, chat_id: str, command: str, session_key: str,
         description: str = "dangerous command",
         metadata: Optional[Dict[str, Any]] = None,
+        request_id: str = "",
+        authorized_user_id: str = "",
+        binary: bool = False,
+        title: str = "Command Approval Required",
     ) -> SendResult:
         """Send an interactive card with approval buttons.
 
@@ -1886,7 +1890,7 @@ class FeishuAdapter(BasePlatformAdapter):
             card = {
                 "config": {"wide_screen_mode": True},
                 "header": {
-                    "title": {"content": "⚠️ Command Approval Required", "tag": "plain_text"},
+                    "title": {"content": f"⚠️ {title}", "tag": "plain_text"},
                     "template": "orange",
                 },
                 "elements": [
@@ -1896,12 +1900,19 @@ class FeishuAdapter(BasePlatformAdapter):
                     },
                     {
                         "tag": "action",
-                        "actions": [
-                            _btn("✅ Allow Once", "approve_once", "primary"),
-                            _btn("✅ Session", "approve_session"),
-                            _btn("✅ Always", "approve_always"),
-                            _btn("❌ Deny", "deny", "danger"),
-                        ],
+                        "actions": (
+                            [
+                                _btn("✅ Approve", "approve_once", "primary"),
+                                _btn("❌ Decline", "deny", "danger"),
+                            ]
+                            if binary
+                            else [
+                                _btn("✅ Allow Once", "approve_once", "primary"),
+                                _btn("✅ Session", "approve_session"),
+                                _btn("✅ Always", "approve_always"),
+                                _btn("❌ Deny", "deny", "danger"),
+                            ]
+                        ),
                     },
                 ],
             }
@@ -1921,6 +1932,8 @@ class FeishuAdapter(BasePlatformAdapter):
                     "session_key": session_key,
                     "message_id": result.message_id or "",
                     "chat_id": chat_id,
+                    "request_id": request_id,
+                    "authorized_user_id": authorized_user_id,
                 }
             return result
         except Exception as exc:
@@ -2582,8 +2595,17 @@ class FeishuAdapter(BasePlatformAdapter):
 
         operator = getattr(event, "operator", None)
         open_id = str(getattr(operator, "open_id", "") or "")
-        sender_id = SimpleNamespace(open_id=open_id, user_id=str(getattr(operator, "user_id", "") or ""))
-        if not self._allow_group_message(sender_id, state.get("chat_id", ""), is_bot=False):
+        operator_user_id = str(getattr(operator, "user_id", "") or "")
+        sender_id = SimpleNamespace(open_id=open_id, user_id=operator_user_id)
+        expected_admin = str(state.get("authorized_user_id", "") or "")
+        exact_admin = bool(
+            expected_admin
+            and expected_admin in {value for value in (open_id, operator_user_id) if value}
+        )
+        if expected_admin and not exact_admin:
+            logger.warning("[Feishu] Unauthorized admin approval click by %s", open_id or operator_user_id or "<unknown>")
+            return P2CardActionTriggerResponse() if P2CardActionTriggerResponse else None
+        if not expected_admin and not self._allow_group_message(sender_id, state.get("chat_id", ""), is_bot=False):
             logger.warning("[Feishu] Unauthorized approval click by %s", open_id or "<unknown>")
             return P2CardActionTriggerResponse() if P2CardActionTriggerResponse else None
 
@@ -2609,6 +2631,7 @@ class FeishuAdapter(BasePlatformAdapter):
                 choice=choice,
                 user_name=user_name,
                 open_id=open_id,
+                operator_user_id=operator_user_id,
                 chat_id=chat_id,
             ),
         ):
@@ -2666,6 +2689,7 @@ class FeishuAdapter(BasePlatformAdapter):
         user_name: str,
         *,
         open_id: str = "",
+        operator_user_id: str = "",
         chat_id: str = "",
     ) -> None:
         """Pop approval state and unblock the waiting agent thread."""
@@ -2673,7 +2697,13 @@ class FeishuAdapter(BasePlatformAdapter):
         if not state:
             logger.debug("[Feishu] Approval %s already resolved or unknown", approval_id)
             return
-        if not self._is_interactive_operator_authorized(open_id):
+        expected_admin = str(state.get("authorized_user_id", "") or "")
+        if expected_admin and expected_admin not in {
+            value for value in (open_id, operator_user_id) if value
+        }:
+            logger.warning("[Feishu] Unauthorized admin approval click by %s for approval %s", open_id or operator_user_id or "<unknown>", approval_id)
+            return
+        if not expected_admin and not self._is_interactive_operator_authorized(open_id):
             logger.warning("[Feishu] Unauthorized approval click by %s for approval %s", open_id or "<unknown>", approval_id)
             return
         expected_chat_id = str(state.get("chat_id", "") or "")
@@ -2689,7 +2719,13 @@ class FeishuAdapter(BasePlatformAdapter):
             return
         try:
             from tools.approval import resolve_gateway_approval
-            count = resolve_gateway_approval(state["session_key"], choice)
+            request_id = str(state.get("request_id") or "")
+            if request_id:
+                count = resolve_gateway_approval(
+                    state["session_key"], choice, request_id=request_id
+                )
+            else:
+                count = resolve_gateway_approval(state["session_key"], choice)
             logger.info(
                 "Feishu button resolved %d approval(s) for session %s (choice=%s, user=%s)",
                 count, state["session_key"], choice, user_name,
