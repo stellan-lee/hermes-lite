@@ -1839,7 +1839,7 @@ DEFAULT_CONFIG = {
         # Optional exact-user route for privileged gateway approvals. When
         # enabled, requests are sent to this destination and only user_id may
         # resolve them. Configure user_id locally first; that user can then run
-        # /set-admin-channel to update chat_id/thread_id safely.
+        # /set_admin_channel to update chat_id/thread_id safely.
         "admin": {
             "enabled": False,
             "platform": "",

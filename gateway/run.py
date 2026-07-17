@@ -7320,7 +7320,7 @@ class GatewayRunner:
         if canonical == "sethome":
             return await self._handle_set_home_command(event)
 
-        if canonical == "setadmin":
+        if canonical == "set_admin_channel":
             return await self._handle_set_admin_channel_command(event)
 
         if canonical == "compress":
@@ -11008,7 +11008,7 @@ class GatewayRunner:
         }
         if admin.user_id not in caller_ids:
             logger.warning(
-                "Unauthorized /set-admin-channel attempt (platform=%s user=%s)",
+                "Unauthorized /set_admin_channel attempt (platform=%s user=%s)",
                 source.platform.value,
                 source.user_id or "<unknown>",
             )
