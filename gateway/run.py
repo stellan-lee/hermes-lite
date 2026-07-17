@@ -1145,6 +1145,7 @@ if not _configured_cwd or _configured_cwd in {".", "auto", "cwd"}:
     os.environ["TERMINAL_CWD"] = _fallback
 
 from gateway.config import (
+    AdminApprovalConfig,
     Platform,
     _BUILTIN_PLATFORM_VALUES,
     GatewayConfig,
@@ -2439,6 +2440,67 @@ class GatewayRunner:
             group_sessions_per_user=getattr(config, "group_sessions_per_user", True),
             thread_sessions_per_user=getattr(config, "thread_sessions_per_user", False),
         )
+
+    def _resolve_approval_delivery_route(
+        self,
+        *,
+        origin_adapter: BasePlatformAdapter,
+        origin_chat_id: str,
+        origin_metadata: Optional[Dict[str, Any]],
+        kind: str,
+    ) -> Dict[str, Any]:
+        """Resolve where an approval is delivered and who may answer it.
+
+        Admin approval is intentionally fail-closed: a configured route must
+        name a connected adapter plus an exact user and chat. General
+        ``admin_action`` requests never fall back to the originating user.
+        """
+        config = getattr(self, "config", None)
+        admin = getattr(config, "admin_approval", AdminApprovalConfig())
+        admin_routed = bool(admin.enabled)
+
+        if kind == "admin_action" and not admin_routed:
+            raise RuntimeError(
+                "approvals.admin is not enabled; refusing to ask the "
+                "originating user for an administrator decision"
+            )
+
+        if not admin_routed:
+            return {
+                "adapter": origin_adapter,
+                "chat_id": origin_chat_id,
+                "metadata": origin_metadata,
+                "authorized_user_id": "",
+                "binary": False,
+                "title": "Command Approval Required",
+                "admin_routed": False,
+                "admin_platform": None,
+            }
+
+        if not admin.is_complete:
+            raise RuntimeError(
+                "approvals.admin is enabled but platform, user_id, or chat_id is missing"
+            )
+
+        target_adapter = self.adapters.get(admin.platform)
+        if target_adapter is None:
+            raise RuntimeError(
+                f"admin approval platform {admin.platform.value} is not connected"
+            )
+
+        metadata: Dict[str, Any] = {"notify": True}
+        if admin.thread_id:
+            metadata["thread_id"] = admin.thread_id
+        return {
+            "adapter": target_adapter,
+            "chat_id": admin.chat_id,
+            "metadata": metadata,
+            "authorized_user_id": admin.user_id,
+            "binary": True,
+            "title": "Admin Approval Required",
+            "admin_routed": True,
+            "admin_platform": admin.platform,
+        }
 
     def _telegram_topic_mode_enabled(self, source: SessionSource) -> bool:
         """Return whether Telegram DM topic mode is active for this chat."""
@@ -7258,6 +7320,9 @@ class GatewayRunner:
         if canonical == "sethome":
             return await self._handle_set_home_command(event)
 
+        if canonical == "setadmin":
+            return await self._handle_set_admin_channel_command(event)
+
         if canonical == "compress":
             return await self._handle_compress_command(event)
 
@@ -10915,6 +10980,65 @@ class GatewayRunner:
 
         return t("gateway.set_home.success", name=chat_name, chat_id=chat_id)
 
+    async def _handle_set_admin_channel_command(self, event: MessageEvent) -> str:
+        """Bind admin approval delivery to this chat without changing identity.
+
+        Bootstrap is deliberately local-config only: the command succeeds
+        solely when the caller and platform already match
+        ``approvals.admin.user_id`` / ``platform``. An ordinary paired user
+        therefore cannot promote themselves by being first to run it.
+        """
+        source = event.source
+        admin = self.config.admin_approval
+        if admin.platform is None or not admin.user_id:
+            return (
+                "⛔ Configure `approvals.admin.platform` and "
+                "`approvals.admin.user_id` locally before setting the admin channel."
+            )
+        if source.platform != admin.platform:
+            return (
+                f"⛔ The configured admin platform is `{admin.platform.value}`; "
+                f"this command came from `{source.platform.value}`."
+            )
+
+        caller_ids = {
+            str(value).strip()
+            for value in (source.user_id, source.user_id_alt)
+            if value is not None and str(value).strip()
+        }
+        if admin.user_id not in caller_ids:
+            logger.warning(
+                "Unauthorized /set-admin-channel attempt (platform=%s user=%s)",
+                source.platform.value,
+                source.user_id or "<unknown>",
+            )
+            return "⛔ Only the configured administrator may set the approval channel."
+
+        updated = {
+            "enabled": admin.enabled,
+            "platform": admin.platform.value,
+            "user_id": admin.user_id,
+            "chat_id": str(source.chat_id),
+            "thread_id": str(source.thread_id) if source.thread_id else None,
+        }
+        try:
+            from cli import save_config_value
+
+            if not save_config_value("approvals.admin", updated):
+                raise RuntimeError("config update returned false")
+        except Exception as exc:
+            logger.warning("Failed to save admin approval channel: %s", exc)
+            return f"Failed to save admin approval channel: {exc}"
+
+        admin.chat_id = updated["chat_id"]
+        admin.thread_id = updated["thread_id"]
+        state = "enabled" if admin.enabled else "configured but disabled"
+        thread_note = f", thread `{admin.thread_id}`" if admin.thread_id else ""
+        return (
+            f"✅ Admin approval channel set to `{admin.chat_id}`{thread_note} "
+            f"on {admin.platform.value} ({state})."
+        )
+
     @staticmethod
     def _get_guild_id(event: MessageEvent) -> Optional[int]:
         """Extract Discord guild_id from the raw message object."""
@@ -11910,6 +12034,13 @@ class GatewayRunner:
 
     async def _handle_yolo_command(self, event: MessageEvent) -> Union[str, EphemeralReply]:
         """Handle /yolo — toggle dangerous command approval bypass for this session only."""
+        admin = getattr(getattr(self, "config", None), "admin_approval", None)
+        if admin is not None and admin.enabled:
+            return EphemeralReply(
+                "🛡️ /yolo is disabled while admin approval routing is enabled. "
+                "Use the configured admin controls for each privileged action."
+            )
+
         from tools.approval import (
             disable_session_yolo,
             enable_session_yolo,
@@ -13822,6 +13953,12 @@ class GatewayRunner:
             /approve all always   — approve all + remember permanently
         """
         source = event.source
+        admin = getattr(getattr(self, "config", None), "admin_approval", None)
+        if admin is not None and admin.enabled:
+            return (
+                "🛡️ Admin-routed approvals must be decided using the "
+                "Approve or Decline controls in the configured admin channel."
+            )
         session_key = self._session_key_for_source(source)
 
         from tools.approval import (
@@ -13868,6 +14005,12 @@ class GatewayRunner:
         ``/deny`` denies the oldest; ``/deny all`` denies everything.
         """
         source = event.source
+        admin = getattr(getattr(self, "config", None), "admin_approval", None)
+        if admin is not None and admin.enabled:
+            return (
+                "🛡️ Admin-routed approvals must be decided using the "
+                "Approve or Decline controls in the configured admin channel."
+            )
         session_key = self._session_key_for_source(source)
 
         from tools.approval import (
@@ -17196,10 +17339,10 @@ class GatewayRunner:
             def _approval_notify_sync(approval_data: dict) -> None:
                 """Send the approval request to the user from the agent thread.
 
-                If the adapter supports interactive button-based approvals
-                (e.g. Discord's ``send_exec_approval``), use that for a richer
-                UX.  Otherwise fall back to a plain text message with
-                ``/approve`` instructions.
+                When ``approvals.admin`` is enabled, route to that exact
+                platform/chat/user and fail closed if secure interactive
+                delivery is unavailable. Otherwise preserve the legacy
+                originating-chat behavior and text fallback.
                 """
                 # Pause the typing indicator while the agent waits for
                 # user approval.  Critical for Slack's Assistant API where
@@ -17208,24 +17351,87 @@ class GatewayRunner:
                 # is active.  The approval message send auto-clears the Slack
                 # status; pausing prevents _keep_typing from re-setting it.
                 # Typing resumes in _handle_approve_command/_handle_deny_command.
-                _status_adapter.pause_typing_for_chat(_status_chat_id)
+                try:
+                    _status_adapter.pause_typing_for_chat(_status_chat_id)
+                except Exception:
+                    pass
 
                 cmd = approval_data.get("command", "")
                 desc = approval_data.get("description", "dangerous command")
+                request_id = str(approval_data.get("request_id") or "")
+                kind = str(approval_data.get("kind") or "command")
+                route = self._resolve_approval_delivery_route(
+                    origin_adapter=_status_adapter,
+                    origin_chat_id=_status_chat_id,
+                    origin_metadata=_status_thread_metadata,
+                    kind=kind,
+                )
+                target_adapter = route["adapter"]
+                target_chat_id = route["chat_id"]
+                target_metadata = route["metadata"]
+                authorized_user_id = route["authorized_user_id"]
+                binary = route["binary"]
+                title = route["title"]
+                admin_routed = route["admin_routed"]
+                admin_platform = route["admin_platform"]
+
+                if admin_routed:
+                    approval_data["allowed_choices"] = ["once", "deny"]
+                    approval_data["request_scoped_only"] = True
+                    origin_parts = [
+                        f"platform={source.platform.value}",
+                        f"chat={source.chat_id}",
+                    ]
+                    if source.thread_id:
+                        origin_parts.append(f"thread={source.thread_id}")
+                    if source.user_id:
+                        origin_parts.append(f"requester={source.user_id}")
+                    desc = f"{desc}\nOrigin: " + ", ".join(origin_parts)
 
                 # Prefer button-based approval when the adapter supports it.
                 # Check the *class* for the method, not the instance — avoids
                 # false positives from MagicMock auto-attribute creation in tests.
-                if getattr(type(_status_adapter), "send_exec_approval", None) is not None:
+                if getattr(type(target_adapter), "send_exec_approval", None) is not None:
                     try:
+                        _send_approval = target_adapter.send_exec_approval
+                        _send_params = inspect.signature(_send_approval).parameters
+                        _accepts_extra = any(
+                            param.kind is inspect.Parameter.VAR_KEYWORD
+                            for param in _send_params.values()
+                        )
+                        _extended_names = {
+                            "request_id", "authorized_user_id", "binary", "title",
+                        }
+                        _supports_request_scope = (
+                            _accepts_extra
+                            or _extended_names.issubset(_send_params)
+                        )
+                        if admin_routed and not _supports_request_scope:
+                            raise RuntimeError(
+                                f"{admin_platform.value} does not support "
+                                "request-scoped admin approvals"
+                            )
+
+                        _send_kwargs = {
+                            "chat_id": target_chat_id,
+                            "command": cmd,
+                            "session_key": _approval_session_key,
+                            "description": desc,
+                            "metadata": target_metadata,
+                        }
+                        # Preserve third-party adapters implementing the legacy
+                        # send_exec_approval contract. Request correlation is
+                        # mandatory for admin routing and opportunistic for the
+                        # legacy originating-chat route.
+                        if _supports_request_scope:
+                            _send_kwargs.update({
+                                "request_id": request_id,
+                                "authorized_user_id": authorized_user_id,
+                                "binary": binary,
+                                "title": title,
+                            })
                         _approval_fut = safe_schedule_threadsafe(
-                            _status_adapter.send_exec_approval(
-                                chat_id=_status_chat_id,
-                                command=cmd,
-                                session_key=_approval_session_key,
-                                description=desc,
-                                metadata=_status_thread_metadata,
-                            ),
+                            _send_approval(**_send_kwargs),
                             _loop_for_step,
                             logger=logger,
                             log_message="send_exec_approval scheduling error",
@@ -17235,14 +17441,26 @@ class GatewayRunner:
                         _approval_result = _approval_fut.result(timeout=15)
                         if _approval_result.success:
                             return
+                        if admin_routed:
+                            raise RuntimeError(
+                                "admin approval delivery failed: "
+                                f"{_approval_result.error or 'unknown send error'}"
+                            )
                         logger.warning(
                             "Button-based approval failed (send returned error), falling back to text: %s",
                             _approval_result.error,
                         )
                     except Exception as _e:
+                        if admin_routed:
+                            raise
                         logger.warning(
                             "Button-based approval failed, falling back to text: %s", _e
                         )
+
+                if admin_routed:
+                    raise RuntimeError(
+                        f"{admin_platform.value} does not support secure interactive admin approvals"
+                    )
 
                 # Fallback: plain text approval prompt
                 cmd_preview = cmd[:200] + "..." if len(cmd) > 200 else cmd
@@ -17268,6 +17486,16 @@ class GatewayRunner:
                         _approval_send_fut.result(timeout=15)
                 except Exception as _e:
                     logger.error("Failed to send approval request: %s", _e)
+
+            def _resume_origin_after_approval() -> None:
+                try:
+                    _status_adapter.resume_typing_for_chat(_status_chat_id)
+                except Exception:
+                    pass
+
+            # tools.approval invokes this after every resolution path,
+            # including timeout and cross-platform delivery failure.
+            _approval_notify_sync.on_resolved = _resume_origin_after_approval
 
             # Prepend pending model switch note so the model knows about the switch
             _pending_notes = getattr(self, '_pending_model_notes', {})

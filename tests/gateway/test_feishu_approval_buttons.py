@@ -154,6 +154,39 @@ class TestFeishuExecApproval:
         assert state["chat_id"] == "oc_12345"
 
     @pytest.mark.asyncio
+    async def test_admin_prompt_is_binary_and_request_scoped(self):
+        adapter = _make_adapter()
+        mock_response = SimpleNamespace(
+            success=lambda: True,
+            data=SimpleNamespace(message_id="msg_admin"),
+        )
+        with patch.object(
+            adapter,
+            "_feishu_send_with_retry",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_send:
+            await adapter.send_exec_approval(
+                chat_id="oc_admin",
+                command="deploy production",
+                session_key="requester-session",
+                request_id="request-123",
+                authorized_user_id="ou_admin",
+                binary=True,
+                title="Admin Approval Required",
+            )
+
+        card = json.loads(mock_send.call_args.kwargs["payload"])
+        actions = card["elements"][1]["actions"]
+        assert [action["value"]["hermes_action"] for action in actions] == [
+            "approve_once",
+            "deny",
+        ]
+        state = next(iter(adapter._approval_state.values()))
+        assert state["request_id"] == "request-123"
+        assert state["authorized_user_id"] == "ou_admin"
+
+    @pytest.mark.asyncio
     async def test_not_connected(self):
         adapter = _make_adapter()
         adapter._client = None
@@ -406,6 +439,32 @@ class TestResolveApproval:
 
         mock_resolve.assert_not_called()
         assert 6 in adapter._approval_state
+
+    @pytest.mark.asyncio
+    async def test_admin_approval_requires_exact_identity_and_request_id(self):
+        adapter = _make_adapter()
+        adapter._approval_state[7] = {
+            "session_key": "requester-session",
+            "message_id": "msg_007",
+            "chat_id": "oc_admin",
+            "request_id": "request-123",
+            "authorized_user_id": "ou_admin",
+        }
+
+        with patch("tools.approval.resolve_gateway_approval") as resolve:
+            await adapter._resolve_approval(
+                7, "once", "Attacker", open_id="ou_attacker", chat_id="oc_admin"
+            )
+            resolve.assert_not_called()
+
+            resolve.return_value = 1
+            await adapter._resolve_approval(
+                7, "once", "Admin", open_id="ou_admin", chat_id="oc_admin"
+            )
+
+        resolve.assert_called_once_with(
+            "requester-session", "once", request_id="request-123"
+        )
 
 # ===========================================================================
 # _handle_card_action_event — non-approval card actions

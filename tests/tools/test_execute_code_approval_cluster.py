@@ -111,8 +111,13 @@ def gw_session(monkeypatch):
     monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
     monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
     monkeypatch.delenv("HERMES_EXEC_ASK", raising=False)
-    # Force manual mode regardless of host config.
-    monkeypatch.setattr(A, "_get_approval_mode", lambda: "manual")
+    # Force the legacy non-admin path regardless of host config. Admin routing
+    # intentionally takes precedence over smart mode and session YOLO.
+    monkeypatch.setattr(
+        A,
+        "_get_approval_config",
+        lambda: {"mode": "manual", "admin": {"enabled": False}},
+    )
 
     session_key = "cluster-test-session"
     token = A.set_current_session_key(session_key)
@@ -202,7 +207,11 @@ def test_guard_gateway_missing_notify_is_pending(gw_session):
 
 
 def test_guard_smart_mode(gw_session, monkeypatch):
-    monkeypatch.setattr(A, "_get_approval_mode", lambda: "smart")
+    monkeypatch.setattr(
+        A,
+        "_get_approval_config",
+        lambda: {"mode": "smart", "admin": {"enabled": False}},
+    )
 
     monkeypatch.setattr(A, "_smart_approve", lambda c, d: "approve")
     res = A.check_execute_code_guard("import os", "local")

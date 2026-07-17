@@ -55,6 +55,7 @@ class CommandDef:
     cli_only: bool = False             # only available in CLI
     gateway_only: bool = False         # only available in gateway/messaging
     gateway_config_gate: str | None = None  # config dotpath; when truthy, overrides cli_only for gateway
+    native_menu: bool = True           # surface as a standalone Telegram/Slack command
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +119,9 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("profile", "Show active profile name and home directory", "Info"),
     CommandDef("sethome", "Set this chat as the home channel", "Session",
                gateway_only=True, aliases=("set-home",)),
+    CommandDef("setadmin", "Set this chat as the admin approval channel", "Session",
+               gateway_only=True, aliases=("set-admin", "set-admin-channel"),
+               native_menu=False),
     CommandDef("resume", "Resume a previously-named session", "Session",
                args_hint="[name]"),
 
@@ -498,6 +502,8 @@ def telegram_bot_commands() -> list[tuple[str, str]]:
     result: list[tuple[str, str]] = []
     for cmd in COMMAND_REGISTRY:
         if not _is_gateway_available(cmd, overrides):
+            continue
+        if not cmd.native_menu:
             continue
         # Built-in arg-taking commands are included — their handlers show
         # usage text when invoked without arguments, and hiding them from
@@ -1031,7 +1037,7 @@ _SLACK_RESERVED_COMMANDS = frozenset({
 # would otherwise get, and the Telegram-parity test fails when a canonical
 # gets clamped ("reset" was unpinned for exactly that — /new keeps its
 # native slot, the alias spelling stays reachable via /hermes reset).
-_SLACK_PRIORITY_ALIASES = ("btw", "bg")
+_SLACK_PRIORITY_ALIASES = ("btw", "bg", "q")
 
 
 def _sanitize_slack_name(raw: str) -> str:
@@ -1094,7 +1100,7 @@ def slack_native_slashes() -> list[tuple[str, str, str]]:
     _alias_to_cmd = {
         alias: cmd
         for cmd in COMMAND_REGISTRY
-        if _is_gateway_available(cmd, overrides)
+        if _is_gateway_available(cmd, overrides) and cmd.native_menu
         for alias in cmd.aliases
     }
     for alias in _SLACK_PRIORITY_ALIASES:
@@ -1106,11 +1112,15 @@ def slack_native_slashes() -> list[tuple[str, str, str]]:
     for cmd in COMMAND_REGISTRY:
         if not _is_gateway_available(cmd, overrides):
             continue
+        if not cmd.native_menu:
+            continue
         _add(cmd.name, cmd.description, cmd.args_hint or "")
 
     # Second pass: aliases.
     for cmd in COMMAND_REGISTRY:
         if not _is_gateway_available(cmd, overrides):
+            continue
+        if not cmd.native_menu:
             continue
         for alias in cmd.aliases:
             # Skip aliases that only differ from canonical by case/punctuation

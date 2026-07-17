@@ -158,6 +158,22 @@ def test_exec_approval_view_role_default_is_empty_set():
     assert view._check_auth(_interaction(99999)) is False
 
 
+def test_admin_exec_approval_is_binary_and_exact_user_only():
+    view = ExecApprovalView(
+        session_key="requester-session",
+        allowed_user_ids={"attacker"},
+        allowed_role_ids={42},
+        request_id="request-123",
+        authorized_user_id="11111",
+        binary=True,
+    )
+
+    assert view.request_id == "request-123"
+    assert view.binary is True
+    assert view._check_auth(_interaction(11111)) is True
+    assert view._check_auth(_interaction(99999, role_ids=[42])) is False
+
+
 def test_slash_confirm_view_accepts_role_allowlist():
     view = SlashConfirmView(
         session_key="sess-1",

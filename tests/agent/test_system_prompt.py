@@ -50,7 +50,29 @@ class TestContextFileCwd:
         # build_context_files_prompt (the local-CLI #19242 contract).
         monkeypatch.delenv("TERMINAL_CWD", raising=False)
         assert _captured_context_cwd(_make_agent()) is None
-
     def test_configured_dir_when_terminal_cwd_set(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
         assert _captured_context_cwd(_make_agent()) == tmp_path
+
+
+def test_admin_approval_guidance_is_tool_gated():
+    from agent.prompt_builder import ADMIN_APPROVAL_GUIDANCE
+
+    with (
+        patch("run_agent.load_soul_md", return_value=""),
+        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_environment_hints", return_value=""),
+        patch("run_agent.build_context_files_prompt", return_value=""),
+    ):
+        with_tool = build_system_prompt_parts(
+            _make_agent(
+                skip_context_files=True,
+                valid_tool_names={"request_admin_approval"},
+            )
+        )
+        without_tool = build_system_prompt_parts(
+            _make_agent(skip_context_files=True, valid_tool_names={"terminal"})
+        )
+
+    assert ADMIN_APPROVAL_GUIDANCE in with_tool["stable"]
+    assert ADMIN_APPROVAL_GUIDANCE not in without_tool["stable"]

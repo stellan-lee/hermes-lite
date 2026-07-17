@@ -1076,6 +1076,24 @@ class TestBuildApprovalKeyboard:
             assert parsed[0] == session_key
             assert parsed[1] in {"allow-once", "allow-always", "deny"}
 
+    def test_admin_keyboard_is_binary_and_request_scoped(self):
+        from gateway.platforms.qqbot.keyboards import (
+            build_approval_keyboard,
+            parse_approval_button_data,
+        )
+
+        kb = build_approval_keyboard(
+            "requester-session", request_id="request123", binary=True
+        )
+        buttons = kb.content.rows[0].buttons
+        assert len(buttons) == 2
+        assert [button.id for button in buttons] == ["allow", "deny"]
+        assert parse_approval_button_data(buttons[0].action.data) == (
+            "requester-session",
+            "allow-once",
+            "request123",
+        )
+
 
 class TestBuildUpdatePromptKeyboard:
     def test_two_buttons(self):
@@ -1650,6 +1668,55 @@ class TestDefaultInteractionDispatch:
             tools.approval.resolve_gateway_approval = orig
 
         assert resolve_calls == []
+
+    @pytest.mark.asyncio
+    async def test_admin_click_requires_exact_identity_and_request(self):
+        adapter = self._make_adapter()
+        adapter._approval_state["request123"] = {
+            "session_key": "requester-session",
+            "authorized_user_id": "admin-user",
+        }
+        resolve_calls = []
+
+        def fake_resolve(session_key, choice, resolve_all=False, request_id=None):
+            resolve_calls.append((session_key, choice, resolve_all, request_id))
+            return 1
+
+        import tools.approval
+        original = tools.approval.resolve_gateway_approval
+        tools.approval.resolve_gateway_approval = fake_resolve
+        try:
+            from gateway.platforms.qqbot.keyboards import parse_interaction_event
+
+            payload = {
+                "id": "i",
+                "chat_type": 2,
+                "user_openid": "attacker",
+                "data": {
+                    "resolved": {
+                        "button_data": (
+                            "approve:forged-session:r_request123:allow-once"
+                        )
+                    }
+                },
+            }
+            await adapter._default_interaction_dispatch(
+                parse_interaction_event(payload)
+            )
+            assert resolve_calls == []
+            assert "request123" in adapter._approval_state
+
+            payload["user_openid"] = "admin-user"
+            await adapter._default_interaction_dispatch(
+                parse_interaction_event(payload)
+            )
+        finally:
+            tools.approval.resolve_gateway_approval = original
+
+        assert resolve_calls == [
+            ("requester-session", "once", False, "request123")
+        ]
+        assert "request123" not in adapter._approval_state
 
     @pytest.mark.asyncio
     async def test_update_prompt_click_writes_response_file(self, tmp_path, monkeypatch):

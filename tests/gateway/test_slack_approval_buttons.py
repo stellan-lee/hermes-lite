@@ -118,6 +118,37 @@ class TestSlackExecApproval:
         assert kwargs.get("thread_ts") == "9999.0000"
 
     @pytest.mark.asyncio
+    async def test_admin_prompt_is_binary_and_request_scoped(self):
+        adapter = _make_adapter()
+        mock_client = adapter._team_clients["T1"]
+        mock_client.chat_postMessage = AsyncMock(return_value={"ts": "1234.9999"})
+
+        await adapter.send_exec_approval(
+            chat_id="C1",
+            command="deploy production",
+            session_key="requester-session",
+            metadata={"thread_id": "9999.0000"},
+            request_id="request-123",
+            authorized_user_id="U_ADMIN",
+            binary=True,
+            title="Admin Approval Required",
+        )
+
+        kwargs = mock_client.chat_postMessage.call_args.kwargs
+        elements = kwargs["blocks"][1]["elements"]
+        assert [element["action_id"] for element in elements] == [
+            "hermes_approve_once",
+            "hermes_deny",
+        ]
+        assert adapter._approval_state["1234.9999"] == {
+            "session_key": "requester-session",
+            "request_id": "request-123",
+            "authorized_user_id": "U_ADMIN",
+            "chat_id": "C1",
+            "thread_id": "9999.0000",
+        }
+
+    @pytest.mark.asyncio
     async def test_not_connected(self):
         adapter = _make_adapter()
         adapter._app = None
@@ -233,6 +264,38 @@ class TestSlackApprovalAction:
         mock_resolve.assert_called_once_with("session-key", "deny")
         update_kwargs = mock_client.chat_update.call_args[1]
         assert "Denied by alice" in update_kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_admin_action_requires_exact_user_and_request_id(self):
+        adapter = _make_adapter()
+        adapter._approval_resolved["1.3"] = False
+        adapter._approval_state["1.3"] = {
+            "session_key": "requester-session",
+            "request_id": "request-123",
+            "authorized_user_id": "U_ADMIN",
+            "chat_id": "C1",
+            "thread_id": "",
+        }
+        ack = AsyncMock()
+        body = {
+            "message": {"ts": "1.3", "blocks": []},
+            "channel": {"id": "C1"},
+            "user": {"id": "U_ATTACKER", "name": "attacker"},
+        }
+        action = {"action_id": "hermes_approve_once", "value": "forged-session"}
+
+        with patch("tools.approval.resolve_gateway_approval") as resolve:
+            await adapter._handle_approval_action(ack, body, action)
+            resolve.assert_not_called()
+
+            body["user"] = {"id": "U_ADMIN", "name": "admin"}
+            adapter._team_clients["T1"].chat_update = AsyncMock()
+            resolve.return_value = 1
+            await adapter._handle_approval_action(ack, body, action)
+
+        resolve.assert_called_once_with(
+            "requester-session", "once", request_id="request-123"
+        )
 
 
 # ===========================================================================

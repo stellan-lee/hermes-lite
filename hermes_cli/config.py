@@ -1836,6 +1836,17 @@ DEFAULT_CONFIG = {
         "mode": "manual",
         "timeout": 60,
         "cron_mode": "deny",
+        # Optional exact-user route for privileged gateway approvals. When
+        # enabled, requests are sent to this destination and only user_id may
+        # resolve them. Configure user_id locally first; that user can then run
+        # /set-admin-channel to update chat_id/thread_id safely.
+        "admin": {
+            "enabled": False,
+            "platform": "",
+            "user_id": "",
+            "chat_id": "",
+            "thread_id": None,
+        },
         # When true, /reload-mcp asks the user to confirm before rebuilding
         # the MCP tool set for the active session.  Reloading invalidates
         # the provider prompt cache (tool schemas are baked into the system
