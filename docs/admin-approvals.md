@@ -23,7 +23,7 @@ approvals:
 `user_id` is the authorization boundary. `chat_id` and optional `thread_id`
 are only delivery destinations. After `platform` and `user_id` are configured
 locally and the gateway has restarted, that administrator can run
-`/set-admin-channel` in the desired chat or thread to update the destination
+`/set_admin_channel` in the desired chat or thread to update the destination
 without changing the trusted identity. `/whoami` shows the platform identity
 values needed for the local configuration.
 

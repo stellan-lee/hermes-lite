@@ -521,7 +521,7 @@ group_sessions_per_user: true
 # =============================================================================
 # Optional exact-user route for dangerous commands, execute_code, and explicit
 # request_admin_approval tool calls in gateway sessions. Configure the trusted
-# platform user ID locally; the trusted user can then run /set-admin-channel to
+# platform user ID locally; the trusted user can then run /set_admin_channel to
 # bind the delivery chat/thread without changing the authorization identity.
 approvals:
   mode: manual

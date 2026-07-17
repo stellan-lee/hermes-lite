@@ -240,7 +240,7 @@ class AdminApprovalConfig:
 
     ``user_id`` is the authorization boundary. ``chat_id`` and ``thread_id``
     only control delivery and can be updated by the configured administrator
-    through ``/set-admin-channel``.
+    through ``/set_admin_channel``.
     """
 
     enabled: bool = False

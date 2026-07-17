@@ -441,7 +441,7 @@ class TestAdminApprovalCommands:
         runner = _runner(admin)
 
         result = await runner._handle_set_admin_channel_command(
-            _event("/set-admin-channel", user_id="attacker")
+            _event("/set_admin_channel", user_id="attacker")
         )
 
         assert "Only the configured administrator" in result
@@ -459,7 +459,7 @@ class TestAdminApprovalCommands:
 
         with patch("cli.save_config_value", return_value=True) as save:
             result = await runner._handle_set_admin_channel_command(
-                _event("/set-admin-channel")
+                _event("/set_admin_channel")
             )
 
         assert "Admin approval channel set" in result
