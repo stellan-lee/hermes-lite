@@ -1,25 +1,8 @@
-#!/usr/bin/env python3
-"""Tools package namespace.
+"""The complete built-in tool set for Hermes Lite."""
 
-Keep package import side effects minimal. Importing ``tools`` should not
-eagerly import the full tool stack, because several subsystems load tools while
-``hermes_cli.config`` is still initializing.
+# Explicit imports replace the old filesystem discovery and plugin hooks.
+from tools import file_tools as _file_tools  # noqa: F401
+from tools import terminal_tool as _terminal_tool  # noqa: F401
+from tools.registry import ToolContext, ToolDefinition, ToolRegistry, registry
 
-Callers should import concrete submodules directly, for example:
-
-    import tools.web_tools
-    from tools import browser_tool
-
-Python will resolve those submodules via the package path without needing them
-to be re-exported here.
-"""
-
-
-def check_file_requirements():
-    """File tools only require terminal backend availability."""
-    from .terminal_tool import check_terminal_requirements
-
-    return check_terminal_requirements()
-
-
-__all__ = ["check_file_requirements"]
+__all__ = ["ToolContext", "ToolDefinition", "ToolRegistry", "registry"]
