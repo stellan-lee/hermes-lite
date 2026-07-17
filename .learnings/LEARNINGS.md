@@ -65,3 +65,46 @@ Use `license = "MIT"` and declare `license-files = ["LICENSE"]`.
 - **Notes**: Updated the project metadata before final package validation.
 
 ---
+
+## [LRN-20260718-001] correction
+
+**Logged**: 2026-07-18T06:19:39+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+Interpret “keep existing support” as selectively reverting that capability,
+not designing a replacement or reverting the containing cleanup commit.
+
+### Details
+
+After the cleanup removed Codex-specific support, the user asked to keep it.
+The initial response proposed a new minimal Codex integration and architecture
+document, then interpreted “revert” as potentially reverting the entire
+monolithic cleanup commit. The user clarified that the intended change is to
+restore only the pre-cleanup Codex-specific changes from Git history, without
+reimplementing Codex or undoing the rest of the cleanup.
+
+### Suggested Action
+
+Before proposing replacement architecture or a whole-commit revert for a
+recently deleted capability, check whether the user wants only that
+capability's original files and integration points restored. Prefer the
+narrowest scoped Git restoration when that is the stated intent.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: agent/codex_runtime.py, agent/codex_responses_adapter.py
+- Tags: codex, cleanup, revert, scope
+
+### Resolution
+
+- **Resolved**: 2026-07-18T08:00:00+08:00
+- **Notes**: Restored the dedicated pre-cleanup Codex components and their
+  minimal package dependencies while leaving cron, skills, media, MCP/plugin
+  migration, memory hooks, connectors, and unrelated provider branches removed.
+
+---

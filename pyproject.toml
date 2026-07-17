@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
+  "httpx>=0.28.1,<0.29",
   "openai>=2.28,<3",
   "PyYAML>=6.0.2,<7",
 ]
@@ -36,8 +37,20 @@ py-modules = [
   "toolsets",
 ]
 
+[tool.setuptools.package-data]
+plugins = ["**/plugin.yaml"]
+
 [tool.setuptools.packages.find]
-include = ["hermes_cli", "tools"]
+include = [
+  "agent",
+  "agent.*",
+  "hermes_cli",
+  "plugins",
+  "plugins.*",
+  "providers",
+  "providers.*",
+  "tools",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

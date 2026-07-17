@@ -42,7 +42,8 @@ In scope:
 - remove messaging platforms, gateway, dashboard, API-server connector, cron,
   ACP, browser/computer-use, voice/media generation, and the Node TUI;
 - remove proprietary provider adapters and catalogs while retaining generic
-  OpenAI-compatible endpoints;
+  OpenAI-compatible endpoints and the user's requested pre-cleanup OpenAI
+  Codex-specific compatibility modules;
 - remove Nous account, subscription, portal, proxy, rate-guard, achievement,
   and hosted-service integration code;
 - replace default configuration, packaging metadata, tests, and documentation
@@ -53,7 +54,8 @@ Out of scope:
 
 - preserving configuration compatibility for removed optional features;
 - preserving messaging, dashboard, MCP, plugin, skill, or memory APIs;
-- supporting provider-specific protocols that are not OpenAI-compatible;
+- supporting provider-specific protocols other than the retained OpenAI Codex
+  Responses/app-server exception;
 - publishing a package or changing legal attribution in the MIT license;
 - adding a new extension framework to replace the removed frameworks.
 
@@ -75,7 +77,8 @@ request confirmation. API keys remain environment-only.
 
 The accepted trade-off is intentional feature loss in return for a smaller
 dependency and security surface. A generic OpenAI-compatible endpoint covers
-the common provider case without restoring provider plugins.
+the common provider case. The retained Codex profile is fixed and does not
+reopen arbitrary provider or user-plugin discovery.
 
 ## Engineering design document
 
@@ -179,8 +182,9 @@ upstream project rather than an in-place migration.
 
 ### 7. Success criteria
 
-- no tracked `skills`, `optional-skills`, `plugins`, `gateway`, `web`, `ui-tui`,
-  `tui_gateway`, `cron`, or `acp_adapter` implementation trees;
+- no tracked `skills`, `optional-skills`, `gateway`, `web`, `ui-tui`,
+  `tui_gateway`, `cron`, or `acp_adapter` implementation trees, and no plugin
+  implementation other than the fixed OpenAI Codex provider profile;
 - no MCP, memory-provider, connector, plugin, skill, or Nous service settings in
   the default configuration;
 - no runtime dependency that is only used by a removed feature;
@@ -201,14 +205,17 @@ upstream project rather than an in-place migration.
 - [x] Replace the tests and user documentation.
 - [x] Review all changes against the design and security constraints.
 - [x] Run full validation and audit the final repository footprint.
+- [x] Selectively restore only the requested OpenAI Codex compatibility
+  components and repeat the full review and validation.
 
 ## Final validation record
 
-- 52 tests pass on Python 3.14 and the declared minimum Python 3.11.
+- 203 tests pass on Python 3.14 and the declared minimum Python 3.11.
 - Ruff check and format validation pass on Python 3.11 and 3.14.
 - Bytecode compilation and `git diff --check HEAD` pass.
-- `uv lock`, warning-free sdist/wheel builds, and dependency checks pass.
-- An isolated wheel install verifies both console entry points, help, config
-  read/init behavior, importability, and the intended 15-module wheel content.
-- Runtime source/config scans contain no removed integration imports, settings,
-  manifests, entry points, or dependencies.
+- `uv lock` and warning-free sdist/wheel builds pass.
+- An isolated wheel install verifies both console entry points, the fixed
+  `openai-codex` provider and `codex_responses` transport, Codex model/runtime
+  imports, and Codex CLI detection at version 0.144.1.
+- The final wheel contains no removed cron, gateway, skill, memory, MCP, Nous,
+  or unrelated provider implementation path.
