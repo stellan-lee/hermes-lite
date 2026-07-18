@@ -35,15 +35,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
-from urllib.parse import urljoin
-
 from utils import is_truthy_value
-from tools.managed_tool_gateway import resolve_managed_tool_gateway
-from tools.tool_backend_helpers import (
-    managed_nous_tools_enabled,
-    nous_tool_gateway_unavailable_message,
-    resolve_openai_audio_api_key,
-)
+from tools.tool_backend_helpers import resolve_openai_audio_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -426,8 +419,6 @@ def _quote_command_stt_placeholder(value: str, quote_context: Optional[str]) -> 
             .replace("$", r"\$")
             .replace("`", r"\`")
         )
-    if os.name == "nt":
-        return subprocess.list2cmdline([value])
     return shlex.quote(value)
 
 
@@ -477,18 +468,6 @@ def _terminate_command_stt_process_tree(proc: subprocess.Popen) -> None:
     Mirrors ``tools.tts_tool._terminate_command_tts_process_tree``.
     """
     if proc.poll() is not None:
-        return
-
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
-        except Exception:
-            proc.kill()
         return
 
     try:
@@ -546,10 +525,7 @@ def _run_command_stt(command: str, timeout: float) -> subprocess.CompletedProces
         "stderr": subprocess.PIPE,
         "text": True,
     }
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        popen_kwargs["start_new_session"] = True
+    popen_kwargs["start_new_session"] = True
 
     proc = subprocess.Popen(command, **popen_kwargs)
     try:
@@ -1085,8 +1061,8 @@ def _load_local_whisper_model(model_name: str):
 
     faster-whisper's ``device="auto"`` picks CUDA when the ctranslate2 wheel
     ships CUDA shared libs, even on hosts where the NVIDIA runtime
-    (``libcublas.so.12`` / ``libcudnn*``) isn't installed — common on WSL2
-    without CUDA-on-WSL, headless servers, and CPU-only developer machines.
+    (``libcublas.so.12`` / ``libcudnn*``) isn't installed — common on
+    headless servers and CPU-only developer machines.
     On those hosts the load itself sometimes succeeds and the dlopen failure
     only surfaces at first ``transcribe()`` call.
 
@@ -1743,7 +1719,7 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
 
 
 def _resolve_openai_audio_client_config() -> tuple[str, str]:
-    """Return direct OpenAI audio config or a managed gateway fallback."""
+    """Return the configured direct OpenAI-compatible audio endpoint."""
     stt_config = _load_stt_config()
     openai_cfg = stt_config.get("openai", {})
     cfg_api_key = openai_cfg.get("api_key", "")
@@ -1755,20 +1731,9 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
     if direct_api_key:
         return direct_api_key, OPENAI_BASE_URL
 
-    managed_gateway = resolve_managed_tool_gateway("openai-audio")
-    if managed_gateway is None:
-        message = "Neither stt.openai.api_key in config nor VOICE_TOOLS_OPENAI_KEY/OPENAI_API_KEY is set"
-        if managed_nous_tools_enabled():
-            message += (
-                ". "
-                + nous_tool_gateway_unavailable_message(
-                    "managed OpenAI audio for transcription",
-                )
-            )
-        raise ValueError(message)
-
-    return managed_gateway.nous_user_token, urljoin(
-        f"{managed_gateway.gateway_origin.rstrip('/')}/", "v1"
+    raise ValueError(
+        "Neither stt.openai.api_key in config nor "
+        "VOICE_TOOLS_OPENAI_KEY/OPENAI_API_KEY is set"
     )
 
 

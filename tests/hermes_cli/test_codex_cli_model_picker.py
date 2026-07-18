@@ -103,64 +103,6 @@ def test_codex_picker_uses_live_codex_catalog(hermes_auth_only_env, tmp_path, mo
     assert codex["total_models"] == len(codex["models"])
 
 
-@pytest.fixture()
-def claude_code_only_env(tmp_path, monkeypatch):
-    """Set up an environment where Anthropic credentials only exist in
-    ~/.claude/.credentials.json (Claude Code) — not in env vars or Hermes
-    auth store."""
-    hermes_home = tmp_path / ".hermes"
-    hermes_home.mkdir()
-
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    # No Codex CLI
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "no_codex"))
-
-    (hermes_home / "auth.json").write_text(
-        json.dumps({"version": 2, "providers": {}})
-    )
-
-    # Claude Code credentials in the correct format
-    claude_dir = tmp_path / ".claude"
-    claude_dir.mkdir()
-    (claude_dir / ".credentials.json").write_text(json.dumps({
-        "claudeAiOauth": {
-            "accessToken": _make_fake_jwt(),
-            "refreshToken": "fake-refresh",
-            "expiresAt": int(time.time() * 1000) + 3_600_000,
-        }
-    }))
-
-    # Patch Path.home() so the adapter finds the file
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-
-    for var in [
-        "OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-        "ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
-        "NOUS_API_KEY", "DEEPSEEK_API_KEY",
-    ]:
-        monkeypatch.delenv(var, raising=False)
-
-    return hermes_home
-
-
-def test_claude_code_file_detected_by_model_picker(claude_code_only_env):
-    """anthropic should appear when credentials only exist in ~/.claude/.credentials.json."""
-    from hermes_cli.model_switch import list_authenticated_providers
-
-    providers = list_authenticated_providers(
-        current_provider="anthropic",
-        max_models=10,
-    )
-    slugs = [p["slug"] for p in providers]
-    assert "anthropic" in slugs, (
-        f"anthropic not found in /model picker providers: {slugs}"
-    )
-
-    anthropic = next(p for p in providers if p["slug"] == "anthropic")
-    assert anthropic["is_current"] is True
-    assert anthropic["total_models"] > 0
-
-
 def test_no_codex_when_no_credentials(tmp_path, monkeypatch):
     """openai-codex should NOT appear when no credentials exist anywhere."""
     hermes_home = tmp_path / ".hermes"

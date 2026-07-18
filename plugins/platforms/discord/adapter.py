@@ -68,26 +68,6 @@ from gateway.platforms.base import (
 from tools.url_safety import is_safe_url
 
 
-def _find_discord_windows_bundled_opus(discord_module: Any = None) -> Optional[str]:
-    """Return discord.py's bundled Windows opus DLL path when present."""
-    if sys.platform != "win32":
-        return None
-    discord_module = discord if discord_module is None else discord_module
-    if discord_module is None:
-        return None
-
-    opus_module = getattr(discord_module, "opus", None)
-    opus_file = getattr(opus_module, "__file__", None)
-    if not opus_file:
-        return None
-
-    target = "x64" if struct.calcsize("P") * 8 > 32 else "x86"
-    bundled = _Path(opus_file).resolve().parent / "bin" / f"libopus-0.{target}.dll"
-    if bundled.is_file():
-        return str(bundled)
-    return None
-
-
 def _clean_discord_id(entry: str) -> str:
     """Strip common prefixes from a Discord user ID or username entry.
 
@@ -631,9 +611,6 @@ class DiscordAdapter(BasePlatformAdapter):
         if not discord.opus.is_loaded():
             import ctypes.util
             opus_candidates = []
-            bundled_opus = _find_discord_windows_bundled_opus(discord)
-            if bundled_opus:
-                opus_candidates.append(bundled_opus)
             opus_path = ctypes.util.find_library("opus")
             if opus_path:
                 opus_candidates.append(opus_path)
@@ -2976,7 +2953,7 @@ class DiscordAdapter(BasePlatformAdapter):
             await self._run_simple_slash(interaction, "/reset", "Session reset~")
 
         @tree.command(name="model", description="Show or change the model")
-        @discord.app_commands.describe(name="Model name (e.g. anthropic/claude-sonnet-4). Leave empty to see current.")
+        @discord.app_commands.describe(name="Codex or custom model id. Leave empty to see current.")
         async def slash_model(interaction: discord.Interaction, name: str = ""):
             await self._run_simple_slash(interaction, f"/model {name}".strip())
 

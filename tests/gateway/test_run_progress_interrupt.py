@@ -131,7 +131,6 @@ def _make_runner(adapter):
 
 
 async def _run_once(monkeypatch, tmp_path, agent_cls, session_id):
-    monkeypatch.setenv("HERMES_TOOL_PROGRESS_MODE", "all")
 
     fake_dotenv = types.ModuleType("dotenv")
     fake_dotenv.load_dotenv = lambda *args, **kwargs: None
@@ -144,6 +143,11 @@ async def _run_once(monkeypatch, tmp_path, agent_cls, session_id):
     adapter = ProgressCaptureAdapter()
     runner = _make_runner(adapter)
     gateway_run = importlib.import_module("gateway.run")
+    monkeypatch.setattr(
+        gateway_run,
+        "_load_gateway_config",
+        lambda: {"display": {"platforms": {"telegram": {"tool_progress": "all"}}}},
+    )
     monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
     monkeypatch.setattr(
         gateway_run,

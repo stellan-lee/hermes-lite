@@ -180,9 +180,9 @@ class TestPromptToolkitTerminalCompatibility:
     def test_lf_enter_binds_to_submit_handler_posix(self):
         """Some thin PTYs deliver Enter as LF/c-j instead of CR/enter.
 
-        On a bare local POSIX TTY (no SSH/WSL/WT/Ghostty) we keep c-j → submit so
+        On a bare local POSIX TTY we keep c-j → submit so
         Enter works on thin PTYs (docker exec, certain ssh configurations).
-        On Windows, WSL, SSH sessions, Windows Terminal, and Ghostty we leave c-j
+        On SSH sessions and Ghostty we leave c-j
         unbound here so it can be used as the Ctrl+Enter newline keystroke
         without conflicting with submit. See issue #22379.
         """
@@ -222,15 +222,6 @@ class TestPromptToolkitTerminalCompatibility:
         with _patch.object(_sys, "platform", "linux"), \
              _patch.dict(_os.environ, {"TERM": "tmux-256color", "TERM_PROGRAM": "tmux", "GHOSTTY_RESOURCES_DIR": "/usr/share/ghostty"}, clear=True), \
              _patch("builtins.open", side_effect=OSError("no /proc")):
-            kb = KeyBindings()
-            _bind_prompt_submit_keys(kb, submit_handler)
-            bindings = {tuple(key.value for key in binding.keys): binding.handler for binding in kb.bindings}
-            assert bindings[("c-m",)] is submit_handler
-            assert ("c-j",) not in bindings
-
-        # Windows: only enter submits; c-j is free for the newline binding
-        # added separately in the prompt setup.
-        with _patch.object(_sys, "platform", "win32"):
             kb = KeyBindings()
             _bind_prompt_submit_keys(kb, submit_handler)
             bindings = {tuple(key.value for key in binding.keys): binding.handler for binding in kb.bindings}
@@ -482,155 +473,6 @@ class TestHistoryDisplay:
         mock_handler.assert_called_once()
         called_with = mock_handler.call_args.args[0]
         assert called_with.lower().startswith("/sessions")
-
-
-class TestRootLevelProviderOverride:
-    """Root-level provider/base_url in config.yaml must NOT override model.provider."""
-
-    def test_model_provider_wins_over_root_provider(self, tmp_path, monkeypatch):
-        """model.provider takes priority — root-level provider is only a fallback."""
-        import yaml
-
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-
-        config_path = hermes_home / "config.yaml"
-        config_path.write_text(yaml.safe_dump({
-            "provider": "opencode-go",  # stale root-level key
-            "model": {
-                "default": "google/gemini-3-flash-preview",
-                "provider": "openrouter",  # correct canonical key
-            },
-        }))
-
-        import cli
-        monkeypatch.setattr(cli, "_hermes_home", hermes_home)
-        cfg = cli.load_cli_config()
-
-        assert cfg["model"]["provider"] == "openrouter"
-
-    def test_root_provider_used_as_fallback_when_model_provider_missing(self, tmp_path, monkeypatch):
-        """Legacy root-level provider still populates model.provider in the CLI loader."""
-        import yaml
-
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-
-        config_path = hermes_home / "config.yaml"
-        config_path.write_text(yaml.safe_dump({
-            "provider": "opencode-go",  # stale root key
-            "model": {
-                "default": "google/gemini-3-flash-preview",
-                # no explicit model.provider — defaults provide "auto"
-            },
-        }))
-
-        import cli
-        monkeypatch.setattr(cli, "_hermes_home", hermes_home)
-        cfg = cli.load_cli_config()
-
-        assert cfg["model"]["provider"] == "opencode-go"
-
-    def test_root_base_url_used_as_fallback_when_model_base_url_missing(self, tmp_path, monkeypatch):
-        """Legacy root-level base_url still populates model.base_url in the CLI loader."""
-        import yaml
-
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-
-        config_path = hermes_home / "config.yaml"
-        config_path.write_text(yaml.safe_dump({
-            "base_url": "https://example.com/v1",
-            "model": {
-                "default": "google/gemini-3-flash-preview",
-            },
-        }))
-
-        import cli
-        monkeypatch.setattr(cli, "_hermes_home", hermes_home)
-        cfg = cli.load_cli_config()
-
-        assert cfg["model"]["base_url"] == "https://example.com/v1"
-
-    def test_normalize_root_model_keys_moves_to_model(self):
-        """_normalize_root_model_keys migrates root keys into model section."""
-        from hermes_cli.config import _normalize_root_model_keys
-
-        config = {
-            "provider": "opencode-go",
-            "base_url": "https://example.com/v1",
-            "model": {
-                "default": "some-model",
-            },
-        }
-        result = _normalize_root_model_keys(config)
-        # Root keys removed
-        assert "provider" not in result
-        assert "base_url" not in result
-        # Migrated into model section
-        assert result["model"]["provider"] == "opencode-go"
-        assert result["model"]["base_url"] == "https://example.com/v1"
-
-    def test_normalize_root_model_keys_does_not_override_existing(self):
-        """Existing model.provider is never overridden by root-level key."""
-        from hermes_cli.config import _normalize_root_model_keys
-
-        config = {
-            "provider": "stale-provider",
-            "model": {
-                "default": "some-model",
-                "provider": "correct-provider",
-            },
-        }
-        result = _normalize_root_model_keys(config)
-        assert result["model"]["provider"] == "correct-provider"
-        assert "provider" not in result  # root key still cleaned up
-
-    def test_normalize_root_context_length_migrates_to_model(self):
-        """Root-level context_length is migrated into the model section."""
-        from hermes_cli.config import _normalize_root_model_keys
-
-        config = {
-            "context_length": 128000,
-            "model": {
-                "default": "my-model",
-            },
-        }
-        result = _normalize_root_model_keys(config)
-        assert result["model"]["context_length"] == 128000
-        assert "context_length" not in result  # root key cleaned up
-
-    def test_normalize_root_context_length_does_not_override_existing(self):
-        """Existing model.context_length is not overridden by root-level key."""
-        from hermes_cli.config import _normalize_root_model_keys
-
-        config = {
-            "context_length": 256000,
-            "model": {
-                "default": "my-model",
-                "context_length": 128000,
-            },
-        }
-        result = _normalize_root_model_keys(config)
-        assert result["model"]["context_length"] == 128000  # preserved
-        assert "context_length" not in result  # root key still cleaned up
-
-    def test_normalize_root_context_length_with_string_model(self):
-        """Root-level context_length is migrated even when model is a string."""
-        from hermes_cli.config import _normalize_root_model_keys
-
-        config = {
-            "context_length": 128000,
-            "model": "my-model",
-        }
-        result = _normalize_root_model_keys(config)
-        assert isinstance(result["model"], dict)
-        assert result["model"]["default"] == "my-model"
-        assert result["model"]["context_length"] == 128000
-        assert "context_length" not in result
 
 
 class TestProviderResolution:

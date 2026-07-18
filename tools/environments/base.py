@@ -79,8 +79,7 @@ def touch_activity_if_due(
 
 
 def get_sandbox_dir() -> Path:
-    """Return the host-side root for all sandbox storage (Docker workspaces,
-    Singularity overlays/SIF cache, etc.).
+    """Return the host-side root for Docker workspace storage.
 
     Configurable via TERMINAL_SANDBOX_DIR. Defaults to {HERMES_HOME}/sandboxes/.
     """
@@ -187,8 +186,7 @@ def _file_mtime_key(host_path: str) -> tuple[float, int] | None:
 class ProcessHandle(Protocol):
     """Duck type that every backend's _run_bash() must return.
 
-    subprocess.Popen satisfies this natively.  SDK backends (Modal, Daytona)
-    return _ThreadedProcessHandle which adapts their blocking calls.
+    ``subprocess.Popen`` satisfies this natively.
     """
 
     def poll(self) -> int | None: ...
@@ -200,75 +198,6 @@ class ProcessHandle(Protocol):
 
     @property
     def returncode(self) -> int | None: ...
-
-
-class _ThreadedProcessHandle:
-    """Adapter for SDK backends (Modal, Daytona) that have no real subprocess.
-
-    Wraps a blocking ``exec_fn() -> (output_str, exit_code)`` in a background
-    thread and exposes a ProcessHandle-compatible interface.  An optional
-    ``cancel_fn`` is invoked on ``kill()`` for backend-specific cancellation
-    (e.g. Modal sandbox.terminate, Daytona sandbox.stop).
-    """
-
-    def __init__(
-        self,
-        exec_fn: Callable[[], tuple[str, int]],
-        cancel_fn: Callable[[], None] | None = None,
-    ):
-        self._cancel_fn = cancel_fn
-        self._done = threading.Event()
-        self._returncode: int | None = None
-        self._error: Exception | None = None
-
-        # Pipe for stdout — drain thread in _wait_for_process reads the read end.
-        read_fd, write_fd = os.pipe()
-        self._stdout = os.fdopen(read_fd, "r", encoding="utf-8", errors="replace")
-        self._write_fd = write_fd
-
-        def _worker():
-            try:
-                output, exit_code = exec_fn()
-                self._returncode = exit_code
-                # Write output into the pipe so drain thread picks it up.
-                try:
-                    os.write(self._write_fd, output.encode("utf-8", errors="replace"))
-                except OSError:
-                    pass
-            except Exception as exc:
-                self._error = exc
-                self._returncode = 1
-            finally:
-                try:
-                    os.close(self._write_fd)
-                except OSError:
-                    pass
-                self._done.set()
-
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-
-    @property
-    def stdout(self):
-        return self._stdout
-
-    @property
-    def returncode(self) -> int | None:
-        return self._returncode
-
-    def poll(self) -> int | None:
-        return self._returncode if self._done.is_set() else None
-
-    def kill(self):
-        if self._cancel_fn:
-            try:
-                self._cancel_fn()
-            except Exception:
-                pass
-
-    def wait(self, timeout: float | None = None) -> int:
-        self._done.wait(timeout=timeout)
-        return self._returncode
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +222,6 @@ class BaseEnvironment(ABC):
     interrupt handling, and timeout enforcement.
     """
 
-    # Subclasses that embed stdin as a heredoc (Modal, Daytona) set this.
-    _stdin_mode: str = "pipe"  # "pipe" or "heredoc"
-
     # Snapshot creation timeout (override for slow cold-starts).
     _snapshot_timeout: int = 30
 
@@ -303,8 +229,8 @@ class BaseEnvironment(ABC):
         """Return the backend temp directory used for session artifacts.
 
         Most sandboxed backends use ``/tmp`` inside the target environment.
-        LocalEnvironment overrides this on platforms like Termux where ``/tmp``
-        may be missing and ``TMPDIR`` is the portable writable location.
+        LocalEnvironment may override this when ``TMPDIR`` is the portable
+        writable location.
         """
         return "/tmp"
 
@@ -334,7 +260,7 @@ class BaseEnvironment(ABC):
     ) -> ProcessHandle:
         """Spawn a bash process to run *cmd_string*.
 
-        Returns a ProcessHandle (subprocess.Popen or _ThreadedProcessHandle).
+        Returns a subprocess-compatible process handle.
         Must be overridden by every backend.
         """
         raise NotImplementedError(f"{type(self).__name__} must implement _run_bash()")
@@ -467,16 +393,6 @@ class BaseEnvironment(ABC):
         return "\n".join(parts)
 
     # ------------------------------------------------------------------
-    # Stdin heredoc embedding (for SDK backends)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _embed_stdin_heredoc(command: str, stdin_data: str) -> str:
-        """Append stdin_data as a shell heredoc to the command string."""
-        delimiter = f"HERMES_STDIN_{uuid.uuid4().hex[:12]}"
-        return f"{command} << '{delimiter}'\n{stdin_data}\n{delimiter}"
-
-    # ------------------------------------------------------------------
     # Process lifecycle
     # ------------------------------------------------------------------
 
@@ -567,26 +483,6 @@ class BaseEnvironment(ABC):
                 fd = None
             if not isinstance(fd, int) or fd < 0:
                 _drain_iterable(stream)
-                return
-            # select.select does NOT work on pipe fds on Windows (only sockets).
-            # Use blocking os.read in a daemon thread instead — safe because
-            # EOF arrives promptly when bash exits.
-            if os.name == "nt":
-                try:
-                    while True:
-                        chunk = os.read(fd, 4096)
-                        if not chunk:
-                            break
-                        output_chunks.append(decoder.decode(chunk))
-                except (ValueError, OSError):
-                    pass
-                finally:
-                    try:
-                        tail = decoder.decode(b"", final=True)
-                        if tail:
-                            output_chunks.append(tail)
-                    except Exception:
-                        pass
                 return
             idle_after_exit = 0
             try:
@@ -778,7 +674,7 @@ class BaseEnvironment(ABC):
         """Parse the __HERMES_CWD_{session}__ marker from stdout output.
 
         Updates self.cwd and strips the marker from result["output"].
-        Used by remote backends (Docker, SSH, Modal, Daytona, Singularity).
+        Used by remote backends (Docker and SSH).
         """
         output = result.get("output", "")
         marker = self._cwd_marker
@@ -815,10 +711,8 @@ class BaseEnvironment(ABC):
     def _before_execute(self) -> None:
         """Hook called before each command execution.
 
-        Remote backends (SSH, Modal, Daytona) override this to trigger
-        their FileSyncManager.  Bind-mount backends (Docker, Singularity)
-        and Local don't need file sync — the host filesystem is directly
-        visible inside the container/process.
+        SSH overrides this to trigger its FileSyncManager. Docker and Local
+        don't need file sync because the host filesystem is directly visible.
         """
         pass
 
@@ -855,11 +749,6 @@ class BaseEnvironment(ABC):
             effective_stdin = sudo_stdin
         else:
             effective_stdin = stdin_data
-
-        # Embed stdin as heredoc for backends that need it
-        if effective_stdin and self._stdin_mode == "heredoc":
-            exec_command = self._embed_stdin_heredoc(exec_command, effective_stdin)
-            effective_stdin = None
 
         wrapped = self._wrap_command(exec_command, effective_cwd)
 

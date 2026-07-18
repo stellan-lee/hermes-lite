@@ -114,7 +114,6 @@ _SKILL_REVIEW_PROMPT = (
     "reply — the background curator handles consolidation at scale.\n\n"
     "Protected skills (DO NOT edit these):\n"
     "  • Bundled skills (shipped with Hermes, e.g. 'hermes-agent').\n"
-    "  • Hub-installed skills (installed via 'hermes skills install').\n"
     "Pinned skills (marked via 'hermes curator pin') CAN be improved — "
     "pin only blocks deletion/archive/consolidation by the curator, not "
     "content updates. Patch them when a pitfall or missing step turns up, "
@@ -200,7 +199,6 @@ _COMBINED_REVIEW_PROMPT = (
     "background curator handles consolidation.\n\n"
     "Protected skills (DO NOT edit these):\n"
     "  • Bundled skills (shipped with Hermes, e.g. 'hermes-agent').\n"
-    "  • Hub-installed skills (installed via 'hermes skills install').\n"
     "Pinned skills (marked via 'hermes curator pin') CAN be improved — "
     "pin only blocks deletion/archive/consolidation by the curator, not "
     "content updates. Patch them when a pitfall or missing step turns up, "
@@ -365,8 +363,7 @@ def _run_review_in_thread(
             # base_url, api_key, api_mode) so the fork uses the exact
             # same credentials the main turn is using.  Without this,
             # AIAgent.__init__ re-runs auto-resolution from env vars,
-            # which fails for OAuth-only providers, session-scoped
-            # creds, or credential-pool setups where the resolver can't
+            # which fails for session-scoped credentials that the resolver can't
             # reconstruct auth from scratch -- producing the spurious
             # "No LLM provider configured" warning at end of turn.
             _parent_runtime = agent._current_main_runtime()
@@ -381,9 +378,8 @@ def _run_review_in_thread(
             # owns the loop and the agent-loop tools dispatch.
             if _parent_api_mode == "codex_app_server":
                 _parent_api_mode = "codex_responses"
-            # skip_memory=True keeps the review fork from
-            # touching external memory plugins (honcho, mem0,
-            # supermemory, etc.).  Without it, the fork's
+            # skip_memory=True keeps the review fork from touching external
+            # memory plugins. Without it, the fork's
             # __init__ rebuilds its own _memory_manager from
             # config, scoped to the parent's session_id, and
             # run_conversation() then leaks the harness prompt
@@ -396,9 +392,8 @@ def _run_review_in_thread(
             # parent below so memory(action="add") writes from
             # the review still land on disk; the review just
             # has zero side effects on external providers.
-            # Match parent's toolset config so ``tools[]`` is byte-identical
-            # in the request body — Anthropic's cache key includes it.
-            # (The runtime whitelist below still restricts dispatch.)
+            # Match the parent's toolset config; the runtime whitelist below
+            # still restricts dispatch.
             review_agent = AIAgent(
                 model=agent.model,
                 max_iterations=16,
@@ -408,7 +403,6 @@ def _run_review_in_thread(
                 api_mode=_parent_api_mode,
                 base_url=_parent_runtime.get("base_url") or None,
                 api_key=_parent_runtime.get("api_key") or None,
-                credential_pool=getattr(agent, "_credential_pool", None),
                 parent_session_id=agent.session_id,
                 enabled_toolsets=getattr(agent, "enabled_toolsets", None),
                 disabled_toolsets=getattr(agent, "disabled_toolsets", None),
@@ -429,10 +423,8 @@ def _run_review_in_thread(
             # _vprint and leak past the stdout redirect (they go via
             # _print_fn/status_callback, which bypass sys.stdout).
             review_agent.suppress_status_output = True
-            # Inherit the parent's cached system prompt verbatim so
-            # the review fork's outbound HTTP request hits the same
-            # Anthropic/OpenRouter prefix cache the parent warmed.
-            # Without this, the fork rebuilds the system prompt from
+            # Inherit the parent's cached system prompt verbatim. Without
+            # this, the fork rebuilds the system prompt from
             # scratch (fresh _hermes_now() timestamp, fresh
             # session_id, narrower toolset → different skills_prompt)
             # and the byte-exact prefix-cache key misses. See

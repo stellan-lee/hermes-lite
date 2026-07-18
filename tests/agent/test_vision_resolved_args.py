@@ -17,9 +17,9 @@ def test_vision_call_uses_resolved_provider_args():
         "agent.auxiliary_client._resolve_task_provider_model",
         return_value=("my-resolved-provider", "my-resolved-model", "http://resolved", "resolved-key", "chat_completions"),
     ), patch(
-        "agent.auxiliary_client.resolve_vision_provider_client",
-        return_value=("my-resolved-provider", fake_client, "my-resolved-model"),
-    ) as mock_vision:
+        "agent.auxiliary_client._get_cached_client",
+        return_value=(fake_client, "my-resolved-model"),
+    ) as mock_client:
         call_llm(
             "vision",
             provider="raw-provider",
@@ -30,11 +30,11 @@ def test_vision_call_uses_resolved_provider_args():
         )
 
     # The resolved values must be passed, not the raw call_llm arguments
-    call_args = mock_vision.call_args
-    assert call_args.kwargs["provider"] == "my-resolved-provider"
-    assert call_args.kwargs["model"] == "my-resolved-model"
-    assert call_args.kwargs["base_url"] == "http://resolved"
-    assert call_args.kwargs["api_key"] == "resolved-key"
+    call_args = mock_client.call_args.args
+    assert call_args[0] == "my-resolved-provider"
+    assert call_args[1] == "my-resolved-model"
+    assert call_args[3] == "http://resolved"
+    assert call_args[4] == "resolved-key"
 
 
 def test_vision_base_url_override_keeps_explicit_provider():

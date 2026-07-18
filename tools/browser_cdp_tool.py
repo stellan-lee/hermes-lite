@@ -206,8 +206,7 @@ def _browser_cdp_via_supervisor(
     except Exception as exc:  # pragma: no cover — defensive
         return tool_error(
             f"CDP supervisor is not available: {exc}. frame_id routing requires "
-            f"a running supervisor attached via /browser connect or an active "
-            f"Browserbase session."
+            f"a running supervisor attached via /browser connect."
         )
 
     supervisor = SUPERVISOR_REGISTRY.get(task_id)
@@ -319,8 +318,7 @@ def browser_cdp(
             frame is an OOPIF with a live session tracked by the CDP
             supervisor), routes the call through the supervisor's existing
             WebSocket — which is how you Runtime.evaluate *inside* an
-            iframe on backends where per-call fresh CDP connections would
-            hit signed-URL expiry (Browserbase) or expensive reattach.
+            iframe without creating a fresh CDP connection for every call.
         timeout: Seconds to wait for the call to complete.
         task_id: Task identifier for supervisor lookup.  When ``frame_id``
             is set, this identifies which task's supervisor to use; the
@@ -358,8 +356,7 @@ def browser_cdp(
         return tool_error(
             "No CDP endpoint is available. Run '/browser connect' to attach "
             "to a running Chrome, Brave, Chromium, or Edge browser, or set "
-            "'browser.cdp_url' in config.yaml. The Camofox backend is REST-only "
-            "and does not expose CDP.",
+            "'browser.cdp_url' in config.yaml.",
             cdp_docs=CDP_DOCS_URL,
         )
 
@@ -432,11 +429,8 @@ BROWSER_CDP_SCHEMA: Dict[str, Any] = {
         "browser_console, etc.\n\n"
         "**Requires a reachable CDP endpoint.** Available when the user has "
         "run '/browser connect' to attach to a running Chrome, Brave, Chromium, "
-        "or Edge browser, or when 'browser.cdp_url' is set in config.yaml. "
-        "Not currently wired up for cloud backends (Browserbase, Browser Use, "
-        "Firecrawl) — those expose CDP per session but live-session routing is "
-        "a follow-up. Camofox is REST-only and will never support CDP. If the "
-        "tool is in your toolset at all, a CDP endpoint is already reachable.\n\n"
+        "or Edge browser, or when 'browser.cdp_url' is set in config.yaml. If "
+        "the tool is in your toolset, a CDP endpoint is already reachable.\n\n"
         f"**CDP method reference:** {CDP_DOCS_URL} — use web_extract on a "
         "method's URL (e.g. '/tot/Page/#method-handleJavaScriptDialog') "
         "to look up parameters and return shape.\n\n"
@@ -459,8 +453,7 @@ BROWSER_CDP_SCHEMA: Dict[str, Any] = {
         "- **Cross-origin iframe scope** (Runtime.evaluate inside an OOPIF, "
         "Page.* targeting a frame target, etc.): pass frame_id from the "
         "browser_snapshot frame_tree output. This routes through the CDP "
-        "supervisor's live connection — the only reliable way on "
-        "Browserbase where stateless CDP calls hit signed-URL expiry.\n"
+        "supervisor's live connection.\n"
         "- Each stateless call (without frame_id) is independent — sessions "
         "and event subscriptions do not persist between calls. For stateful "
         "workflows, prefer the dedicated browser tools or use frame_id "
@@ -502,9 +495,7 @@ BROWSER_CDP_SCHEMA: Dict[str, Any] = {
                     "is_oopif=true. When set, routes the call through the "
                     "CDP supervisor's live session for that iframe. "
                     "Essential for Runtime.evaluate inside cross-origin "
-                    "iframes, especially on Browserbase where fresh "
-                    "per-call CDP connections can't keep up with signed "
-                    "URL rotation. For same-origin iframes, use parent "
+                    "iframes. For same-origin iframes, use parent "
                     "contentWindow/contentDocument from Runtime.evaluate "
                     "at the top-level page instead."
                 ),
@@ -529,11 +520,8 @@ def _browser_cdp_check() -> bool:
     endpoint right now — meaning a static URL is set via ``/browser connect``
     (``BROWSER_CDP_URL``) or ``browser.cdp_url`` in ``config.yaml``.
 
-    Backends that do *not* currently expose CDP to us — Camofox (REST-only),
-    the default local agent-browser mode (Playwright hides its internal CDP
-    port), and cloud providers whose per-session ``cdp_url`` is not yet
-    surfaced — are gated out so the model doesn't see a tool that would
-    reliably fail.  Cloud-provider CDP routing is a follow-up.
+    The default local agent-browser mode hides its internal CDP port and is
+    gated out so the model does not see a tool that would reliably fail.
 
     Kept in a thin wrapper so the registration statement stays at module top
     level (the tool-discovery AST scan only picks up top-level

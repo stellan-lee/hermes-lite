@@ -175,7 +175,7 @@ def _install_fakes(monkeypatch, agent_cls, *, cleanup_on: bool):
     cfg = {
         "display": {
             "platforms": {
-                "telegram": {"cleanup_progress": True},
+                "telegram": {"cleanup_progress": True, "tool_progress": "all"},
             }
         }
     } if cleanup_on else {}

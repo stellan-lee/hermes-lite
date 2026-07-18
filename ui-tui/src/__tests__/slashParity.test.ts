@@ -13,7 +13,7 @@ interface CommandRegistryLoad {
   names: string[]
 }
 
-const NATIVE_MUTATING_COMMANDS = new Set(['browser', 'busy', 'fast', 'reload-mcp', 'rollback', 'stop'])
+const NATIVE_MUTATING_COMMANDS = new Set(['browser', 'busy', 'reload-mcp', 'rollback', 'stop'])
 
 const MUTATING_COMMANDS = [
   'background',
@@ -22,7 +22,6 @@ const MUTATING_COMMANDS = [
   'busy',
   'clear',
   'compress',
-  'fast',
   'model',
   'new',
   'personality',

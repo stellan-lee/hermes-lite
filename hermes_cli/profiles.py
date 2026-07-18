@@ -329,16 +329,15 @@ def check_alias_collision(name: str) -> Optional[str]:
 
     # Check existing commands in PATH
     wrapper_dir = _get_wrapper_dir()
-    is_windows = sys.platform == "win32"
     try:
         result = subprocess.run(
-            ["where" if is_windows else "which", canon],
+            ["which", canon],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:
             existing_path = result.stdout.strip().splitlines()[0]
             # Allow overwriting our own wrappers
-            expected = wrapper_dir / (f"{canon}.bat" if is_windows else canon)
+            expected = wrapper_dir / canon
             if existing_path == str(expected):
                 try:
                     content = expected.read_text()
@@ -366,7 +365,6 @@ def create_wrapper_script(name: str, target: Optional[str] = None) -> Optional[P
     activates is ``target`` if given, otherwise ``name`` — this lets a custom
     alias name point at a differently-named profile without a post-hoc rewrite.
 
-    On Windows, creates a ``.bat`` file instead of a POSIX shell script.
     Returns the path to the created wrapper, or None if creation failed.
     """
     canon = normalize_profile_name(name)
@@ -378,36 +376,21 @@ def create_wrapper_script(name: str, target: Optional[str] = None) -> Optional[P
         print(f"⚠ Could not create {wrapper_dir}: {e}")
         return None
 
-    is_windows = sys.platform == "win32"
-    if is_windows:
-        wrapper_path = wrapper_dir / f"{canon}.bat"
-        try:
-            wrapper_path.write_text(f"@echo off\r\nhermes -p {profile} %*\r\n")
-            return wrapper_path
-        except OSError as e:
-            print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
-            return None
-    else:
-        wrapper_path = wrapper_dir / canon
-        try:
-            wrapper_path.write_text(f'#!/bin/sh\nexec hermes -p {profile} "$@"\n')
-            wrapper_path.chmod(wrapper_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-            return wrapper_path
-        except OSError as e:
-            print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
-            return None
+    wrapper_path = wrapper_dir / canon
+    try:
+        wrapper_path.write_text(f'#!/bin/sh\nexec hermes -p {profile} "$@"\n')
+        wrapper_path.chmod(wrapper_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return wrapper_path
+    except OSError as e:
+        print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
+        return None
 
 
 def remove_wrapper_script(name: str) -> bool:
     """Remove the wrapper script for a profile. Returns True if removed."""
     wrapper_dir = _get_wrapper_dir()
     canon = normalize_profile_name(name)
-    is_windows = sys.platform == "win32"
-
-    # Check both the extensionless path (POSIX) and .bat (Windows)
     candidates = [wrapper_dir / canon]
-    if is_windows:
-        candidates.insert(0, wrapper_dir / f"{canon}.bat")
 
     for wrapper_path in candidates:
         if wrapper_path.exists():
@@ -1153,16 +1136,10 @@ def _stop_gateway_process(profile_dir: Path) -> None:
         raw = pid_file.read_text().strip()
         data = json.loads(raw) if raw.startswith("{") else {"pid": int(raw)}
         pid = int(data["pid"])
-        # Route through terminate_pid so Windows uses the appropriate
-        # primitive (taskkill / TerminateProcess) — raw os.kill with
-        # _signal.SIGKILL raises AttributeError at import time on Windows,
-        # and raw os.kill with SIGTERM doesn't cascade to child processes
-        # the same way taskkill /T does.
         from gateway.status import terminate_pid as _terminate_pid
         from gateway.status import _pid_exists
         _terminate_pid(pid)  # graceful first
-        # Wait up to 10s for graceful shutdown. On Windows, os.kill(pid, 0)
-        # is NOT a no-op — use the handle-based existence check.
+        # Wait up to 10s for graceful shutdown.
         for _ in range(20):
             _time.sleep(0.5)
             if not _pid_exists(pid):

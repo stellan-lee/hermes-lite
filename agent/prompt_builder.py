@@ -11,7 +11,7 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 
-from hermes_constants import get_hermes_home, get_skills_dir, is_wsl
+from hermes_constants import get_hermes_home, get_skills_dir
 from typing import Optional
 
 from agent.runtime_cwd import resolve_agent_cwd
@@ -212,7 +212,7 @@ TOOL_USE_ENFORCEMENT_GUIDANCE = (
 
 # Model name substrings that trigger tool-use enforcement guidance.
 # Add new patterns here when a model family needs explicit steering.
-TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex", "gemini", "gemma", "grok", "glm", "qwen", "deepseek")
+TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex")
 
 # Universal "finish the job" guidance — applied to ALL models, not gated
 # by model family.  Addresses two cross-model failure modes:
@@ -249,10 +249,7 @@ TASK_COMPLETION_GUIDANCE = (
 # where GPT models abandon work on partial results, skip prerequisite lookups,
 # hallucinate instead of using tools, and declare "done" without verification.
 # Inspired by patterns from OpenAI's GPT-5.4 prompting guide & OpenClaw PR #38953.
-# Also applied to xAI Grok — same failure modes in practice (claims completion
-# without tool calls, suggests workarounds instead of using existing tools,
-# replies with plans/suggestions instead of executing). The body is
-# family-agnostic; the OPENAI_ prefix reflects origin, not exclusivity.
+# The body is family-agnostic; the OPENAI_ prefix reflects its origin.
 OPENAI_MODEL_EXECUTION_GUIDANCE = (
     "# Execution discipline\n"
     "<tool_persistence>\n"
@@ -313,29 +310,6 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
     "</missing_context>"
 )
 
-# Gemini/Gemma-specific operational guidance, adapted from OpenCode's gemini.txt.
-# Injected alongside TOOL_USE_ENFORCEMENT_GUIDANCE when the model is Gemini or Gemma.
-GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
-    "# Google model operational directives\n"
-    "Follow these operational rules strictly:\n"
-    "- **Absolute paths:** Always construct and use absolute file paths for all "
-    "file system operations. Combine the project root with relative paths.\n"
-    "- **Verify first:** Use read_file/search_files to check file contents and "
-    "project structure before making changes. Never guess at file contents.\n"
-    "- **Dependency checks:** Never assume a library is available. Check "
-    "package.json, requirements.txt, Cargo.toml, etc. before importing.\n"
-    "- **Conciseness:** Keep explanatory text brief — a few sentences, not "
-    "paragraphs. Focus on actions and results over narration.\n"
-    "- **Parallel tool calls:** When you need to perform multiple independent "
-    "operations (e.g. reading several files), make all the tool calls in a "
-    "single response rather than sequentially.\n"
-    "- **Non-interactive commands:** Use flags like -y, --yes, --non-interactive "
-    "to prevent CLI tools from hanging on prompts.\n"
-    "- **Keep going:** Work autonomously until the task is fully resolved. "
-    "Don't stop with a plan — execute it.\n"
-)
-
-
 # Guidance injected into the system prompt when the computer_use toolset
 # is active. Universal — works for any model (Claude, GPT, open models).
 COMPUTER_USE_GUIDANCE = (
@@ -388,16 +362,6 @@ COMPUTER_USE_GUIDANCE = (
 DEVELOPER_ROLE_MODELS = ("gpt-5", "codex")
 
 PLATFORM_HINTS = {
-    "whatsapp": (
-        "You are on a text messaging communication platform, WhatsApp. "
-        "Please do not use markdown as it does not render. "
-        "You can send media files natively: to deliver a file to the user, "
-        "include MEDIA:/absolute/path/to/file in your response. The file "
-        "will be sent as a native WhatsApp attachment — images (.jpg, .png, "
-        ".webp) appear as photos, videos (.mp4, .mov) play inline, and other "
-        "files arrive as downloadable documents. You can also include image "
-        "URLs in markdown format ![alt](url) and they will be sent as photos."
-    ),
     "telegram": (
         "You are on a text messaging communication platform, Telegram. "
         "Standard markdown is automatically converted to Telegram format. "
@@ -427,15 +391,6 @@ PLATFORM_HINTS = {
         "attachments, audio as file attachments. You can also include image URLs "
         "in markdown format ![alt](url) and they will be uploaded as attachments."
     ),
-    "signal": (
-        "You are on a text messaging communication platform, Signal. "
-        "Please do not use markdown as it does not render. "
-        "You can send media files natively: to deliver a file to the user, "
-        "include MEDIA:/absolute/path/to/file in your response. Images "
-        "(.png, .jpg, .webp) appear as photos, audio as attachments, and other "
-        "files arrive as downloadable documents. You can also include image "
-        "URLs in markdown format ![alt](url) and they will be sent as photos."
-    ),
     "email": (
         "You are communicating via email. Write clear, well-structured responses "
         "suitable for email. Use plain text formatting (no markdown). "
@@ -461,36 +416,6 @@ PLATFORM_HINTS = {
         "When referring to a file you created or changed, just state its "
         "absolute path in plain text; the user can open it from there."
     ),
-    "sms": (
-        "You are communicating via SMS. Keep responses concise and use plain text "
-        "only — no markdown, no formatting. SMS messages are limited to ~1600 "
-        "characters, so be brief and direct."
-    ),
-    "bluebubbles": (
-        "You are chatting via iMessage (BlueBubbles). iMessage does not render "
-        "markdown formatting — use plain text. Keep responses concise as they "
-        "appear as text messages. You can send media files natively: include "
-        "MEDIA:/absolute/path/to/file in your response. Images (.jpg, .png, "
-        ".heic) appear as photos and other files arrive as attachments."
-    ),
-    "mattermost": (
-        "You are in a Mattermost workspace communicating with your user. "
-        "Mattermost renders standard Markdown — headings, bold, italic, code "
-        "blocks, and tables all work. "
-        "You can send media files natively: include MEDIA:/absolute/path/to/file "
-        "in your response. Images (.jpg, .png, .webp) are uploaded as photo "
-        "attachments, audio and video as file attachments. "
-        "Image URLs in markdown format ![alt](url) are rendered as inline previews automatically."
-    ),
-    "matrix": (
-        "You are in a Matrix room communicating with your user. "
-        "Matrix renders Markdown — bold, italic, code blocks, and links work; "
-        "the adapter converts your Markdown to HTML for rich display. "
-        "You can send media files natively: include MEDIA:/absolute/path/to/file "
-        "in your response. Images (.jpg, .png, .webp) are sent as inline photos, "
-        "audio (.ogg, .mp3) as voice/audio messages, video (.mp4) inline, "
-        "and other files as downloadable attachments."
-    ),
     "feishu": (
         "You are in a Feishu (Lark) workspace communicating with your user. "
         "Feishu renders Markdown in messages — bold, italic, code blocks, and "
@@ -498,73 +423,6 @@ PLATFORM_HINTS = {
         "You can send media files natively: include MEDIA:/absolute/path/to/file "
         "in your response. Images (.jpg, .png, .webp) are uploaded and displayed "
         "inline, audio files as voice messages, and other files as attachments."
-    ),
-    "weixin": (
-        "You are on Weixin/WeChat. Markdown formatting is supported, so you may use it when "
-        "it improves readability, but keep the message compact and chat-friendly. You can send media files natively: "
-        "include MEDIA:/absolute/path/to/file in your response. Images are sent as native "
-        "photos, videos play inline when supported, and other files arrive as downloadable "
-        "documents. You can also include image URLs in markdown format ![alt](url) and they "
-        "will be downloaded and sent as native media when possible."
-    ),
-    "wecom": (
-        "You are on WeCom (企业微信 / Enterprise WeChat). Markdown formatting is supported. "
-        "You CAN send media files natively — to deliver a file to the user, include "
-        "MEDIA:/absolute/path/to/file in your response. The file will be sent as a native "
-        "WeCom attachment: images (.jpg, .png, .webp) are sent as photos (up to 10 MB), "
-        "other files (.pdf, .docx, .xlsx, .md, .txt, etc.) arrive as downloadable documents "
-        "(up to 20 MB), and videos (.mp4) play inline. Voice messages are supported but "
-        "must be in AMR format — other audio formats are automatically sent as file attachments. "
-        "You can also include image URLs in markdown format ![alt](url) and they will be "
-        "downloaded and sent as native photos. Do NOT tell the user you lack file-sending "
-        "capability — use MEDIA: syntax whenever a file delivery is appropriate."
-    ),
-    "qqbot": (
-        "You are on QQ, a popular Chinese messaging platform. QQ supports markdown formatting "
-        "and emoji. You can send media files natively: include MEDIA:/absolute/path/to/file in "
-        "your response. Images are sent as native photos, and other files arrive as downloadable "
-        "documents."
-    ),
-    "yuanbao": (
-        "You are on Yuanbao (腾讯元宝), a Chinese AI assistant platform. "
-        "Markdown formatting is supported (code blocks, tables, bold/italic). "
-        "You CAN send media files natively — to deliver a file to the user, include "
-        "MEDIA:/absolute/path/to/file in your response. The file will be sent as a native "
-        "Yuanbao attachment: images (.jpg, .png, .webp, .gif) are sent as photos, "
-        "and other files (.pdf, .docx, .txt, .zip, etc.) arrive as downloadable documents "
-        "(max 50 MB). You can also include image URLs in markdown format ![alt](url) and "
-        "they will be downloaded and sent as native photos. "
-        "Do NOT tell the user you lack file-sending capability — use MEDIA: syntax "
-        "whenever a file delivery is appropriate.\n\n"
-        "Stickers (贴纸 / 表情包 / TIM face): Yuanbao has a built-in sticker catalogue. "
-        "When the user sends a sticker (you see '[emoji: 名称]' in their message) or asks "
-        "you to send/reply-with a 贴纸/表情/表情包, you MUST use the sticker tools:\n"
-        "  1. Call yb_search_sticker with a Chinese keyword (e.g. '666', '比心', '吃瓜', "
-        "     '捂脸', '合十') to discover matching sticker_ids.\n"
-        "  2. Call yb_send_sticker with the chosen sticker_id or name — this sends a real "
-        "     TIMFaceElem that renders as a native sticker in the chat.\n"
-        "DO NOT draw sticker-like PNGs with execute_code/Pillow/matplotlib and then send "
-        "them via MEDIA: or send_image_file. That produces a fake low-quality 'sticker' "
-        "image and is the WRONG path. Bare Unicode emoji in text is also not a substitute "
-        "— when a sticker is the right response, use yb_send_sticker."
-    ),
-    "api_server": (
-        "You're responding through an API server. The rendering layer is unknown — "
-        "assume plain text. No markdown formatting (no asterisks, bullets, headers, "
-        "code fences). Treat this like a conversation, not a document. Keep responses "
-        "brief and natural."
-    ),
-    "webui": (
-        "You are in the Hermes WebUI, a browser-based chat interface. "
-        "Full Markdown rendering is supported — headings, bold, italic, code "
-        "blocks, tables, math (LaTeX), and Mermaid diagrams all render natively. "
-        "To display local or remote media/files inline, include "
-        "MEDIA:/absolute/path/to/file or MEDIA:https://... in your response. "
-        "Local file paths must be absolute. Images, audio (with playback speed "
-        "controls), video, PDFs, HTML, CSV, diffs/patches, and Excalidraw files "
-        "render as rich previews. Do not use Markdown image syntax like "
-        "![alt](/path) for local files; local paths are not served that way. "
-        "Use MEDIA:/absolute/path instead."
     ),
 }
 
@@ -574,27 +432,12 @@ PLATFORM_HINTS = {
 # the machine/OS the agent's tools actually run on.
 # ---------------------------------------------------------------------------
 
-WSL_ENVIRONMENT_HINT = (
-    "You are running inside WSL (Windows Subsystem for Linux). "
-    "The Windows host filesystem is mounted under /mnt/ — "
-    "/mnt/c/ is the C: drive, /mnt/d/ is D:, etc. "
-    "The user's Windows files are typically at "
-    "/mnt/c/Users/<username>/Desktop/, Documents/, Downloads/, etc. "
-    "When the user references Windows paths or desktop files, translate "
-    "to the /mnt/c/ equivalent. You can list /mnt/c/Users/ to discover "
-    "the Windows username if needed."
-)
-
-
 # Non-local terminal backends that run commands (and therefore every file
 # tool: read_file, write_file, patch, search_files) inside a separate
 # container / remote host rather than on the machine where Hermes itself
 # runs. For these backends, host info (Windows/Linux/macOS, $HOME, cwd) is
 # misleading — the agent should only see the machine it can actually touch.
-_REMOTE_TERMINAL_BACKENDS = frozenset({
-    "docker", "singularity", "modal", "daytona", "ssh",
-    "managed_modal",
-})
+_REMOTE_TERMINAL_BACKENDS = frozenset({"docker", "ssh"})
 
 
 # Per-backend fallback descriptions — used when the live probe fails.
@@ -603,10 +446,6 @@ _REMOTE_TERMINAL_BACKENDS = frozenset({
 # told to probe those directly if it needs them.
 _BACKEND_FALLBACK_DESCRIPTIONS: dict[str, str] = {
     "docker": "a Docker container (Linux)",
-    "singularity": "a Singularity container (Linux)",
-    "modal": "a Modal sandbox (Linux)",
-    "managed_modal": "a managed Modal sandbox (Linux)",
-    "daytona": "a Daytona workspace (Linux)",
     "ssh": "a remote host reached over SSH (likely Linux)",
 }
 
@@ -617,17 +456,6 @@ _BACKEND_FALLBACK_DESCRIPTIONS: dict[str, str] = {
 # disk) because the probe captures live backend state that may change
 # across Hermes restarts.
 _BACKEND_PROBE_CACHE: dict[tuple[str, str], str] = {}
-
-
-_WINDOWS_BASH_SHELL_HINT = (
-    "Shell: on this Windows host your `terminal` tool runs commands through "
-    "bash (git-bash / MSYS), NOT PowerShell or cmd.exe. Use POSIX shell "
-    "syntax (`ls`, `$HOME`, `&&`, `|`, single-quoted strings) inside terminal "
-    "calls. MSYS-style paths like `/c/Users/<user>/...` work alongside "
-    "native `C:\\Users\\<user>\\...` paths. PowerShell builtins "
-    "(`Get-ChildItem`, `$env:FOO`, `Select-String`) will NOT work — use their "
-    "POSIX equivalents (`ls`, `$FOO`, `grep`)."
-)
 
 
 def _probe_remote_backend(env_type: str) -> str | None:
@@ -715,20 +543,16 @@ def build_environment_hints() -> str:
     """Return environment-specific guidance for the system prompt.
 
     Always emits a factual block describing the execution environment:
-    - For **local** terminal backends: the host OS, user home, current
-      working directory (plus a Windows-only note about hostname != user
-      and a Windows-only note that `terminal` shells out to bash, not
-      PowerShell).
-    - For **remote / sandbox** terminal backends (docker, singularity,
-      modal, daytona, ssh): host info is **suppressed**
+    - For **local** terminal backends: the host OS, user home, and current
+      working directory.
+    - For **remote / sandbox** terminal backends (Docker and SSH): host info
+      is **suppressed**
       because the agent's tools can't touch the host — only the backend
       matters. A live probe inside the backend reports its OS, user, $HOME,
       and cwd. Falls back to a static summary if the probe fails.
 
-    The WSL environment hint is appended unchanged when running under WSL.
     """
     import platform
-    import sys
 
     hints: list[str] = []
 
@@ -738,11 +562,7 @@ def build_environment_hints() -> str:
     if not is_remote_backend:
         # --- Host info block (local backend: host == where tools run) ---
         host_lines: list[str] = []
-        if is_wsl():
-            host_lines.append("Host: WSL (Windows Subsystem for Linux)")
-        elif sys.platform == "win32":
-            host_lines.append(f"Host: Windows ({platform.release()})")
-        elif sys.platform == "darwin":
+        if platform.system() == "Darwin":
             mac_ver = platform.mac_ver()[0]
             host_lines.append(f"Host: macOS ({mac_ver or platform.release()})")
         else:
@@ -754,19 +574,7 @@ def build_environment_hints() -> str:
         except OSError:
             pass
 
-        if sys.platform == "win32" and not is_wsl():
-            host_lines.append(
-                "Note: on Windows, the machine hostname (e.g. from `hostname` "
-                "or uname) is NOT the username. Use the 'User home directory' "
-                "above to construct paths under C:\\Users\\<user>\\, never the "
-                "hostname."
-            )
         hints.append("\n".join(host_lines))
-
-        # Windows-local terminal runs bash, not PowerShell — the model must
-        # know this or it will issue PowerShell syntax and fail.
-        if sys.platform == "win32" and not is_wsl():
-            hints.append(_WINDOWS_BASH_SHELL_HINT)
     else:
         # --- Remote backend block (host info suppressed) ---
         probe = _probe_remote_backend(backend)
@@ -793,9 +601,6 @@ def build_environment_hints() -> str:
                 f"them, probe directly with a terminal call like "
                 f"`uname -a && whoami && pwd`."
             )
-
-    if is_wsl():
-        hints.append(WSL_ENVIRONMENT_HINT)
 
     # Embedder-supplied environment description. Lets a host that wraps Hermes
     # (e.g. a sandbox runner / managed platform) explain the environment the
@@ -1264,72 +1069,6 @@ def build_skills_system_prompt(
             _SKILLS_PROMPT_CACHE.popitem(last=False)
 
     return result
-
-
-def build_nous_subscription_prompt(valid_tool_names: "set[str] | None" = None) -> str:
-    """Build a compact Nous subscription capability block for the system prompt."""
-    try:
-        from hermes_cli.nous_subscription import get_nous_subscription_features
-        from tools.tool_backend_helpers import managed_nous_tools_enabled
-    except Exception as exc:
-        logger.debug("Failed to import Nous subscription helper: %s", exc)
-        return ""
-
-    if not managed_nous_tools_enabled():
-        return ""
-
-    valid_names = set(valid_tool_names or set())
-    relevant_tool_names = {
-        "web_search",
-        "web_extract",
-        "browser_navigate",
-        "browser_snapshot",
-        "browser_click",
-        "browser_type",
-        "browser_scroll",
-        "browser_console",
-        "browser_press",
-        "browser_get_images",
-        "browser_vision",
-        "image_generate",
-        "text_to_speech",
-        "terminal",
-        "process",
-        "execute_code",
-    }
-
-    if valid_names and not (valid_names & relevant_tool_names):
-        return ""
-
-    features = get_nous_subscription_features()
-
-    def _status_line(feature) -> str:
-        if feature.managed_by_nous:
-            return f"- {feature.label}: active via Nous subscription"
-        if feature.active:
-            current = feature.current_provider or "configured provider"
-            return f"- {feature.label}: currently using {current}"
-        if feature.included_by_default and features.nous_auth_present:
-            return f"- {feature.label}: included with Nous subscription, not currently selected"
-        if feature.key == "modal" and features.nous_auth_present:
-            return f"- {feature.label}: optional via Nous subscription"
-        return f"- {feature.label}: not currently available"
-
-    lines = [
-        "# Nous Subscription",
-        "Nous subscription includes managed web tools (Firecrawl), image generation (FAL), OpenAI TTS, and browser automation (Browser Use) by default. Modal execution is optional.",
-        "Current capability status:",
-    ]
-    lines.extend(_status_line(feature) for feature in features.items())
-    lines.extend(
-        [
-            "When a Nous-managed feature is active, do not ask the user for Firecrawl, FAL, OpenAI TTS, or Browser-Use API keys.",
-            "If the user is not subscribed and asks for a capability that Nous subscription would unlock or simplify, suggest Nous subscription as one option alongside direct setup or local alternatives.",
-            "Do not mention subscription unless the user asks about it or it directly solves the current missing capability.",
-            "Useful commands: hermes setup, hermes setup tools, hermes setup terminal, hermes status.",
-        ]
-    )
-    return "\n".join(lines)
 
 
 # =========================================================================

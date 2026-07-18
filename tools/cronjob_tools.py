@@ -781,11 +781,11 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
                 "properties": {
                     "provider": {
                         "type": "string",
-                        "description": "Provider name (e.g. 'openrouter', 'anthropic', or 'custom:<name>' for a provider defined in custom_providers config — always include the ':<name>' suffix, never pass the bare 'custom'). Omit to use and pin the current provider."
+                        "description": "Provider name ('openai-codex' or 'custom:<name>' for a saved compatible endpoint). Omit to pin the current provider."
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model name (e.g. 'anthropic/claude-sonnet-4', 'claude-sonnet-4')"
+                        "description": "Codex or custom OpenAI-compatible model id"
                     }
                 },
                 "required": ["model"]

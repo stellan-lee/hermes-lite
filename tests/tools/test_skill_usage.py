@@ -248,81 +248,12 @@ def test_agent_created_excludes_bundled(skills_home):
     assert "bundled-skill" not in names
 
 
-def test_agent_created_excludes_hub_installed(skills_home):
-    from tools.skill_usage import list_agent_created_skill_names, mark_agent_created
-    skills_dir = skills_home / "skills"
-    _write_skill(skills_dir, "hub-skill")
-    _write_skill(skills_dir, "my-skill")
-    mark_agent_created("my-skill")
-    hub_dir = skills_dir / ".hub"
-    hub_dir.mkdir()
-    (hub_dir / "lock.json").write_text(
-        json.dumps({"version": 1, "installed": {"hub-skill": {"source": "taps/main"}}}),
-        encoding="utf-8",
-    )
-    names = list_agent_created_skill_names()
-    assert "my-skill" in names
-    assert "hub-skill" not in names
-
-
-def test_agent_created_excludes_hub_installed_frontmatter_name(skills_home):
-    from tools.skill_usage import (
-        is_agent_created,
-        list_agent_created_skill_names,
-        mark_agent_created,
-    )
-
-    skills_dir = skills_home / "skills"
-    hub_skill = skills_dir / "productivity" / "getnote"
-    hub_skill.mkdir(parents=True)
-    (hub_skill / "SKILL.md").write_text(
-        """---
-name: Get笔记
-description: test skill
----
-
-# body
-""",
-        encoding="utf-8",
-    )
-    _write_skill(skills_dir, "my-skill")
-    mark_agent_created("my-skill")
-    hub_dir = skills_dir / ".hub"
-    hub_dir.mkdir()
-    (hub_dir / "lock.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "installed": {
-                    "getnote": {
-                        "source": "taps/main",
-                        "install_path": "productivity/getnote",
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    names = list_agent_created_skill_names()
-    assert "my-skill" in names
-    assert "Get笔记" not in names
-    assert is_agent_created("Get笔记") is False
-    assert is_agent_created("getnote") is False
-
-
 def test_is_agent_created(skills_home):
     from tools.skill_usage import is_agent_created
     skills_dir = skills_home / "skills"
     (skills_dir / ".bundled_manifest").write_text("bundled:abc\n", encoding="utf-8")
-    hub_dir = skills_dir / ".hub"
-    hub_dir.mkdir()
-    (hub_dir / "lock.json").write_text(
-        json.dumps({"installed": {"hubbed": {}}}), encoding="utf-8",
-    )
     assert is_agent_created("my-skill") is True
     assert is_agent_created("bundled") is False
-    assert is_agent_created("hubbed") is False
 
 
 def test_agent_created_skips_archive_and_hub_dirs(skills_home):
@@ -368,20 +299,6 @@ def test_archive_refuses_bundled_skill(skills_home):
     ok, msg = archive_skill("bundled")
     assert not ok
     assert "bundled" in msg.lower() or "hub" in msg.lower()
-
-
-def test_archive_refuses_hub_skill(skills_home):
-    from tools.skill_usage import archive_skill
-    skills_dir = skills_home / "skills"
-    _write_skill(skills_dir, "hub-skill")
-    hub_dir = skills_dir / ".hub"
-    hub_dir.mkdir()
-    (hub_dir / "lock.json").write_text(
-        json.dumps({"installed": {"hub-skill": {}}}), encoding="utf-8",
-    )
-
-    ok, msg = archive_skill("hub-skill")
-    assert not ok
 
 
 def test_archive_missing_skill_returns_error(skills_home):
@@ -615,33 +532,20 @@ def test_restore_refuses_to_shadow_bundled_skill(skills_home):
     assert "bundled" in msg.lower() or "shadow" in msg.lower()
 
 
-def test_end_to_end_telemetry_tracked_but_lifecycle_refused(skills_home):
-    """The combined guarantee under decoupled telemetry/curation:
-
-    - Usage telemetry (view/use/patch) IS recorded for bundled & hub skills.
-    - Lifecycle mutations (set_state, set_pinned, archive) are REFUSED for them
-      (with pruning off, the fixture default), so no state/pinned/archived flag
-      lands and the directories stay on disk.
-    """
+def test_bundled_telemetry_tracked_but_lifecycle_refused(skills_home):
+    """Bundled-skill telemetry is recorded without lifecycle mutation."""
     from tools.skill_usage import (
         bump_view, bump_use, bump_patch, set_state, set_pinned,
         archive_skill, load_usage, STATE_ACTIVE, STATE_STALE, STATE_ARCHIVED,
     )
     skills_dir = skills_home / "skills"
     _write_skill(skills_dir, "bundled-one")
-    _write_skill(skills_dir, "hub-one")
     _write_skill(skills_dir, "mine")
 
     (skills_dir / ".bundled_manifest").write_text(
         "bundled-one:abc\n", encoding="utf-8",
     )
-    hub = skills_dir / ".hub"
-    hub.mkdir()
-    (hub / "lock.json").write_text(
-        json.dumps({"installed": {"hub-one": {}}}), encoding="utf-8",
-    )
-
-    for name in ("bundled-one", "hub-one"):
+    for name in ("bundled-one",):
         bump_view(name)
         bump_use(name)
         bump_patch(name)
@@ -653,7 +557,7 @@ def test_end_to_end_telemetry_tracked_but_lifecycle_refused(skills_home):
 
     data = load_usage()
     # Telemetry landed for both.
-    for name in ("bundled-one", "hub-one"):
+    for name in ("bundled-one",):
         assert name in data, f"{name} telemetry should be recorded"
         assert data[name]["view_count"] == 1
         assert data[name]["use_count"] == 1
@@ -667,37 +571,28 @@ def test_end_to_end_telemetry_tracked_but_lifecycle_refused(skills_home):
 
     # Directories must still be in place on disk.
     assert (skills_dir / "bundled-one" / "SKILL.md").exists()
-    assert (skills_dir / "hub-one" / "SKILL.md").exists()
 
     # The agent-created skill can still be mutated normally.
     bump_view("mine")
     assert load_usage()["mine"]["view_count"] == 1
 
 
-def test_usage_report_covers_all_provenance(skills_home):
-    """usage_report() surfaces every skill with provenance, unlike the
-    curator-scoped agent_created_report()."""
+def test_usage_report_covers_retained_provenance(skills_home):
+    """usage_report() covers bundled and locally created skills."""
     from tools.skill_usage import (
         bump_use, usage_report, mark_agent_created,
     )
     skills_dir = skills_home / "skills"
     _write_skill(skills_dir, "bundled-one")
-    _write_skill(skills_dir, "hub-one")
     _write_skill(skills_dir, "mine")
     (skills_dir / ".bundled_manifest").write_text("bundled-one:abc\n", encoding="utf-8")
-    hub = skills_dir / ".hub"
-    hub.mkdir()
-    (hub / "lock.json").write_text(
-        json.dumps({"installed": {"hub-one": {}}}), encoding="utf-8",
-    )
     mark_agent_created("mine")
-    for n in ("bundled-one", "hub-one", "mine"):
+    for n in ("bundled-one", "mine"):
         bump_use(n)
 
     rows = {r["name"]: r for r in usage_report()}
-    assert set(rows) == {"bundled-one", "hub-one", "mine"}
+    assert set(rows) == {"bundled-one", "mine"}
     assert rows["bundled-one"]["provenance"] == "bundled"
-    assert rows["hub-one"]["provenance"] == "hub"
     assert rows["mine"]["provenance"] == "agent"
     # All carry real usage now.
     for n in rows:

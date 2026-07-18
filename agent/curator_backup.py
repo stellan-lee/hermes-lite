@@ -8,9 +8,7 @@ counted skill files). Rollback picks a snapshot, moves the current
 ``skills/`` tree aside into another snapshot so even the rollback itself
 is undoable, then extracts the chosen snapshot into place.
 
-The snapshot does NOT include:
-  - ``.curator_backups/`` (would recurse)
-  - ``.hub/`` (hub-installed skills — managed by the hub, not us)
+The snapshot does NOT include ``.curator_backups/`` because that would recurse.
 
 It DOES include:
   - all SKILL.md files + their directories (``scripts/``, ``references/``,
@@ -56,10 +54,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_KEEP = 5
 
-# Entries under skills/ that should NEVER be rolled up into a snapshot.
-# .hub/ is managed by the skills hub; rolling it back would break lockfile
-# invariants. .curator_backups is the backup dir itself — recursion bomb.
-_EXCLUDE_TOP_LEVEL = {".curator_backups", ".hub"}
+# The backup directory itself must never be rolled into a snapshot.
+_EXCLUDE_TOP_LEVEL = {".curator_backups"}
 
 # Snapshot id regex: UTC ISO with colons replaced by dashes so the filename
 # is portable (Windows-safe). An optional ``-NN`` suffix handles two
@@ -534,8 +530,7 @@ def rollback(backup_id: Optional[str] = None) -> Tuple[bool, str, Optional[Path]
       2. Take a safety snapshot of the CURRENT skills tree under
          ``.curator_backups/pre-rollback-<ts>/`` so the rollback itself is
          undoable.
-      3. Move all current top-level entries (except ``.curator_backups``
-         and ``.hub``) into a tempdir.
+      3. Move all current top-level entries except ``.curator_backups`` into a tempdir.
       4. Extract the chosen snapshot into ``~/.hermes/skills/``.
       5. On failure during 4, move the tempdir contents back (best-effort)
          and return failure.

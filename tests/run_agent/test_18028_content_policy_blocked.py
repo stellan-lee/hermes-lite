@@ -75,8 +75,6 @@ class TestContentPolicyTriggersClientErrorAbort:
                     FailoverReason.overloaded,
                     FailoverReason.context_overflow,
                     FailoverReason.payload_too_large,
-                    FailoverReason.long_context_tier,
-                    FailoverReason.thinking_signature,
                 }
             )
         ) and not is_context_length_error
@@ -128,25 +126,3 @@ class TestContentPolicyPatternsAreNarrow:
         e = _Err("Insufficient credits. Top up your balance.", status_code=402)
         result = classify_api_error(e, provider="openrouter", model="anthropic/claude-opus")
         assert result.reason == FailoverReason.billing
-
-    def test_openrouter_account_policy_block_stays_distinct(self):
-        """``provider_policy_blocked`` (OpenRouter account-level data
-        policy) must remain a separate classification from
-        ``content_policy_blocked`` (upstream model safety filter) — they
-        have different recovery strategies.
-        """
-        from agent.error_classifier import classify_api_error, FailoverReason
-
-        class _Err(Exception):
-            def __init__(self, msg, status_code):
-                super().__init__(msg)
-                self.status_code = status_code
-
-        e = _Err(
-            "No endpoints available matching your guardrail restrictions "
-            "and data policy",
-            status_code=404,
-        )
-        result = classify_api_error(e, provider="openrouter", model="anthropic/claude-opus")
-        assert result.reason == FailoverReason.provider_policy_blocked
-        assert result.reason != FailoverReason.content_policy_blocked

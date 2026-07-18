@@ -35,15 +35,8 @@ class TestExplicitAllowlist:
     """Keys in the hardcoded allowlist should always go to .env."""
 
     @pytest.mark.parametrize("key", [
-        "OPENROUTER_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
         "HONCHO_API_KEY",
-        "FIRECRAWL_API_KEY",
-        "BROWSERBASE_API_KEY",
-        "FAL_KEY",
         "SUDO_PASSWORD",
-        "GITHUB_TOKEN",
         "TELEGRAM_BOT_TOKEN",
         "DISCORD_BOT_TOKEN",
         "SLACK_BOT_TOKEN",

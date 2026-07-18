@@ -31,7 +31,7 @@ class _FatalAdapter(BasePlatformAdapter):
 
 class _RuntimeRetryableAdapter(BasePlatformAdapter):
     def __init__(self):
-        super().__init__(PlatformConfig(enabled=True, token="token"), Platform.WHATSAPP)
+        super().__init__(PlatformConfig(enabled=True, token="token"), Platform.TELEGRAM)
 
     async def connect(self) -> bool:
         return True
@@ -47,16 +47,18 @@ class _RuntimeRetryableAdapter(BasePlatformAdapter):
 
 
 @pytest.mark.asyncio
-async def test_runner_requests_clean_exit_for_nonretryable_startup_conflict(monkeypatch, tmp_path):
+async def test_runner_requests_clean_exit_for_nonretryable_startup_conflict(
+    monkeypatch, tmp_path
+):
     config = GatewayConfig(
-        platforms={
-            Platform.TELEGRAM: PlatformConfig(enabled=True, token="token")
-        },
+        platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="token")},
         sessions_dir=tmp_path / "sessions",
     )
     runner = GatewayRunner(config)
 
-    monkeypatch.setattr(runner, "_create_adapter", lambda platform, platform_config: _FatalAdapter())
+    monkeypatch.setattr(
+        runner, "_create_adapter", lambda platform, platform_config: _FatalAdapter()
+    )
 
     ok = await runner.start()
 
@@ -66,7 +68,9 @@ async def test_runner_requests_clean_exit_for_nonretryable_startup_conflict(monk
 
 
 @pytest.mark.asyncio
-async def test_runner_queues_retryable_runtime_fatal_for_reconnection(monkeypatch, tmp_path):
+async def test_runner_queues_retryable_runtime_fatal_for_reconnection(
+    monkeypatch, tmp_path
+):
     """Retryable runtime fatal errors queue the platform for reconnection
     AND keep the gateway alive — the background reconnect watcher recovers
     the platform when the underlying issue clears.  (Previously this
@@ -74,9 +78,7 @@ async def test_runner_queues_retryable_runtime_fatal_for_reconnection(monkeypatc
     transient failures into infinite restart loops.)
     """
     config = GatewayConfig(
-        platforms={
-            Platform.WHATSAPP: PlatformConfig(enabled=True, token="token")
-        },
+        platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="token")},
         sessions_dir=tmp_path / "sessions",
     )
     runner = GatewayRunner(config)
@@ -87,7 +89,7 @@ async def test_runner_queues_retryable_runtime_fatal_for_reconnection(monkeypatc
         retryable=True,
     )
 
-    runner.adapters = {Platform.WHATSAPP: adapter}
+    runner.adapters = {Platform.TELEGRAM: adapter}
     runner.delivery_router.adapters = runner.adapters
     runner.stop = AsyncMock()
 
@@ -96,5 +98,5 @@ async def test_runner_queues_retryable_runtime_fatal_for_reconnection(monkeypatc
     # Gateway stays alive — watcher will retry in background
     runner.stop.assert_not_awaited()
     assert runner._exit_with_failure is False
-    assert Platform.WHATSAPP in runner._failed_platforms
-    assert runner._failed_platforms[Platform.WHATSAPP]["attempts"] == 0
+    assert Platform.TELEGRAM in runner._failed_platforms
+    assert runner._failed_platforms[Platform.TELEGRAM]["attempts"] == 0

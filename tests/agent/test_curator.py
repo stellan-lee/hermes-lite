@@ -390,26 +390,6 @@ def test_prune_builtins_restore_clears_suppression(curator_env, monkeypatch):
     assert "bundled" not in u.read_suppressed_names()
 
 
-def test_prune_builtins_never_touches_hub_skills(curator_env, monkeypatch):
-    u = curator_env["usage"]
-    skills_dir = curator_env["home"] / "skills"
-    _write_skill(skills_dir, "hubskill")
-    hub_dir = skills_dir / ".hub"
-    hub_dir.mkdir(parents=True, exist_ok=True)
-    (hub_dir / "lock.json").write_text(
-        '{"version": 1, "installed": {"hubskill": {"install_path": "hubskill"}}}',
-        encoding="utf-8",
-    )
-    _enable_prune_builtins(curator_env, monkeypatch)
-
-    # Even with prune_builtins on, hub-installed skills stay off-limits.
-    assert u.is_curation_eligible("hubskill") is False
-    ok, msg = u.archive_skill("hubskill")
-    assert ok is False
-    assert "hub-installed" in msg
-    assert (skills_dir / "hubskill").exists()
-
-
 # ---------------------------------------------------------------------------
 # run_curator_review orchestration
 # ---------------------------------------------------------------------------
@@ -979,32 +959,6 @@ def test_review_model_handles_missing_sections(curator_env):
     assert curator._resolve_review_model({}) == ("auto", "")
 
 
-def test_curator_slot_is_canonical_aux_task():
-    """Curator must be a first-class slot in every aux-task registry.
-
-    Four sources of truth, all checked by the shared registry test
-    (test_aux_config.py) for the main tasks — this test pins `curator`
-    specifically so the unification doesn't silently regress.
-    """
-    from hermes_cli.config import DEFAULT_CONFIG
-    from hermes_cli.main import _AUX_TASKS
-    from hermes_cli.web_server import _AUX_TASK_SLOTS
-
-    # 1. DEFAULT_CONFIG.auxiliary — schema source
-    assert "curator" in DEFAULT_CONFIG["auxiliary"], \
-        "curator missing from DEFAULT_CONFIG['auxiliary']"
-    slot = DEFAULT_CONFIG["auxiliary"]["curator"]
-    assert slot["provider"] == "auto"
-    assert slot["model"] == ""
-    assert slot["timeout"] > 0, "curator timeout should be set (reviews run long)"
-
-    # 2. hermes_cli/main.py _AUX_TASKS — CLI picker
-    aux_keys = {k for k, _name, _desc in _AUX_TASKS}
-    assert "curator" in aux_keys, "curator missing from _AUX_TASKS (CLI picker)"
-
-    # 3. hermes_cli/web_server.py _AUX_TASK_SLOTS — REST API allowlist
-    assert "curator" in _AUX_TASK_SLOTS, \
-        "curator missing from _AUX_TASK_SLOTS (dashboard REST API)"
 
     # 4. web/src/pages/ModelsPage.tsx is checked at build time; the tsx
     #    array and this tuple share a ``Must match _AUX_TASK_SLOTS`` comment.

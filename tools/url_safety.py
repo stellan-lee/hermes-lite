@@ -19,7 +19,7 @@ Limitations (documented, not fixable at pre-flight level):
     Python's Champion library or an egress proxy like Stripe's Smokescreen).
   - Redirect-based bypass is mitigated by httpx event hooks that re-validate
     each redirect target in vision_tools, gateway platform adapters, and
-    media cache helpers. Web tools use third-party SDKs (Firecrawl/Tavily)
+    media cache helpers. Web tools and local plugins
     where redirect handling is on their servers.
 """
 

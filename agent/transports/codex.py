@@ -31,9 +31,8 @@ class ResponsesApiTransport(ProviderTransport):
     def _resolve_issuer_kind(self, params: Dict[str, Any]) -> str:
         """Classify the current Responses endpoint from transport params."""
         from agent.codex_responses_adapter import _classify_responses_issuer
+
         return _classify_responses_issuer(
-            is_xai_responses=bool(params.get("is_xai_responses")),
-            is_github_responses=bool(params.get("is_github_responses")),
             is_codex_backend=bool(params.get("is_codex_backend")),
             base_url=params.get("base_url"),
         )
@@ -41,11 +40,11 @@ class ResponsesApiTransport(ProviderTransport):
     def convert_messages(self, messages: List[Dict[str, Any]], **kwargs) -> Any:
         """Convert OpenAI chat messages to Responses API input items."""
         from agent.codex_responses_adapter import _chat_messages_to_responses_input
+
         issuer = self._resolve_issuer_kind(kwargs)
         self._last_issuer_kind = issuer
         return _chat_messages_to_responses_input(
             messages,
-            is_xai_responses=bool(kwargs.get("is_xai_responses")),
             replay_encrypted_reasoning=bool(
                 kwargs.get("replay_encrypted_reasoning", True)
             ),
@@ -55,6 +54,7 @@ class ResponsesApiTransport(ProviderTransport):
     def convert_tools(self, tools: List[Dict[str, Any]]) -> Any:
         """Convert OpenAI tool schemas to Responses API function definitions."""
         from agent.codex_responses_adapter import _responses_tools
+
         return _responses_tools(tools)
 
     def build_kwargs(
@@ -71,17 +71,14 @@ class ResponsesApiTransport(ProviderTransport):
         params:
             instructions: str — system prompt (extracted from messages[0] if not given)
             reasoning_config: dict | None — {effort, enabled}
-            session_id: str | None — used for prompt_cache_key + xAI conv header
+            session_id: str | None — used for prompt_cache_key
             max_tokens: int | None — max_output_tokens
             timeout: float | None — per-request timeout forwarded to the SDK
             request_overrides: dict | None — extra kwargs merged in
             provider: str | None — provider name for backend-specific logic
             base_url: str | None — endpoint URL
             base_url_hostname: str | None — hostname for backend detection
-            is_github_responses: bool — Copilot/GitHub models backend
             is_codex_backend: bool — chatgpt.com/backend-api/codex
-            is_xai_responses: bool — xAI/Grok backend
-            github_reasoning_extra: dict | None — Copilot reasoning params
         """
         from agent.codex_responses_adapter import (
             _chat_messages_to_responses_input,
@@ -99,9 +96,7 @@ class ResponsesApiTransport(ProviderTransport):
         if not instructions:
             instructions = DEFAULT_AGENT_IDENTITY
 
-        is_github_responses = params.get("is_github_responses", False)
         is_codex_backend = params.get("is_codex_backend", False)
-        is_xai_responses = params.get("is_xai_responses", False)
         replay_encrypted_reasoning = bool(
             params.get("replay_encrypted_reasoning", True)
         )
@@ -141,7 +136,6 @@ class ResponsesApiTransport(ProviderTransport):
             "instructions": instructions,
             "input": _chat_messages_to_responses_input(
                 payload_messages,
-                is_xai_responses=is_xai_responses,
                 replay_encrypted_reasoning=replay_encrypted_reasoning,
                 current_issuer_kind=issuer_kind,
             ),
@@ -153,55 +147,20 @@ class ResponsesApiTransport(ProviderTransport):
             kwargs["parallel_tool_calls"] = True
 
         session_id = params.get("session_id")
-        # xAI Responses takes prompt_cache_key in extra_body (set further
-        # down); GitHub Models opts out of cache-key routing entirely.
-        if not is_github_responses and not is_xai_responses and session_id:
+        if session_id:
             kwargs["prompt_cache_key"] = session_id
 
-        if reasoning_enabled and is_xai_responses:
-            from agent.model_metadata import grok_supports_reasoning_effort
-
-            # Ask xAI to echo back encrypted reasoning items so we can
-            # replay them on subsequent turns for cross-turn coherence.
-            # See agent/codex_responses_adapter._chat_messages_to_responses_input
-            # for the May 2026 reversal of the earlier suppression gate.
+        if reasoning_enabled:
+            kwargs["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
             kwargs["include"] = (
                 ["reasoning.encrypted_content"] if replay_encrypted_reasoning else []
             )
-            # xAI rejects `reasoning.effort` on grok-4 / grok-4-fast / grok-3
-            # / grok-code-fast / grok-4.20-0309-* with HTTP 400 even though
-            # those models reason natively. Only send the effort dial when
-            # the target model is on the allowlist; otherwise send no
-            # `reasoning` key at all and let the model reason on its own.
-            if grok_supports_reasoning_effort(model):
-                kwargs["reasoning"] = {"effort": reasoning_effort}
-        elif reasoning_enabled:
-            if is_github_responses:
-                github_reasoning = params.get("github_reasoning_extra")
-                if github_reasoning is not None:
-                    kwargs["reasoning"] = github_reasoning
-            else:
-                kwargs["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
-                kwargs["include"] = (
-                    ["reasoning.encrypted_content"] if replay_encrypted_reasoning else []
-                )
-        elif not is_github_responses and not is_xai_responses:
+        else:
             kwargs["include"] = []
 
         request_overrides = params.get("request_overrides")
         if request_overrides:
             kwargs.update(request_overrides)
-
-        # xAI Responses API rejects ``service_tier`` (HTTP 400 "Argument not
-        # supported: service_tier") — hit when ``/fast`` priority-processing
-        # mode lingers from a prior model in the same session, or when a
-        # user explicitly sets ``agent.service_tier`` in config.yaml.  The
-        # main-loop guard (``resolve_fast_mode_overrides`` only returns
-        # ``service_tier`` for OpenAI fast-eligible models) doesn't cover
-        # those leak paths, so strip defensively when targeting xAI.  See
-        # #28490 for the original report.
-        if is_xai_responses:
-            kwargs.pop("service_tier", None)
 
         # Forward per-request timeout to the SDK so OpenAI/Anthropic clients
         # honor it.  Without this, ``providers.<id>.request_timeout_seconds``
@@ -224,13 +183,11 @@ class ResponsesApiTransport(ProviderTransport):
                 existing_extra_headers = kwargs.get("extra_headers")
                 merged_extra_headers: Dict[str, str] = {}
                 if isinstance(existing_extra_headers, dict):
-                    merged_extra_headers.update(
-                        {
-                            str(key): str(value)
-                            for key, value in existing_extra_headers.items()
-                            if key and value is not None
-                        }
-                    )
+                    merged_extra_headers.update({
+                        str(key): str(value)
+                        for key, value in existing_extra_headers.items()
+                        if key and value is not None
+                    })
                 merged_extra_headers["session_id"] = cache_scope_id
                 merged_extra_headers["x-client-request-id"] = cache_scope_id
                 kwargs["extra_headers"] = merged_extra_headers
@@ -238,31 +195,6 @@ class ResponsesApiTransport(ProviderTransport):
         max_tokens = params.get("max_tokens")
         if max_tokens is not None and not is_codex_backend:
             kwargs["max_output_tokens"] = max_tokens
-
-        if is_xai_responses and session_id:
-            existing_extra_headers = kwargs.get("extra_headers")
-            merged_extra_headers: Dict[str, str] = {}
-            if isinstance(existing_extra_headers, dict):
-                merged_extra_headers.update(
-                    {
-                        str(key): str(value)
-                        for key, value in existing_extra_headers.items()
-                        if key and value is not None
-                    }
-                )
-            merged_extra_headers["x-grok-conv-id"] = session_id
-            kwargs["extra_headers"] = merged_extra_headers
-
-            # xAI Responses cache-routing — body-level field per
-            # https://docs.x.ai/developers/advanced-api-usage/prompt-caching/maximizing-cache-hits.
-            # Sent via extra_body (not the typed kwarg) so it survives openai
-            # SDK builds whose Responses.stream() signature has dropped the field.
-            existing_extra_body = kwargs.get("extra_body")
-            merged_extra_body: Dict[str, Any] = {}
-            if isinstance(existing_extra_body, dict):
-                merged_extra_body.update(existing_extra_body)
-            merged_extra_body.setdefault("prompt_cache_key", session_id)
-            kwargs["extra_body"] = merged_extra_body
 
         return kwargs
 
@@ -278,7 +210,9 @@ class ResponsesApiTransport(ProviderTransport):
         # turns can detect a model swap and drop foreign-issuer blobs.
         issuer_kind = kwargs.get("issuer_kind") or self._last_issuer_kind
         # _normalize_codex_response returns (SimpleNamespace, finish_reason_str)
-        msg, finish_reason = _normalize_codex_response(response, issuer_kind=issuer_kind)
+        msg, finish_reason = _normalize_codex_response(
+            response, issuer_kind=issuer_kind
+        )
 
         tool_calls = None
         if msg and msg.tool_calls:
@@ -289,12 +223,20 @@ class ResponsesApiTransport(ProviderTransport):
                     provider_data["call_id"] = tc.call_id
                 if hasattr(tc, "response_item_id") and tc.response_item_id:
                     provider_data["response_item_id"] = tc.response_item_id
-                tool_calls.append(ToolCall(
-                    id=tc.id if hasattr(tc, "id") else (tc.function.name if hasattr(tc, "function") else None),
-                    name=tc.function.name if hasattr(tc, "function") else getattr(tc, "name", ""),
-                    arguments=tc.function.arguments if hasattr(tc, "function") else getattr(tc, "arguments", "{}"),
-                    provider_data=provider_data or None,
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id
+                        if hasattr(tc, "id")
+                        else (tc.function.name if hasattr(tc, "function") else None),
+                        name=tc.function.name
+                        if hasattr(tc, "function")
+                        else getattr(tc, "name", ""),
+                        arguments=tc.function.arguments
+                        if hasattr(tc, "function")
+                        else getattr(tc, "arguments", "{}"),
+                        provider_data=provider_data or None,
+                    )
+                )
 
         # Extract reasoning items for provider_data
         provider_data = {}
@@ -334,6 +276,7 @@ class ResponsesApiTransport(ProviderTransport):
         Normalizes input items, strips unsupported fields, validates structure.
         """
         from agent.codex_responses_adapter import _preflight_codex_api_kwargs
+
         return _preflight_codex_api_kwargs(api_kwargs, allow_stream=allow_stream)
 
     def map_finish_reason(self, raw_reason: str) -> str:

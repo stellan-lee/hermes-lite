@@ -19,15 +19,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 
-# fcntl is Unix-only; on Windows use msvcrt for file locking
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
-    try:
-        import msvcrt
-    except ImportError:
-        msvcrt = None
+import fcntl
 from pathlib import Path
 from typing import List, Optional
 
@@ -37,7 +29,6 @@ from typing import List, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hermes_constants import get_hermes_home
-from hermes_cli._subprocess_compat import windows_hide_flags
 from hermes_cli.config import load_config, _expand_env_vars
 from hermes_time import now as _hermes_now
 
@@ -113,39 +104,19 @@ def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str] | None:
 # Valid delivery platforms — used to validate user-supplied platform names
 # in cron delivery targets, preventing env var enumeration via crafted names.
 _KNOWN_DELIVERY_PLATFORMS = frozenset({
-    "telegram", "discord", "slack", "whatsapp", "signal",
-    "matrix", "mattermost", "homeassistant", "dingtalk", "feishu",
-    "wecom", "wecom_callback", "weixin", "sms", "email", "webhook", "bluebubbles",
-    "qqbot", "yuanbao",
+    "telegram", "discord", "slack", "feishu", "email", "webhook",
 })
 
 # Platforms that support a configured cron/notification home target, mapped to
 # the environment variable used by gateway setup/runtime config.
 _HOME_TARGET_ENV_VARS = {
-    "matrix": "MATRIX_HOME_ROOM",
     "telegram": "TELEGRAM_HOME_CHANNEL",
     "discord": "DISCORD_HOME_CHANNEL",
     "slack": "SLACK_HOME_CHANNEL",
-    "signal": "SIGNAL_HOME_CHANNEL",
-    "mattermost": "MATTERMOST_HOME_CHANNEL",
-    "sms": "SMS_HOME_CHANNEL",
     "email": "EMAIL_HOME_ADDRESS",
-    "dingtalk": "DINGTALK_HOME_CHANNEL",
     "feishu": "FEISHU_HOME_CHANNEL",
-    "wecom": "WECOM_HOME_CHANNEL",
-    "weixin": "WEIXIN_HOME_CHANNEL",
-    "bluebubbles": "BLUEBUBBLES_HOME_CHANNEL",
-    "qqbot": "QQBOT_HOME_CHANNEL",
-    "whatsapp": "WHATSAPP_HOME_CHANNEL",
 }
-
-# Legacy env var names kept for back-compat.  Each entry is the current
-# primary env var → the previous name.  _get_home_target_chat_id falls
-# back to the legacy name if the primary is unset, so users who set the
-# old name before the rename keep working until they migrate.
-_LEGACY_HOME_TARGET_ENV_VARS = {
-    "QQBOT_HOME_CHANNEL": "QQ_HOME_CHANNEL",
-}
+_LEGACY_HOME_TARGET_ENV_VARS: dict[str, str] = {}
 
 from cron.jobs import get_due_jobs, mark_job_run, save_job_output, advance_next_run
 
@@ -924,19 +895,13 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
     # choice explicit here keeps the allowed surface small and auditable.
     suffix = path.suffix.lower()
     if suffix in {".sh", ".bash"}:
-        # Resolve bash dynamically so Windows (Git Bash) and Linux/macOS
-        # all work.  On native Windows without Git for Windows installed
-        # shutil.which returns None — fall back to a clear error rather
-        # than a FileNotFoundError with a confusing "[WinError 2]"
-        # traceback.
         _bash = shutil.which("bash") or (
             "/bin/bash" if os.path.isfile("/bin/bash") else None
         )
         if _bash is None:
             return False, (
                 f"Cannot run .sh/.bash script {path.name!r}: bash not found on PATH. "
-                "On Windows, install Git for Windows (which ships Git Bash) "
-                "or rewrite the script as Python (.py)."
+                "Install bash or rewrite the script as Python (.py)."
             )
         argv = [_bash, str(path)]
     else:
@@ -954,7 +919,6 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
         pass
 
     try:
-        popen_kwargs = {"creationflags": windows_hide_flags()} if sys.platform == "win32" else {}
         result = subprocess.run(
             argv,
             capture_output=True,
@@ -962,7 +926,6 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
             timeout=script_timeout,
             cwd=str(path.parent),
             env=run_env,
-            **popen_kwargs,
         )
         stdout = (result.stdout or "").strip()
         stderr = (result.stderr or "").strip()
@@ -1131,36 +1094,10 @@ def _build_job_prompt(job: dict, prerun_script: Optional[tuple] = None) -> str:
 
     from tools.skills_tool import skill_view
     from tools.skill_usage import bump_use
-    from agent.skill_bundles import build_bundle_invocation_message, resolve_bundle_command_key
 
     parts = []
     skipped: list[str] = []
     for skill_name in skill_names:
-        # Cron jobs historically accepted only skill names here, but the CLI/gateway
-        # slash-command path lets bundles shadow skills with the same slug. Mirror
-        # that behavior so `skills: ["my-bundle"]` expands bundle members instead
-        # of being treated as a missing skill.
-        bundle_key = resolve_bundle_command_key(skill_name.lstrip("/"))
-        if bundle_key:
-            bundle_payload = build_bundle_invocation_message(
-                bundle_key,
-                user_instruction="",
-                task_id=str(job.get("id") or "") or None,
-            )
-            if bundle_payload:
-                bundle_message, _loaded_bundle_skills, _missing_bundle_skills = bundle_payload
-                if parts:
-                    parts.append("")
-                parts.append(bundle_message)
-                continue
-            logger.warning(
-                "Cron job '%s': bundle '%s' could not load any skills, skipping",
-                job.get("name", job.get("id")),
-                skill_name,
-            )
-            skipped.append(skill_name)
-            continue
-
         try:
             loaded = json.loads(skill_view(skill_name))
         except (json.JSONDecodeError, TypeError):
@@ -1227,15 +1164,13 @@ def _scan_assembled_cron_prompt(assembled: str, job: dict, *, has_skills: bool =
       block; command-shape patterns are dropped and invisible unicode is
       sanitized (stripped + logged) rather than blocked, to avoid
       false-positives that permanently kill a job. Skill bodies are
-      vetted at install time by ``skills_guard.py``.
+      loaded from local skill content.
     """
     from tools.cronjob_tools import _scan_cron_prompt, _scan_cron_skill_assembled
 
     if has_skills:
-        # Skill content is install-time vetted by skills_guard.py. Invisible
-        # unicode is sanitized (not blocked) so a stray zero-width space in a
-        # skill code example can't permanently kill the job; the cleaned
-        # prompt is what actually runs.
+        # Invisible unicode is sanitized (not blocked) so a stray zero-width
+        # space in a skill example cannot permanently kill the job.
         cleaned, scan_error = _scan_cron_skill_assembled(assembled)
         assembled = cleaned
     else:
@@ -1585,9 +1520,6 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
         # Max iterations
         max_iterations = _cfg.get("agent", {}).get("max_turns") or _cfg.get("max_turns") or 90
 
-        # Provider routing
-        pr = _cfg.get("provider_routing", {})
-
         from hermes_cli.runtime_provider import (
             resolve_runtime_provider,
             format_runtime_provider_error,
@@ -1632,23 +1564,6 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
             raise RuntimeError(message) from exc
 
         fallback_model = _cfg.get("fallback_providers") or _cfg.get("fallback_model") or None
-        credential_pool = None
-        runtime_provider = str(runtime.get("provider") or "").strip().lower()
-        if runtime_provider:
-            try:
-                from agent.credential_pool import load_pool
-                pool = load_pool(runtime_provider)
-                if pool.has_credentials():
-                    credential_pool = pool
-                    logger.info(
-                        "Job '%s': loaded credential pool for provider %s with %d entries",
-                        job_id,
-                        runtime_provider,
-                        len(pool.entries()),
-                    )
-            except Exception as e:
-                logger.debug("Job '%s': failed to load credential pool for %s: %s", job_id, runtime_provider, e)
-
         # Initialize MCP servers so configured mcp_servers are available to
         # the agent's tool registry before AIAgent is constructed. Without
         # this, cron jobs never saw any MCP tools — only the gateway / CLI
@@ -1676,18 +1591,10 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
             base_url=runtime.get("base_url"),
             provider=runtime.get("provider"),
             api_mode=runtime.get("api_mode"),
-            acp_command=runtime.get("command"),
-            acp_args=runtime.get("args"),
             max_iterations=max_iterations,
             reasoning_config=reasoning_config,
             prefill_messages=prefill_messages,
             fallback_model=fallback_model,
-            credential_pool=credential_pool,
-            providers_allowed=pr.get("only"),
-            providers_ignored=pr.get("ignore"),
-            providers_order=pr.get("order"),
-            provider_sort=pr.get("sort"),
-            openrouter_min_coding_score=(_cfg.get("openrouter") or {}).get("min_coding_score"),
             enabled_toolsets=_resolve_cron_enabled_toolsets(job, _cfg),
             disabled_toolsets=_resolve_cron_disabled_toolsets(_cfg),
             quiet_mode=True,
@@ -1920,14 +1827,10 @@ def tick(verbose: bool = True, adapters=None, loop=None) -> int:
     lock_dir, lock_file = _get_lock_paths()
     lock_dir.mkdir(parents=True, exist_ok=True)
 
-    # Cross-platform file locking: fcntl on Unix, msvcrt on Windows
     lock_fd = None
     try:
         lock_fd = open(lock_file, "w", encoding="utf-8")
-        if fcntl:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        elif msvcrt:
-            msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (OSError, IOError):
         logger.debug("Tick skipped — another instance holds the lock")
         if lock_fd is not None:
@@ -2078,16 +1981,10 @@ def tick(verbose: bool = True, adapters=None, loop=None) -> int:
 
         return sum(_results)
     finally:
-        if fcntl:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            except (OSError, IOError):
-                pass
-        elif msvcrt:
-            try:
-                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
-            except (OSError, IOError):
-                pass
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except (OSError, IOError):
+            pass
         lock_fd.close()
 
 

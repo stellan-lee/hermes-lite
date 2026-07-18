@@ -216,17 +216,15 @@ def _hermes_bin_dir() -> str:
 def _detect_target() -> str | None:
     """Return the Rust target triple for the current platform, or None.
 
-    Windows is intentionally unsupported — tirith does not ship a Windows
-    build. Callers should treat `None` as "this platform will never have
-    tirith" and silently fall back to pattern-matching guards.
+    Unsupported targets return ``None`` so callers can fall back to
+    pattern-matching guards.
     """
     system = platform.system()
     machine = platform.machine().lower()
 
-    # Android (Termux) is ABI-compatible with Linux — reuse Linux binaries.
     if system == "Darwin":
         plat = "apple-darwin"
-    elif system in {"Linux", "Android"}:
+    elif system == "Linux":
         plat = "unknown-linux-gnu"
     else:
         return None

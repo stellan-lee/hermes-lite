@@ -3,11 +3,11 @@
 SWE Runner with Hermes Trajectory Format
 
 A runner that uses Hermes-Agent's built-in execution environments
-(local, docker, modal) and outputs trajectories in the Hermes-Agent format
+(local or Docker) and outputs trajectories in the Hermes-Agent format
 compatible with batch_runner.py and trajectory_compressor.py.
 
 Features:
-- Uses Hermes-Agent's Docker, Modal, or Local environments for command execution
+- Uses Hermes-Agent's Docker or local environments for command execution
 - Outputs trajectories in Hermes format (from/value pairs with <tool_call>/<tool_response> XML)
 - Compatible with the trajectory compression pipeline
 - Supports batch processing from JSONL prompt files
@@ -18,9 +18,6 @@ Usage:
     
     # Run with Docker
     python mini_swe_runner.py --task "List files in /tmp" --env docker --image python:3.11-slim
-    
-    # Run with Modal (cloud)
-    python mini_swe_runner.py --task "Install numpy and test it" --env modal --image python:3.11-slim
     
     # Batch mode from JSONL file
     python mini_swe_runner.py --prompts_file prompts.jsonl --output_file trajectories.jsonl --env docker
@@ -40,27 +37,6 @@ from agent.tool_dispatch_helpers import make_tool_result_message
 load_dotenv()
 
 
-def _effective_temperature_for_model(
-    model: str,
-    base_url: Optional[str] = None,
-) -> Optional[float]:
-    """Return a fixed temperature for models with strict sampling contracts.
-
-    Returns ``None`` when the model manages temperature server-side (Kimi);
-    callers must omit the ``temperature`` kwarg entirely in that case.
-    """
-    try:
-        from agent.auxiliary_client import _fixed_temperature_for_model, OMIT_TEMPERATURE
-    except Exception:
-        return None
-    result = _fixed_temperature_for_model(model, base_url)
-    if result is OMIT_TEMPERATURE:
-        return None  # caller must omit temperature
-    return result
-
-
-
-
 # ============================================================================
 # Terminal Tool Definition (matches Hermes-Agent format)
 # ============================================================================
@@ -72,7 +48,7 @@ TERMINAL_TOOL_DEFINITION = {
         "description": """Execute bash commands in a sandboxed environment.
 
 **Environment:**
-- Isolated execution environment (local, Docker, or Modal cloud)
+- Isolated execution environment (local or Docker)
 - Filesystem persists between tool calls within the same task
 - Internet access available
 
@@ -125,8 +101,8 @@ def create_environment(
     Create an execution environment using Hermes-Agent's built-in backends.
     
     Args:
-        env_type: One of "local", "docker", "modal"
-        image: Docker/Modal image name (ignored for local)
+        env_type: One of "local" or "docker"
+        image: Docker image name (ignored for local)
         cwd: Working directory
         timeout: Default command timeout
         **kwargs: Additional environment-specific options
@@ -142,12 +118,8 @@ def create_environment(
         from tools.environments.docker import DockerEnvironment
         return DockerEnvironment(image=image, cwd=cwd, timeout=timeout, **kwargs)
     
-    elif env_type == "modal":
-        from tools.environments.modal import ModalEnvironment
-        return ModalEnvironment(image=image, cwd=cwd, timeout=timeout, **kwargs)
-    
     else:
-        raise ValueError(f"Unknown environment type: {env_type}. Use 'local', 'docker', or 'modal'")
+        raise ValueError(f"Unknown environment type: {env_type}. Use 'local' or 'docker'")
 
 
 # ============================================================================
@@ -162,7 +134,7 @@ class MiniSWERunner:
     
     def __init__(
         self,
-        model: str = "anthropic/claude-sonnet-4.6",
+        model: str = "",
         base_url: str = None,
         api_key: str = None,
         env_type: str = "local",
@@ -179,8 +151,8 @@ class MiniSWERunner:
             model: Model name for OpenAI-compatible API
             base_url: API base URL (optional, uses env vars if not provided)
             api_key: API key (optional, uses env vars if not provided)
-            env_type: Environment type - "local", "docker", or "modal"
-            image: Docker/Modal image (ignored for local)
+            env_type: Environment type - "local" or "docker"
+            image: Docker image (ignored for local)
             cwd: Working directory for commands
             max_iterations: Maximum tool-calling iterations
             command_timeout: Default timeout for commands
@@ -202,30 +174,17 @@ class MiniSWERunner:
         )
         self.logger = logging.getLogger(__name__)
         
-        # Initialize LLM client via centralized provider router.
-        # If explicit api_key/base_url are provided (e.g. from CLI args),
-        # construct directly.  Otherwise use the router for OpenRouter.
-        if api_key or base_url:
-            from openai import OpenAI
-            client_kwargs = {
-                "base_url": base_url or "https://openrouter.ai/api/v1",
-                "api_key": api_key or os.getenv(
-                    "OPENROUTER_API_KEY",
-                    os.getenv("ANTHROPIC_API_KEY",
-                              os.getenv("OPENAI_API_KEY", ""))),
-            }
-            self.client = OpenAI(**client_kwargs)
-        else:
-            from agent.auxiliary_client import resolve_provider_client
-            self.client, _ = resolve_provider_client("openrouter", model=model)
-            if self.client is None:
-                # Fallback: try auto-detection
-                self.client, _ = resolve_provider_client("auto", model=model)
-            if self.client is None:
-                from openai import OpenAI
-                self.client = OpenAI(
-                    base_url="https://openrouter.ai/api/v1",
-                    api_key=os.getenv("OPENROUTER_API_KEY", ""))
+        # This compact runner targets retained custom/local OpenAI-compatible
+        # chat-completions endpoints. The main Hermes agent owns Codex Responses.
+        resolved_base_url = base_url or os.getenv("CUSTOM_BASE_URL") or os.getenv("LM_BASE_URL")
+        resolved_api_key = api_key or os.getenv("CUSTOM_API_KEY") or os.getenv("LM_API_KEY")
+        if not resolved_base_url:
+            raise ValueError("Set base_url, CUSTOM_BASE_URL, or LM_BASE_URL")
+        from openai import OpenAI
+        self.client = OpenAI(
+            base_url=resolved_base_url,
+            api_key=resolved_api_key or "local-no-auth",
+        )
         
         # Environment will be created per-task
         self.env = None
@@ -464,13 +423,6 @@ Complete the user's task step by step."""
                         "tools": self.tools,
                         "timeout": 300.0,
                     }
-                    fixed_temperature = _effective_temperature_for_model(
-                        self.model,
-                        str(getattr(self.client, "base_url", "") or ""),
-                    )
-                    if fixed_temperature is not None:
-                        api_kwargs["temperature"] = fixed_temperature
-
                     response = self.client.chat.completions.create(**api_kwargs)
                 except Exception as e:
                     self.logger.error(f"API call failed: {e}")
@@ -637,7 +589,7 @@ def main(
     task: str = None,
     prompts_file: str = None,
     output_file: str = "swe-runner-test1.jsonl",
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "",
     base_url: str = None,
     api_key: str = None,
     env: str = "local",
@@ -654,11 +606,11 @@ def main(
         task: Single task to run (use this OR prompts_file)
         prompts_file: JSONL file with prompts (each line: {"prompt": "..."})
         output_file: Output JSONL file for trajectories
-        model: Model name (default: claude-sonnet-4-20250514)
+        model: Model name exposed by the compatible endpoint
         base_url: API base URL (optional)
         api_key: API key (optional, uses env vars)
-        env: Environment type - "local", "docker", or "modal"
-        image: Docker/Modal image (default: python:3.11-slim)
+        env: Environment type - "local" or "docker"
+        image: Docker image (default: python:3.11-slim)
         cwd: Working directory (default: /tmp)
         max_iterations: Maximum tool-calling iterations (default: 15)
         timeout: Command timeout in seconds (default: 60)

@@ -46,18 +46,13 @@ class FailoverReason(enum.Enum):
 
     # Model / provider policy
     model_not_found = "model_not_found"  # 404 or invalid model — fallback to different model
-    provider_policy_blocked = "provider_policy_blocked"  # Aggregator (e.g. OpenRouter) blocked the only endpoint due to account data/privacy policy
     content_policy_blocked = "content_policy_blocked"  # Provider safety filter rejected this prompt — deterministic per-request, don't retry unchanged
 
     # Request format
     format_error = "format_error"        # 400 bad request — abort or strip + retry
     invalid_encrypted_content = "invalid_encrypted_content"  # Responses replay blob rejected — strip replay state and retry
-    multimodal_tool_content_unsupported = "multimodal_tool_content_unsupported"  # Provider rejected list-type content in tool messages (e.g. Xiaomi MiMo) — downgrade to text and retry
+    multimodal_tool_content_unsupported = "multimodal_tool_content_unsupported"  # Compatible endpoint rejected list-type tool content — downgrade to text and retry
 
-    # Provider-specific
-    thinking_signature = "thinking_signature"  # Anthropic thinking block sig invalid
-    long_context_tier = "long_context_tier"    # Anthropic "extra usage" tier gate
-    oauth_long_context_beta_forbidden = "oauth_long_context_beta_forbidden"  # Anthropic OAuth subscription rejects 1M context beta — disable beta and retry
     llama_cpp_grammar_pattern = "llama_cpp_grammar_pattern"  # llama.cpp json-schema-to-grammar rejects regex escapes in `pattern` / `format` — strip from tools and retry
 
     # Catch-all
@@ -267,33 +262,9 @@ _REQUEST_VALIDATION_PATTERNS = [
     "unsupported_parameter",
 ]
 
-# OpenRouter aggregator policy-block patterns.
-#
-# When a user's OpenRouter account privacy setting (or a per-request
-# `provider.data_collection: deny` preference) excludes the only endpoint
-# serving a model, OpenRouter returns 404 with a *specific* message that is
-# distinct from "model not found":
-#
-#   "No endpoints available matching your guardrail restrictions and
-#    data policy. Configure: https://openrouter.ai/settings/privacy"
-#
-# We classify this as `provider_policy_blocked` rather than
-# `model_not_found` because:
-#   - The model *exists* — model_not_found is misleading in logs
-#   - Provider fallback won't help: the account-level setting applies to
-#     every call on the same OpenRouter account
-#   - The error body already contains the fix URL, so the user gets
-#     actionable guidance without us rewriting the message
-_PROVIDER_POLICY_BLOCKED_PATTERNS = [
-    "no endpoints available matching your guardrail",
-    "no endpoints available matching your data policy",
-    "no endpoints found matching your data policy",
-]
-
 # Provider content-policy / safety-filter blocks. Distinct from
-# ``provider_policy_blocked`` above (which is an OpenRouter *account*-level
-# data/privacy guardrail) — these are *per-prompt* safety decisions made by
-# the upstream model provider. They are deterministic for the unchanged
+# account-level access controls: these are per-prompt safety decisions made
+# by the model endpoint. They are deterministic for the unchanged
 # request, so retrying the same prompt three times just reproduces the same
 # block and burns paid attempts on a refusal. The recovery is to switch to a
 # configured fallback model/provider immediately, or surface the block to
@@ -340,11 +311,6 @@ _AUTH_PATTERNS = [
     "token expired",
     "token revoked",
     "access denied",
-]
-
-# Anthropic thinking block signature patterns
-_THINKING_SIG_PATTERNS = [
-    "signature",  # Combined with "thinking" check
 ]
 
 # Message-string patterns that indicate a provider-side timeout even when
@@ -458,7 +424,7 @@ def classify_api_error(
 
     Args:
         error: The exception from the API call.
-        provider: Current provider name (e.g. "openrouter", "anthropic").
+        provider: Current provider name.
         model: Current model slug.
         approx_tokens: Approximate token count of the current context.
         context_length: Maximum context length for the current model.
@@ -482,10 +448,8 @@ def classify_api_error(
     # the body message so patterns like "try again" in 402 disambiguation
     # are detected even when only present in the structured body.
     #
-    # Also extract metadata.raw — OpenRouter wraps upstream provider errors
-    # inside {"error": {"message": "Provider returned error", "metadata":
-    # {"raw": "<actual error JSON>"}}} and the real error message (e.g.
-    # "context length exceeded") is only in the inner JSON.
+    # Also extract metadata.raw because compatible proxies may wrap the real
+    # upstream error there.
     _raw_msg = str(error).lower()
     _body_msg = ""
     _metadata_msg = ""
@@ -546,52 +510,6 @@ def classify_api_error(
             should_fallback=True,
         )
 
-    # Anthropic thinking block signature invalid (400).
-    # Don't gate on provider — OpenRouter proxies Anthropic errors, so the
-    # provider may be "openrouter" even though the error is Anthropic-specific.
-    # The message pattern ("signature" + "thinking") is unique enough.
-    if (
-        status_code == 400
-        and "signature" in error_msg
-        and "thinking" in error_msg
-    ):
-        return _result(
-            FailoverReason.thinking_signature,
-            retryable=True,
-            should_compress=False,
-        )
-
-    # Anthropic long-context tier gate (429 "extra usage" + "long context")
-    if (
-        status_code == 429
-        and "extra usage" in error_msg
-        and "long context" in error_msg
-    ):
-        return _result(
-            FailoverReason.long_context_tier,
-            retryable=True,
-            should_compress=True,
-        )
-
-    # Anthropic OAuth subscription rejects the 1M-context beta header.
-    # Observed error body: "The long context beta is not yet available for
-    # this subscription." Returned as HTTP 400 from native Anthropic when
-    # the subscription doesn't include 1M context, even though the request
-    # carries ``anthropic-beta: context-1m-2025-08-07``. The recovery path
-    # in run_agent.py rebuilds the Anthropic client with the beta stripped
-    # and retries once. Pattern is narrow enough that it won't collide with
-    # the 429 tier-gate pattern above (different status, different phrase).
-    if (
-        status_code == 400
-        and "long context beta" in error_msg
-        and "not yet available" in error_msg
-    ):
-        return _result(
-            FailoverReason.oauth_long_context_beta_forbidden,
-            retryable=True,
-            should_compress=False,
-        )
-
     # llama.cpp's ``json-schema-to-grammar`` converter (used by its OAI
     # server to build GBNF tool-call parsers) rejects regex escape classes
     # like ``\d``/``\w``/``\s`` and most ``format`` values. MCP servers
@@ -615,35 +533,6 @@ def classify_api_error(
             FailoverReason.llama_cpp_grammar_pattern,
             retryable=True,
             should_compress=False,
-        )
-
-    # xAI Grok subscription entitlement errors.
-    #
-    # xAI returns "You have either run out of available resources or do not
-    # have an active Grok subscription" through two distinct code paths:
-    #
-    #   • HTTP 403 — status_code is set; _classify_by_status (step 2) routes
-    #     it to FailoverReason.auth correctly, and _is_entitlement_failure
-    #     then prevents the credential-refresh loop.
-    #
-    #   • SSE ``type=error`` frame — surfaced as _StreamErrorEvent with
-    #     status_code=None.  _classify_by_status is skipped entirely, and
-    #     "grok subscription" / "out of available resources" appear in none
-    #     of the message-pattern lists below.  Without this guard the error
-    #     falls through to FailoverReason.unknown (retryable=True), burning
-    #     max_retries before the agent stops — and _is_entitlement_failure
-    #     is never called because it only runs under FailoverReason.auth.
-    #
-    # Both X Premium+ and SuperGrok subscribers hit this path when their
-    # subscription tier does not cover the requested model or feature.
-    if (
-        "do not have an active grok subscription" in error_msg
-        or ("out of available resources" in error_msg and "grok" in error_msg)
-    ):
-        return _result(
-            FailoverReason.auth,
-            retryable=False,
-            should_fallback=True,
         )
 
     # ── 2. HTTP status code classification ──────────────────────────
@@ -738,8 +627,7 @@ def _classify_by_status(
     """Classify based on HTTP status code with message-aware refinement."""
 
     if status_code == 401:
-        # Not retryable on its own — credential pool rotation and
-        # provider-specific refresh (Codex, Anthropic, Nous) run before
+        # Not retryable on its own — provider-specific refresh (Codex) runs before
         # the retryability check in run_agent.py.  If those succeed, the
         # loop `continue`s.  If they fail, retryable=False ensures we
         # hit the client-error abort path (which tries fallback first).
@@ -751,8 +639,7 @@ def _classify_by_status(
         )
 
     if status_code == 403:
-        # OpenRouter 403 "key limit exceeded" is actually billing. Other
-        # providers also use 403 for account-plan or credit exhaustion.
+        # Some compatible endpoints use 403 for account-plan or credit exhaustion.
         if (
             "key limit exceeded" in error_msg
             or "spending limit" in error_msg
@@ -785,17 +672,6 @@ def _classify_by_status(
                 should_rotate_credential=True,
                 should_fallback=True,
             )
-        # OpenRouter policy-block 404 — distinct from "model not found".
-        # The model exists; the user's account privacy setting excludes the
-        # only endpoint serving it. Falling back to another provider won't
-        # help (same account setting applies).  The error body already
-        # contains the fix URL, so just surface it.
-        if any(p in error_msg for p in _PROVIDER_POLICY_BLOCKED_PATTERNS):
-            return result_fn(
-                FailoverReason.provider_policy_blocked,
-                retryable=False,
-                should_fallback=False,
-            )
         if any(p in error_msg for p in _MODEL_NOT_FOUND_PATTERNS):
             return result_fn(
                 FailoverReason.model_not_found,
@@ -822,7 +698,7 @@ def _classify_by_status(
         )
 
     if status_code == 429:
-        # Already checked long_context_tier above; this is a normal rate limit
+        # Normal rate limit.
         return result_fn(
             FailoverReason.rate_limit,
             retryable=True,
@@ -971,13 +847,7 @@ def _classify_400(
             should_compress=True,
         )
 
-    # Some providers return model-not-found as 400 instead of 404 (e.g. OpenRouter).
-    if any(p in error_msg for p in _PROVIDER_POLICY_BLOCKED_PATTERNS):
-        return result_fn(
-            FailoverReason.provider_policy_blocked,
-            retryable=False,
-            should_fallback=False,
-        )
+    # Some compatible endpoints return model-not-found as 400 instead of 404.
     if any(p in error_msg for p in _MODEL_NOT_FOUND_PATTERNS):
         return result_fn(
             FailoverReason.model_not_found,
@@ -1204,15 +1074,6 @@ def _classify_by_message(
             retryable=False,
             should_rotate_credential=True,
             should_fallback=True,
-        )
-
-    # Provider policy-block (aggregator-side guardrail) — check before
-    # model_not_found so we don't mis-label as a missing model.
-    if any(p in error_msg for p in _PROVIDER_POLICY_BLOCKED_PATTERNS):
-        return result_fn(
-            FailoverReason.provider_policy_blocked,
-            retryable=False,
-            should_fallback=False,
         )
 
     # Model not found patterns

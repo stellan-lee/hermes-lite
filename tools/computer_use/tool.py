@@ -1,8 +1,7 @@
 """Entry point for the `computer_use` tool.
 
 Universal (any-model) macOS desktop control via cua-driver's background
-computer-use primitive. Replaces #4562's Anthropic-native `computer_20251124`
-approach — the schema here is standard OpenAI function-calling so every
+computer-use primitive. The schema uses standard function calling so every
 tool-capable model can drive it.
 
 Return contract
@@ -24,10 +23,8 @@ For captures / actions with `capture_after=True`:
       }
 
   run_agent.py's tool-message builder inspects `_multimodal` and emits a
-  list-shaped `content` for OpenAI-compatible providers. The Anthropic
-  adapter splices the base64 image into a `tool_result` block (see
-  `agent/anthropic_adapter.py`). Every provider that supports multi-part
-  tool content gets the image; text-only providers see the summary only.
+  list-shaped `content` for compatible providers. Every provider that supports
+  multi-part tool content gets the image; text-only providers see the summary.
 """
 
 from __future__ import annotations

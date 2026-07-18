@@ -52,7 +52,7 @@ COMPRESSION_CONTINUATION = "compression"
 # ---------------------------------------------------------------------------
 # SQLite's WAL mode requires shared-memory (mmap) coordination and fcntl
 # byte-range locks that don't reliably work on network filesystems (NFS,
-# SMB/CIFS, some FUSE mounts, WSL1).  Upstream documents this explicitly:
+# SMB/CIFS, and some FUSE mounts). Upstream documents this explicitly:
 # https://www.sqlite.org/wal.html#sometimes_queries_return_sqlite_busy_in_wal_mode
 #
 # On those filesystems ``PRAGMA journal_mode=WAL`` raises
@@ -2095,6 +2095,7 @@ class SessionDB:
         codex_message_items: Any = None,
         platform_message_id: str = None,
         observed: bool = False,
+        timestamp: float = None,
     ) -> int:
         """
         Append a message to a session. Returns the message row ID.
@@ -2145,7 +2146,7 @@ class SessionDB:
                     tool_call_id,
                     tool_calls_json,
                     tool_name,
-                    time.time(),
+                    time.time() if timestamp is None else timestamp,
                     token_count,
                     finish_reason,
                     reasoning,
@@ -2324,7 +2325,7 @@ class SessionDB:
         :meth:`rewind_to_message` for the soft-delete mechanic.
 
         Ordered by AUTOINCREMENT id (true insertion order) rather than
-        timestamp — see c03acca50 for the WSL2 clock-regression rationale.
+        timestamp so host clock regressions cannot reorder conversation history.
         """
         active_clause = "" if include_inactive else " AND active = 1"
         with self._lock:

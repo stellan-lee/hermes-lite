@@ -33,7 +33,6 @@ def test_make_agent_passes_resolved_provider():
         patch("tui_gateway.server._get_db", return_value=MagicMock()),
         patch("tui_gateway.server._load_tool_progress_mode", return_value="compact"),
         patch("tui_gateway.server._load_reasoning_config", return_value=None),
-        patch("tui_gateway.server._load_service_tier", return_value=None),
         patch("tui_gateway.server._load_enabled_toolsets", return_value=None),
         patch(
             "hermes_cli.runtime_provider.resolve_runtime_provider",

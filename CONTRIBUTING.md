@@ -34,7 +34,7 @@ This is the most common question for new contributors. The answer is almost alwa
 - It requires end-to-end integration with API keys, auth flows, or multi-component configuration managed by the agent harness
 - It needs custom processing logic that must execute precisely every time (not "best effort" from LLM interpretation)
 - It handles binary data, streaming, or real-time events that can't go through the terminal
-- Examples: browser automation (Browserbase session management), TTS (audio encoding + platform delivery), vision analysis (base64 image handling)
+- Examples: local browser automation, TTS (audio encoding + platform delivery), vision analysis (base64 image handling)
 
 ### Should the Skill be bundled?
 
@@ -154,13 +154,13 @@ hermes-agent/
 │   ├── main.py                   # Entry point, argument parsing, command dispatch
 │   ├── config.py                 # Config management, migration, env var definitions
 │   ├── setup.py                  # Interactive setup wizard
-│   ├── auth.py                   # Provider resolution, OAuth, Nous Portal
-│   ├── models.py                 # OpenRouter model selection lists
+│   ├── auth.py                   # Provider resolution and Codex OAuth
+│   ├── models.py                 # Retained model selection helpers
 │   ├── banner.py                 # Welcome banner, ASCII art
 │   ├── commands.py               # Central slash command registry (CommandDef), autocomplete, gateway helpers
 │   ├── callbacks.py              # Interactive callbacks (clarify, sudo, approval)
 │   ├── doctor.py                 # Diagnostics
-│   ├── skills_hub.py             # Skills Hub CLI + /skills slash command
+│   ├── skills_config.py          # Local skills configuration helpers
 │   └── skin_engine.py            # Skin/theme engine — data-driven CLI visual customization
 │
 ├── tools/                    # Tool implementations (self-registering)
@@ -168,7 +168,7 @@ hermes-agent/
 │   ├── approval.py               # Dangerous command detection + per-session approval
 │   ├── terminal_tool.py          # Terminal orchestration (sudo, env lifecycle, backends)
 │   ├── file_operations.py        # read_file, write_file, search, patch, etc.
-│   ├── web_tools.py              # web_search, web_extract (Parallel/Firecrawl + Gemini summarization)
+│   ├── web_tools.py              # web_search and web_extract plugin dispatch
 │   ├── vision_tools.py           # Image analysis via multimodal models
 │   ├── delegate_tool.py          # Subagent spawning and parallel task execution
 │   ├── code_execution_tool.py    # Sandboxed Python with RPC tool access
@@ -177,7 +177,7 @@ hermes-agent/
 │   ├── skill_tools.py            # Skill search, load, manage
 │   └── environments/             # Terminal execution backends
 │       ├── base.py                   # BaseEnvironment ABC
-│       ├── local.py, docker.py, ssh.py, singularity.py, modal.py, daytona.py
+│       ├── local.py, docker.py, ssh.py
 │
 ├── gateway/                  # Messaging gateway
 │   ├── run.py                    # GatewayRunner — platform lifecycle, message routing, cron
@@ -241,7 +241,6 @@ User message → AIAgent._run_agent_loop()
 - **Session persistence**: All conversations are stored in SQLite (`hermes_state.py`) with full-text search and unique session titles. Per-session JSON snapshots in `~/.hermes/sessions/` were superseded by the SQLite store and are off by default; opt back in with `sessions.write_json_snapshots: true` if you have external tooling that consumes the JSON files directly.
 - **Ephemeral injection**: System prompts and prefill messages are injected at API call time, never persisted to the database or logs.
 - **Provider abstraction**: The agent works with any OpenAI-compatible API. Provider resolution happens at init time (OpenRouter API key, Anthropic, or custom endpoint).
-- **Provider routing**: When using OpenRouter, `provider_routing` in config.yaml controls provider selection (sort by throughput/latency/price, allow/ignore specific providers, data retention policies). These are injected as `extra_body.provider` in API requests.
 
 ---
 
@@ -422,7 +421,7 @@ metadata:
 **Examples:**
 
 ```yaml
-# DuckDuckGo search — shown when Firecrawl (web toolset) is unavailable
+# DuckDuckGo search — shown when the web toolset is unavailable
 metadata:
   hermes:
     fallback_for_toolsets: [web]
@@ -432,7 +431,7 @@ metadata:
   hermes:
     requires_toolsets: [terminal]
 
-# Local browser fallback — shown when Browserbase is unavailable
+# Browser helper — shown when the browser toolset is unavailable
 metadata:
   hermes:
     fallback_for_toolsets: [browser]

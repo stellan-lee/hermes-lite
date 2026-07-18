@@ -211,21 +211,7 @@ class TestLookupHelpers:
         from tools.computer_use.vision_routing import _lookup_supports_vision
         assert _lookup_supports_vision("anthropic", "") is None
 
-    def test_lookup_supports_vision_handles_lookup_exception(self):
-        """Underlying caps lookup may raise; helper must swallow + return None."""
-        from tools.computer_use import vision_routing
 
-        def _boom(_provider, _model):
-            raise RuntimeError("models.dev unreachable")
-
-        with patch("agent.models_dev.get_model_capabilities", side_effect=_boom):
-            assert vision_routing._lookup_supports_vision("anthropic", "claude") is None
-
-    def test_lookup_supports_vision_returns_none_when_caps_missing(self):
-        from tools.computer_use import vision_routing
-
-        with patch("agent.models_dev.get_model_capabilities", return_value=None):
-            assert vision_routing._lookup_supports_vision("anthropic", "claude") is None
 
     def test_provider_accepts_multimodal_tool_result_returns_none_for_blank_provider(self):
         from tools.computer_use.vision_routing import (

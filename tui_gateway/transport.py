@@ -38,9 +38,7 @@ _PEER_GONE_ERRNOS = frozenset({
     errno.ECONNRESET,   # peer reset the connection
     errno.EBADF,        # fd closed under us
     errno.ESHUTDOWN,    # transport endpoint shut down
-    getattr(errno, "WSAECONNRESET", -1),  # win32 mapping (no-op on POSIX)
-    getattr(errno, "WSAESHUTDOWN", -1),
-} - {-1})
+})
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +124,8 @@ class StdioTransport:
           * ``BrokenPipeError``
           * ``ValueError("...closed file...")``
           * ``OSError`` whose errno is in :data:`_PEER_GONE_ERRNOS`
-            (EPIPE / ECONNRESET / EBADF / ESHUTDOWN; plus WSA mappings
-            on Windows).  Other OSError errnos (ENOSPC, EACCES, ...) are
+            (EPIPE / ECONNRESET / EBADF / ESHUTDOWN). Other OSError errnos
+            (ENOSPC, EACCES, ...) are
             real host problems and re-raise.
         """
         # Serialization is OUTSIDE the lock so a large payload can't

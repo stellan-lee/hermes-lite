@@ -342,7 +342,6 @@ def _run_agent(
         quiet_mode=True,
         platform="cli",
         session_db=session_db,
-        credential_pool=runtime.get("credential_pool"),
         fallback_model=_fb or None,
         # Interactive callbacks are intentionally NOT wired beyond this
         # one.  In oneshot mode there's no user sitting at a terminal:

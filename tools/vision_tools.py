@@ -3,8 +3,8 @@
 Vision Tools Module
 
 This module provides vision analysis tools that work with image URLs.
-Uses the centralized auxiliary vision router, which can select OpenRouter,
-Nous, Codex, native Anthropic, or a custom OpenAI-compatible endpoint.
+Uses the centralized auxiliary vision router for Codex or a custom/local
+OpenAI-compatible endpoint.
 
 Available tools:
 - vision_analyze_tool: Analyze images from URLs with custom prompts
@@ -463,20 +463,9 @@ def _supports_media_in_tool_results(provider: str, model: str) -> bool:
     """Whether the given provider+model combination accepts image content
     inside a tool-result message.
 
-    Providers covered today (per spec docs verified Apr-2026):
-
-      * Anthropic Messages API (``anthropic`` provider, plus aggregators that
-        proxy Claude — ``openrouter``, ``nous``, ``vertex``, ``bedrock``):
-        ``tool_result`` blocks accept ``image`` content blocks.
-      * OpenAI Chat Completions: tool messages accept array content with
-        ``image_url`` parts.
-      * OpenAI Responses (``openai-codex``): ``function_call_output.output``
-        accepts an array of ``input_text``/``input_image`` items.
-      * Gemini 3 (and proxied via aggregators): supports multimodal tool
-        results. Older Gemini does NOT.
-
-    For unknown / legacy providers we conservatively return False — the
-    caller falls back to the legacy aux-LLM text path.
+    Codex Responses and retained OpenAI-compatible local endpoints both accept
+    the normalized multimodal result shape. Unknown plugin providers fall back
+    to the auxiliary vision text path.
     """
     if not isinstance(provider, str):
         return False
@@ -484,39 +473,7 @@ def _supports_media_in_tool_results(provider: str, model: str) -> bool:
     if not p:
         return False
 
-    # Aggregators that route to multiple vendors — assume support since
-    # users on these aggregators are typically using vision-capable
-    # frontier models. Falling back to text would be a regression for
-    # them.
-    _AGGREGATORS = {
-        "openrouter", "nous", "vertex", "bedrock", "anthropic-vertex",
-        "google-vertex",
-    }
-    if p in _AGGREGATORS:
-        return True
-
-    # Native Anthropic
-    if p in {"anthropic", "claude", "anthropic-direct"}:
-        return True
-
-    # OpenAI Chat Completions and Responses
-    if p in {"openai", "openai-chat", "openai-codex", "azure-openai"}:
-        return True
-
-    # Gemini — gate on model name; older Gemini variants did not support
-    # multimodal functionResponse. Gemini 3.x does.
-    if p in {"google", "gemini", "google-gemini", "google-vertex-gemini"}:
-        if not isinstance(model, str):
-            return False
-        m = model.strip().lower()
-        if "gemini-3" in m or "gemini-pro-3" in m or "gemini-flash-3" in m:
-            return True
-        return False
-
-    # Other vision-capable provider stacks. Conservative default: False.
-    # Add explicit entries here as we verify each provider's tool-result
-    # multimodal support empirically.
-    return False
+    return p in {"openai-codex", "custom", "local", "lmstudio", "ollama"}
 
 
 def _should_use_native_vision_fast_path() -> bool:
@@ -723,7 +680,7 @@ async def vision_analyze_tool(
     
     This tool accepts either an HTTP/HTTPS URL or a local file path. For URLs,
     it downloads the image first. In both cases, the image is converted to base64
-    and processed using Gemini 3 Flash Preview via OpenRouter API.
+    and processed through the configured retained vision runtime.
     
     The user_prompt parameter is expected to be pre-formatted by the calling
     function (typically model_tools.py) to include both full description
@@ -733,7 +690,7 @@ async def vision_analyze_tool(
         image_url (str): The URL or local file path of the image to analyze.
                          Accepts http://, https:// URLs or absolute/relative file paths.
         user_prompt (str): The pre-formatted prompt for the vision model
-        model (str): The vision model to use (default: google/gemini-3-flash-preview)
+        model (str): Optional model override for a compatible endpoint
     
     Returns:
         str: JSON string containing the analysis results with the following structure:
@@ -999,12 +956,8 @@ async def vision_analyze_tool(
 def check_vision_requirements() -> bool:
     """Check if the configured runtime vision path can resolve a client.
 
-    Mirrors the fallback chain that ``call_llm(task="vision")`` actually uses
-    at runtime: first the explicit ``auxiliary.vision.provider`` (if any),
-    and if that fails, the auto chain (main provider → openrouter → nous).
-    Without the auto-fallback step the tool would disappear from the model's
-    tool list whenever the explicit provider name was unresolvable, even
-    when the auto chain would have served the request (issue #31179).
+    Mirrors ``call_llm(task="vision")``: an explicit retained vision runtime,
+    then the active Codex/custom runtime.
     """
     try:
         from agent.auxiliary_client import resolve_vision_provider_client
@@ -1035,7 +988,7 @@ if __name__ == "__main__":
     
     if not api_available:
         print("❌ No auxiliary vision model available")
-        print("Configure a supported multimodal backend (OpenRouter, Nous, Codex, Anthropic, or a custom OpenAI-compatible endpoint).")
+        print("Configure Codex or a multimodal custom/local OpenAI-compatible endpoint.")
         sys.exit(1)
     else:
         print("✅ Vision model available")

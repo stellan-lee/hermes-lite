@@ -281,10 +281,10 @@ class TestAddCommand:
         """The picker mutates config["model"]; fallback_add must restore the primary."""
         _write_config(isolated_home, {
             "model": {
-                "provider": "anthropic",
-                "default": "claude-sonnet-4-6",
-                "base_url": "https://api.anthropic.com",
-                "api_mode": "anthropic_messages",
+                "provider": "openai-codex",
+                "default": "gpt-5.4",
+                "base_url": "https://chatgpt.com/backend-api/codex",
+                "api_mode": "codex_responses",
             },
         })
 
@@ -292,9 +292,9 @@ class TestAddCommand:
             from hermes_cli.config import load_config, save_config
             cfg = load_config()
             cfg["model"] = {
-                "provider": "openrouter",
-                "default": "anthropic/claude-sonnet-4.6",
-                "base_url": "https://openrouter.ai/api/v1",
+                "provider": "custom",
+                "default": "local-model",
+                "base_url": "http://localhost:1234/v1",
                 "api_mode": "chat_completions",
             }
             save_config(cfg)
@@ -306,13 +306,13 @@ class TestAddCommand:
 
         cfg = _read_config(isolated_home)
         # Primary exactly as it was
-        assert cfg["model"]["provider"] == "anthropic"
-        assert cfg["model"]["default"] == "claude-sonnet-4-6"
-        assert cfg["model"]["base_url"] == "https://api.anthropic.com"
-        assert cfg["model"]["api_mode"] == "anthropic_messages"
+        assert cfg["model"]["provider"] == "openai-codex"
+        assert cfg["model"]["default"] == "gpt-5.4"
+        assert cfg["model"]["base_url"] == "https://chatgpt.com/backend-api/codex"
+        assert cfg["model"]["api_mode"] == "codex_responses"
         # Fallback added
         assert len(cfg["fallback_providers"]) == 1
-        assert cfg["fallback_providers"][0]["provider"] == "openrouter"
+        assert cfg["fallback_providers"][0]["provider"] == "custom"
 
     def test_add_noop_when_picker_cancelled(self, isolated_home, capsys):
         _write_config(isolated_home, {

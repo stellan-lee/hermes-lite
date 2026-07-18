@@ -198,7 +198,7 @@ def cmd_fallback_add(args) -> None:
     # Reload the config with the primary restored, then append the new entry
     # to ``fallback_providers``.  We deliberately re-load (rather than mutating
     # ``after_cfg``) because the picker may have touched other top-level keys
-    # (custom_providers, providers credentials) that we want to keep.
+    # (provider credentials) that we want to keep.
     _restore_model_cfg(model_before)
     _restore_auth_active_provider(active_provider_before)
 

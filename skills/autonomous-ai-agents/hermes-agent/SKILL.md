@@ -79,9 +79,9 @@ No subcommand defaults to `chat`.
 ```
 hermes chat [flags]
   -q, --query TEXT          Single query, non-interactive
-  -m, --model MODEL         Model (e.g. anthropic/claude-sonnet-4)
+  -m, --model MODEL         Codex or custom endpoint model id
   -t, --toolsets LIST       Comma-separated toolsets
-  --provider PROVIDER       Force provider (openrouter, anthropic, nous, etc.)
+  --provider PROVIDER       Force provider (openai-codex or custom)
   -v, --verbose             Verbose output
   -Q, --quiet               Suppress banner, spinner, tool previews
   --checkpoints             Enable filesystem checkpoints (/rollback)
@@ -303,7 +303,6 @@ The registry of record is `hermes_cli/commands.py` — every consumer
 ### Utility
 ```
 /branch (/fork)      Branch the current session
-/fast                Toggle priority/fast processing
 /browser             Open CDP browser connection
 /history             Show conversation history (CLI)
 /save                Save conversation to file (CLI)

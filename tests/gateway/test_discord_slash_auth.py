@@ -88,6 +88,20 @@ _ensure_discord_mock()
 from plugins.platforms.discord.adapter import DiscordAdapter  # noqa: E402
 
 
+class _FakeDMChannel:
+    pass
+
+
+class _FakeThread:
+    pass
+
+
+import discord as _discord_mod
+
+_discord_mod.DMChannel = _FakeDMChannel
+_discord_mod.Thread = _FakeThread
+
+
 @pytest.fixture(autouse=True)
 def _isolate_discord_env(monkeypatch):
     for var in (

@@ -41,11 +41,10 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from utils import base_url_host_matches, base_url_hostname
 import fire
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.console import Console
-from hermes_constants import OPENROUTER_BASE_URL, get_hermes_home
+from hermes_constants import get_hermes_home
 from agent.retry_utils import jittered_backoff
 
 # Load .env from HERMES_HOME first, then project root as a dev fallback.
@@ -97,10 +96,12 @@ class CompressionConfig:
     protect_first_tool: bool = True
     protect_last_n_turns: int = 4
     
-    # Summarization (OpenRouter)
-    summarization_model: str = "google/gemini-3-flash-preview"
-    base_url: str = OPENROUTER_BASE_URL
-    api_key_env: str = "OPENROUTER_API_KEY"
+    # Summarization through the active retained runtime. Optional overrides
+    # support any configured custom/local OpenAI-compatible endpoint.
+    provider: str = "auto"
+    summarization_model: str = ""
+    base_url: str = ""
+    api_key_env: str = ""
     temperature: float = 0.3
     max_retries: int = 3
     retry_delay: int = 2
@@ -349,7 +350,7 @@ class TrajectoryCompressor:
         # Initialize tokenizer
         self._init_tokenizer()
         
-        # Initialize OpenRouter client
+        # Initialize the retained auxiliary LLM runtime.
         self._init_summarizer()
         
         logging.basicConfig(
@@ -374,93 +375,30 @@ class TrajectoryCompressor:
     def _init_summarizer(self):
         """Initialize LLM routing for summarization (sync and async).
 
-        Uses call_llm/async_call_llm from the centralized provider router
-        which handles auth, headers, and provider detection internally.
-        For custom endpoints, falls back to raw client construction.
+        Uses the centralized auxiliary router for Codex or a configured
+        custom/local OpenAI-compatible endpoint.
         """
+        from agent.auxiliary_client import resolve_provider_client
 
-        provider = self._detect_provider()
-        if provider:
-            # Store provider for use in _generate_summary calls
-            self._llm_provider = provider
-            self._use_call_llm = True
-            # Verify the provider is available
-            from agent.auxiliary_client import resolve_provider_client
-            client, _ = resolve_provider_client(
-                provider, model=self.config.summarization_model)
-            if client is None:
-                raise RuntimeError(
-                    f"Provider '{provider}' is not configured. "
-                    f"Check your API key or run: hermes setup")
-            self.client = None  # Not used directly
-            self.async_client = None  # Not used directly
-        else:
-            # Custom endpoint — use config's raw base_url + api_key_env
-            self._use_call_llm = False
-            api_key = os.getenv(self.config.api_key_env)
-            if not api_key:
-                raise RuntimeError(
-                    f"Missing API key. Set {self.config.api_key_env} "
-                    f"environment variable.")
-            from openai import OpenAI
-            from agent.auxiliary_client import _to_openai_base_url
-            self.client = OpenAI(
-                api_key=api_key, base_url=_to_openai_base_url(self.config.base_url))
-            # AsyncOpenAI is created lazily in _get_async_client() so it
-            # binds to the current event loop — avoids "Event loop is closed"
-            # when process_directory() is called multiple times (each call
-            # creates a new loop via asyncio.run()).
-            self.async_client = None
-            self._async_client_api_key = api_key
+        api_key = os.getenv(self.config.api_key_env) if self.config.api_key_env else None
+        self._llm_kwargs = {
+            "provider": self.config.provider or "auto",
+            "model": self.config.summarization_model or None,
+            "base_url": self.config.base_url or None,
+            "api_key": api_key,
+        }
+        client, resolved_model = resolve_provider_client(
+            self._llm_kwargs["provider"],
+            self._llm_kwargs["model"],
+            explicit_base_url=self._llm_kwargs["base_url"],
+            explicit_api_key=self._llm_kwargs["api_key"],
+        )
+        if client is None or not resolved_model:
+            raise RuntimeError("No retained Codex or compatible local summarizer is configured")
 
-        print(f"✅ Initialized summarizer client: {self.config.summarization_model}")
+        print(f"✅ Initialized summarizer client: {resolved_model}")
         print(f"   Max concurrent requests: {self.config.max_concurrent_requests}")
 
-    def _get_async_client(self):
-        """Return an AsyncOpenAI client bound to the current event loop.
-
-        Created lazily so that each ``asyncio.run()`` call in
-        ``process_directory()`` gets a client tied to its own loop,
-        avoiding "Event loop is closed" errors on repeated calls.
-        """
-        from openai import AsyncOpenAI
-        from agent.auxiliary_client import _to_openai_base_url
-        # Always create a fresh client so it binds to the running loop.
-        self.async_client = AsyncOpenAI(
-            api_key=self._async_client_api_key,
-            base_url=_to_openai_base_url(self.config.base_url),
-        )
-        return self.async_client
-
-    def _detect_provider(self) -> str:
-        """Detect the provider name from the configured base_url."""
-        url = self.config.base_url or ""
-        if base_url_host_matches(url, "openrouter.ai"):
-            return "openrouter"
-        if base_url_host_matches(url, "nousresearch.com"):
-            return "nous"
-        if (
-            base_url_hostname(url) == "chatgpt.com"
-            and "/backend-api/codex" in url.lower()
-        ):
-            return "codex"
-        if base_url_host_matches(url, "z.ai"):
-            return "zai"
-        if (
-            base_url_host_matches(url, "moonshot.ai")
-            or base_url_host_matches(url, "moonshot.cn")
-            or base_url_host_matches(url, "api.kimi.com")
-        ):
-            return "kimi-coding"
-        if base_url_host_matches(url, "arcee.ai"):
-            return "arcee"
-        if base_url_host_matches(url, "minimaxi.com"):
-            return "minimax-cn"
-        if base_url_host_matches(url, "minimax.io"):
-            return "minimax"
-        # Unknown base_url — not a known provider
-        return ""
-    
     def count_tokens(self, text: str) -> int:
         """Count tokens in text using the configured tokenizer."""
         if not text:
@@ -570,7 +508,7 @@ class TrajectoryCompressor:
     
     def _generate_summary(self, content: str, metrics: TrajectoryMetrics) -> str:
         """
-        Generate a summary of the compressed turns using OpenRouter.
+        Generate a summary of the compressed turns using the active runtime.
         
         Args:
             content: The content to summarize
@@ -605,24 +543,14 @@ Write only the summary, starting with "[CONTEXT SUMMARY]:" prefix."""
                     self.config.base_url,
                 )
                 
-                if getattr(self, '_use_call_llm', False):
-                    from agent.auxiliary_client import call_llm
-                    response = call_llm(
-                        provider=self._llm_provider,
-                        model=self.config.summarization_model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=summary_temperature,
-                        max_tokens=self.config.summary_target_tokens * 2,
-                    )
-                else:
-                    _create_kwargs = {
-                        "model": self.config.summarization_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": self.config.summary_target_tokens * 2,
-                    }
-                    if summary_temperature is not None:
-                        _create_kwargs["temperature"] = summary_temperature
-                    response = self.client.chat.completions.create(**_create_kwargs)
+                from agent.auxiliary_client import call_llm
+                response = call_llm(
+                    task="trajectory",
+                    **self._llm_kwargs,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=summary_temperature,
+                    max_tokens=self.config.summary_target_tokens * 2,
+                )
                 
                 summary = self._coerce_summary_content(response.choices[0].message.content)
                 return self._ensure_summary_prefix(summary)
@@ -639,7 +567,7 @@ Write only the summary, starting with "[CONTEXT SUMMARY]:" prefix."""
     
     async def _generate_summary_async(self, content: str, metrics: TrajectoryMetrics) -> str:
         """
-        Generate a summary of the compressed turns using OpenRouter (async version).
+        Generate a summary using the active runtime (async version).
         
         Args:
             content: The content to summarize
@@ -674,24 +602,14 @@ Write only the summary, starting with "[CONTEXT SUMMARY]:" prefix."""
                     self.config.base_url,
                 )
                 
-                if getattr(self, '_use_call_llm', False):
-                    from agent.auxiliary_client import async_call_llm
-                    response = await async_call_llm(
-                        provider=self._llm_provider,
-                        model=self.config.summarization_model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=summary_temperature,
-                        max_tokens=self.config.summary_target_tokens * 2,
-                    )
-                else:
-                    _create_kwargs = {
-                        "model": self.config.summarization_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": self.config.summary_target_tokens * 2,
-                    }
-                    if summary_temperature is not None:
-                        _create_kwargs["temperature"] = summary_temperature
-                    response = await self._get_async_client().chat.completions.create(**_create_kwargs)
+                from agent.auxiliary_client import async_call_llm
+                response = await async_call_llm(
+                    task="trajectory",
+                    **self._llm_kwargs,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=summary_temperature,
+                    max_tokens=self.config.summary_target_tokens * 2,
+                )
                 
                 summary = self._coerce_summary_content(response.choices[0].message.content)
                 return self._ensure_summary_prefix(summary)

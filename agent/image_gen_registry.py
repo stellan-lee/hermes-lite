@@ -40,7 +40,14 @@ def register_provider(provider: ImageGenProvider) -> None:
     a debug message — this makes hot-reload scenarios (tests, dev loops)
     behave predictably.
     """
-    if not isinstance(provider, ImageGenProvider):
+    # ``agent.image_gen_provider`` can be reloaded by setup/plugin tests while
+    # an already-imported provider instance still inherits the previous ABC
+    # object. Accept that hot-reload case when the provider satisfies the
+    # small runtime protocol used by this registry.
+    if not isinstance(provider, ImageGenProvider) and not (
+        callable(getattr(provider, "generate", None))
+        and isinstance(getattr(provider, "name", None), str)
+    ):
         raise TypeError(
             f"register_provider() expects an ImageGenProvider instance, "
             f"got {type(provider).__name__}"

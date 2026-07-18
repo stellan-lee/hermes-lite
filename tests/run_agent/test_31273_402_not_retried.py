@@ -57,8 +57,6 @@ class TestBillingTriggersClientErrorAbort:
                     FailoverReason.overloaded,
                     FailoverReason.context_overflow,
                     FailoverReason.payload_too_large,
-                    FailoverReason.long_context_tier,
-                    FailoverReason.thinking_signature,
                 }
             )
         ) and not is_context_length_error

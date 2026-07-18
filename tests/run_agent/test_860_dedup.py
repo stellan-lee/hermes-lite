@@ -183,6 +183,7 @@ class TestFlushDeduplication:
             compressor._last_compress_aborted = False
             compressor._last_aux_model_failure_model = None
             compressor._last_aux_model_failure_error = None
+            compressor.compression_count = 1
             agent.context_compressor = compressor
             agent.compression_in_place = False
 

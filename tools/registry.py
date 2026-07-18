@@ -110,7 +110,7 @@ class ToolEntry:
 # check_fn TTL cache
 #
 # check_fn callables like tools/terminal_tool.check_terminal_requirements
-# probe external state (Docker daemon, Modal SDK install, playwright binary
+# probe external state (Docker daemon, Playwright binary
 # availability). For a long-lived CLI or gateway process, calling them on
 # every get_definitions() is pure waste — external state changes on human
 # timescales. Cache results for ~30 s so env-var flips via ``hermes tools``

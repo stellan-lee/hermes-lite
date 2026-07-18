@@ -41,11 +41,6 @@ def build_write_denied_paths(home: str) -> set[str]:
             # Top-level .env, even when running under a profile — overwriting it
             # leaks credentials across every profile that inherits from root (#15981).
             str(hermes_root / ".env"),
-            # Active profile Anthropic PKCE credential store.
-            str(hermes_home / ".anthropic_oauth.json"),
-            # Top-level Anthropic PKCE credential store remains sensitive even
-            # when a profile is active; default/non-profile sessions still read it.
-            str(hermes_root / ".anthropic_oauth.json"),
             os.path.join(home, ".bashrc"),
             os.path.join(home, ".zshrc"),
             os.path.join(home, ".profile"),
@@ -165,14 +160,11 @@ _BLOCKED_PROJECT_ENV_BASENAMES: set[str] = {
 def get_read_block_error(path: str) -> Optional[str]:
     """Return an error message when a read targets a denied Hermes path.
 
-    Three categories are blocked:
+    Two categories are blocked:
 
-      * Internal Hermes cache files under ``HERMES_HOME/skills/.hub`` —
-        readable metadata that an attacker could use as a prompt-injection
-        carrier.
       * Credential / secret stores under HERMES_HOME and the global Hermes
-        root: ``auth.json``, ``auth.lock``, ``.anthropic_oauth.json``,
-        ``.env``, ``webhook_subscriptions.json``, ``auth/google_oauth.json``,
+        root: ``auth.json``, ``auth.lock``, ``.env``,
+        ``webhook_subscriptions.json``,
         and anything under ``mcp-tokens/``. These hold plaintext provider keys,
         OAuth tokens, and HMAC secrets that the agent never needs to read
         directly — provider tools / gateway adapters consume them through
@@ -223,36 +215,13 @@ def get_read_block_error(path: str) -> Optional[str]:
         except Exception:
             continue
 
-    # Skills .hub: prompt-injection carriers.
-    for hd in hermes_dirs:
-        blocked_dirs = [
-            hd / "skills" / ".hub" / "index-cache",
-            hd / "skills" / ".hub",
-        ]
-        for blocked in blocked_dirs:
-            try:
-                resolved.relative_to(blocked)
-            except ValueError:
-                continue
-            return (
-                f"Access denied: {path} is an internal Hermes cache file "
-                "and cannot be read directly to prevent prompt injection. "
-                "Use the skills_list or skill_view tools instead."
-            )
-
     # Credential / secret stores. Exact-file matches under either
     # HERMES_HOME or <root>.
     credential_file_names = (
         "auth.json",
         "auth.lock",
-        ".anthropic_oauth.json",
         ".env",
         "webhook_subscriptions.json",
-        os.path.join("auth", "google_oauth.json"),
-        # Bitwarden Secrets Manager disk cache: stores plaintext secret values
-        # to avoid re-fetching across back-to-back CLI invocations. The file
-        # was introduced by #31968 but not added to this guard.
-        os.path.join("cache", "bws_cache.json"),
     )
     for hd in hermes_dirs:
         for name in credential_file_names:
@@ -456,7 +425,7 @@ def get_cross_profile_warning(path: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Sandbox-mirror write guard (#32049)
 #
-# Non-local terminal backends (Docker, Daytona, etc.) bind a sandbox-local
+# Non-local terminal backends bind a sandbox-local
 # directory to the container's ``$HOME``. The on-disk layout looks like
 #
 #   <HERMES_HOME>/profiles/<name>/sandboxes/<backend>/<task>/home/.hermes/...

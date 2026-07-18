@@ -1,34 +1,18 @@
-"""Provider/model inventory context — shared substrate for the dashboard
-``/api/model/options``, the TUI ``model.options``/``model.save_key``
-JSON-RPC handlers, and the interactive picker.
+"""Provider/model inventory shared by the TUI and interactive picker.
 
 Before this module the three call-sites each duplicated:
 
-1. The 17-LOC config-slice that pulls ``model.{default,name,provider,base_url}``,
-   ``providers:``, and ``custom_providers:`` out of ``load_config()``;
+1. The config slice that pulls model settings and canonical ``providers:``
+   entries out of ``load_config()``;
 2. The call into ``list_authenticated_providers`` with the resulting kwargs;
-3. (TUI only) a 45-LOC post-pass that merges authenticated rows with
+3. A post-pass that merges authenticated rows with
    unconfigured ``CANONICAL_PROVIDERS`` rows and emits ``authenticated``/
    ``auth_type``/``key_env``/``warning`` hints for the picker UI.
 
-Consolidating those three steps into one entry point eliminates two bugs
-the duplicates were hiding:
-
-- The dashboard read ``cfg.get("custom_providers")`` directly, missing the
-  v12+ keyed ``providers:`` form (which the TUI handled via
-  ``get_compatible_custom_providers``).
-- The TUI's canonical-merge keyed on ``is_user_defined`` to decide
+The canonical merge keys on slug rather than ``is_user_defined`` to decide
   ordering. Section 3 of ``list_authenticated_providers`` sets
   ``is_user_defined=True`` even for canonical slugs that appear in the
-  ``providers:`` config dict, which silently demoted them to the tail of
-  the picker. ``_reorder_canonical`` keys on slug membership instead.
-
-Substrate facts (verified May 2026):
-- ``list_authenticated_providers`` already populates each row's
-  ``models`` from the curated catalog (same source as the picker). Do
-  NOT call ``provider_model_ids()`` per row to "freshen" — that bypasses
-  curation and pulls in non-agentic models (Nous /models returns ~400
-  IDs including TTS, embeddings, rerankers, image/video generators).
+  ``providers:`` config dict. ``_reorder_canonical`` avoids demoting them.
 """
 
 from __future__ import annotations
@@ -79,10 +63,9 @@ class ConfigContext:
 def load_picker_context() -> ConfigContext:
     """Load the disk-config snapshot every consumer needs.
 
-    Replaces the inline 17-LOC config-slice that ``web_server.py`` and
-    ``tui_gateway/server.py`` (×2 sites) used to do.
+    Centralizes the config slice used by TUI model-selection handlers.
     """
-    from hermes_cli.config import get_compatible_custom_providers, load_config
+    from hermes_cli.config import load_config, load_custom_provider_entries
 
     cfg = load_config()
     model_cfg = cfg.get("model", {})
@@ -101,7 +84,7 @@ def load_picker_context() -> ConfigContext:
         current_model=current_model,
         current_base_url=current_base_url,
         user_providers=raw if isinstance(raw, dict) else {},
-        custom_providers=get_compatible_custom_providers(cfg),
+        custom_providers=load_custom_provider_entries(cfg),
     )
 
 
@@ -131,14 +114,11 @@ def build_models_payload(
       ``CANONICAL_PROVIDERS`` declaration order; truly-custom rows go
       last (TUI display order).
     - ``pricing``: enrich each row with formatted per-model pricing and,
-      for Nous, ``free_tier``/``unavailable_models`` so the GUI picker can
-      show $/Mtok columns and gate paid models on free accounts —
-      mirroring the ``hermes model`` CLI picker. Adds network calls
-      (pricing fetch + Nous tier check); only set for interactive pickers.
+      so interactive pickers can show $/Mtok columns. This may add a
+      provider metadata request and should only be set for pickers.
     - ``capabilities``: add a per-row ``capabilities`` map
-      ``{model: {fast, reasoning}}`` so pickers can gate the model-options
-      controls (fast toggle / reasoning) to what each model actually
-      supports, instead of offering knobs the backend would reject.
+      ``{model: {reasoning}}`` so pickers can gate model options to what
+      each model supports.
     """
     from hermes_cli.model_switch import list_authenticated_providers
 
@@ -170,38 +150,13 @@ def build_models_payload(
 
 
 def _apply_capabilities(rows: list[dict]) -> None:
-    """Attach a ``{model: {fast, reasoning}}`` map to each provider row.
-
-    `fast` mirrors ``model_supports_fast_mode`` (the same gate the runtime
-    enforces). `reasoning` comes from the models.dev catalog when known and
-    defaults to True otherwise — the effort dial is broadly accepted and a
-    no-op on models that ignore it, whereas hiding it from a capable-but-
-    uncatalogued model is the worse failure.
-    """
-    from hermes_cli.models import model_supports_fast_mode
-
-    try:
-        from agent.models_dev import get_model_capabilities
-    except Exception:
-        get_model_capabilities = None  # type: ignore[assignment]
-
+    """Attach reasoning capability hints to each provider row."""
     for row in rows:
-        slug = row.get("slug") or ""
         caps: dict[str, dict[str, bool]] = {}
 
         for model in row.get("models") or []:
-            reasoning = True
-            if get_model_capabilities is not None and slug:
-                try:
-                    meta = get_model_capabilities(slug, model)
-                    if meta is not None:
-                        reasoning = bool(meta.supports_reasoning)
-                except Exception:
-                    reasoning = True
-
             caps[model] = {
-                "fast": bool(model_supports_fast_mode(model)),
-                "reasoning": reasoning,
+                "reasoning": True,
             }
 
         row["capabilities"] = caps
@@ -294,32 +249,20 @@ def _reorder_canonical(rows: list[dict]) -> list[dict]:
 
 
 def _apply_pricing(rows: list[dict]) -> None:
-    """Enrich each provider row with per-model pricing + Nous tier gating.
+    """Enrich provider rows with best-effort per-model pricing.
 
-    Mutates ``rows`` in-place. For every row whose provider supports live
-    pricing (openrouter / nous / novita) adds::
+    Mutates ``rows`` in-place. A provider with available metadata receives::
 
         row["pricing"] = {model_id: {"input": "$3.00", "output": "$15.00",
                                      "cache": "$0.30" | None, "free": bool}}
 
-    For Nous additionally adds::
-
-        row["free_tier"] = bool            # current account is free-tier
-        row["unavailable_models"] = [...]  # paid models a free user can't pick
-
     Prices are pre-formatted via ``_format_price_per_mtok`` so the GUI just
-    renders strings — identical formatting to the CLI picker. All failures
-    are swallowed (best-effort): a row simply gets no ``pricing`` key.
+    renders strings. Failures are best-effort: a row simply gets no pricing.
     """
     from hermes_cli.models import (
         _format_price_per_mtok,
-        check_nous_free_tier,
         get_pricing_for_provider,
-        partition_nous_models_by_tier,
     )
-
-    # Resolve Nous free-tier once (cached in models.py for the TTL window).
-    nous_free_tier: Optional[bool] = None
 
     for row in rows:
         slug = str(row.get("slug", "")).lower()
@@ -355,21 +298,3 @@ def _apply_pricing(rows: list[dict]) -> None:
 
         if formatted:
             row["pricing"] = formatted
-
-        if slug == "nous":
-            try:
-                if nous_free_tier is None:
-                    nous_free_tier = check_nous_free_tier(force_fresh=True)
-                row["free_tier"] = bool(nous_free_tier)
-                if nous_free_tier:
-                    _selectable, unavailable = partition_nous_models_by_tier(
-                        list(models), raw_pricing, free_tier=True
-                    )
-                    row["unavailable_models"] = unavailable
-                else:
-                    row["unavailable_models"] = []
-            except Exception:
-                # Tier detection failed — fail open (no gating) so the user
-                # is never blocked from picking a model.
-                row["free_tier"] = False
-                row["unavailable_models"] = []

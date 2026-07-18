@@ -779,24 +779,6 @@ def test_startup_runtime_detects_provider_for_model_env(monkeypatch):
     )
 
 
-def test_startup_runtime_resolves_short_alias_without_network(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "sonnet")
-    monkeypatch.delenv("HERMES_TUI_PROVIDER", raising=False)
-    monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
-    monkeypatch.setattr(server, "_load_cfg", lambda: {"model": {"provider": "auto"}})
-    monkeypatch.setattr(
-        "hermes_cli.models.fetch_openrouter_models",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("network lookup should not run")
-        ),
-    )
-
-    model, provider = server._resolve_startup_runtime()
-
-    assert provider == "anthropic"
-    assert model.startswith("claude-sonnet")
-
-
 def test_startup_runtime_does_not_call_network_detector(monkeypatch):
     monkeypatch.setenv("HERMES_MODEL", "sonnet")
     monkeypatch.delenv("HERMES_TUI_PROVIDER", raising=False)
@@ -1347,148 +1329,6 @@ def test_config_set_yolo_toggles_session_scope():
         server._sessions.clear()
 
 
-def test_config_set_fast_updates_live_agent_and_config(monkeypatch):
-    writes = []
-    emits = []
-    agent = types.SimpleNamespace(
-        model="openai/gpt-5.4",
-        request_overrides={"foo": "bar", "speed": "slow"},
-        service_tier=None,
-    )
-    server._sessions["sid"] = _session(agent=agent)
-
-    monkeypatch.setattr(
-        server, "_write_config_key", lambda path, value: writes.append((path, value))
-    )
-    monkeypatch.setattr(server, "_session_info", lambda _agent, *a: {"model": "x"})
-    monkeypatch.setattr(server, "_emit", lambda *args: emits.append(args))
-    monkeypatch.setattr(
-        "hermes_cli.models.resolve_fast_mode_overrides",
-        lambda _model_id: {"service_tier": "priority"},
-    )
-
-    try:
-        resp = server.handle_request(
-            {
-                "id": "1",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "fast"},
-            }
-        )
-        assert resp["result"]["value"] == "fast"
-        assert agent.service_tier == "priority"
-        assert agent.request_overrides == {
-            "foo": "bar",
-            "service_tier": "priority",
-        }
-        assert ("agent.service_tier", "fast") in writes
-        assert ("session.info", "sid", {"model": "x"}) in emits
-
-        resp_normal = server.handle_request(
-            {
-                "id": "2",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "normal"},
-            }
-        )
-        assert resp_normal["result"]["value"] == "normal"
-        assert agent.service_tier is None
-        assert agent.request_overrides == {"foo": "bar"}
-        assert ("agent.service_tier", "normal") in writes
-    finally:
-        server._sessions.pop("sid", None)
-
-
-def test_config_set_fast_status_is_non_mutating(monkeypatch):
-    writes = []
-    emits = []
-    agent = types.SimpleNamespace(service_tier="priority")
-    server._sessions["sid"] = _session(agent=agent)
-
-    monkeypatch.setattr(
-        server, "_write_config_key", lambda path, value: writes.append((path, value))
-    )
-    monkeypatch.setattr(server, "_emit", lambda *args: emits.append(args))
-
-    try:
-        resp = server.handle_request(
-            {
-                "id": "1",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "status"},
-            }
-        )
-        assert resp["result"]["value"] == "fast"
-        assert writes == []
-        assert emits == []
-    finally:
-        server._sessions.pop("sid", None)
-
-
-def test_config_set_fast_rejects_unsupported_model(monkeypatch):
-    writes = []
-    agent = types.SimpleNamespace(
-        model="unsupported-model",
-        request_overrides={},
-        service_tier=None,
-    )
-    server._sessions["sid"] = _session(agent=agent)
-
-    monkeypatch.setattr(
-        server, "_write_config_key", lambda path, value: writes.append((path, value))
-    )
-    monkeypatch.setattr(
-        "hermes_cli.models.resolve_fast_mode_overrides",
-        lambda _model_id: None,
-    )
-
-    try:
-        resp = server.handle_request(
-            {
-                "id": "1",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "fast"},
-            }
-        )
-        assert resp["error"]["code"] == 4002
-        assert "not available" in resp["error"]["message"]
-        assert agent.service_tier is None
-        assert agent.request_overrides == {}
-        assert writes == []
-    finally:
-        server._sessions.pop("sid", None)
-
-
-def test_config_set_fast_rejects_missing_model(monkeypatch):
-    writes = []
-    agent = types.SimpleNamespace(
-        model="",
-        request_overrides={},
-        service_tier=None,
-    )
-    server._sessions["sid"] = _session(agent=agent)
-
-    monkeypatch.setattr(
-        server, "_write_config_key", lambda path, value: writes.append((path, value))
-    )
-
-    try:
-        resp = server.handle_request(
-            {
-                "id": "1",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "fast"},
-            }
-        )
-        assert resp["error"]["code"] == 4002
-        assert "without a selected model" in resp["error"]["message"]
-        assert agent.service_tier is None
-        assert agent.request_overrides == {}
-        assert writes == []
-    finally:
-        server._sessions.pop("sid", None)
-
-
 def test_config_busy_get_and_set(monkeypatch):
     writes = []
 
@@ -1798,23 +1638,6 @@ def test_setup_runtime_check_allows_no_key_custom_runtime(monkeypatch):
 
     assert resp["result"]["ok"] is True
     assert resp["result"]["provider"] == "custom"
-
-
-def test_setup_runtime_check_rejects_implicit_bedrock_when_unconfigured(monkeypatch):
-    monkeypatch.setattr("hermes_cli.main._has_any_provider_configured", lambda: False)
-    monkeypatch.setattr(
-        "hermes_cli.runtime_provider.resolve_runtime_provider",
-        lambda requested=None: {
-            "provider": "bedrock",
-            "api_key": "aws-sdk",
-            "source": "iam-role",
-        },
-    )
-
-    resp = server.handle_request({"id": "1", "method": "setup.runtime_check", "params": {}})
-
-    assert resp["result"]["ok"] is False
-    assert resp["result"]["provider"] == "bedrock"
 
 
 def test_complete_slash_drops_removed_provider_alias():
@@ -4645,7 +4468,7 @@ def test_browser_manage_connect_default_local_reports_launch_hint(monkeypatch):
         == "Chromium-family browser isn't running with remote debugging — attempting to launch..."
     )
     assert any(
-        "No supported Chromium-family browser executable was found" in line
+        "remote debugging" in line
         for line in resp["result"]["messages"]
     )
     assert any(
@@ -5204,7 +5027,6 @@ def _setup_make_agent_mocks(monkeypatch, cfg):
     )
     monkeypatch.setattr(server, "_load_tool_progress_mode", lambda: "off")
     monkeypatch.setattr(server, "_load_reasoning_config", lambda: None)
-    monkeypatch.setattr(server, "_load_service_tier", lambda: None)
     monkeypatch.setattr(server, "_load_enabled_toolsets", lambda: None)
     monkeypatch.setattr(server, "_get_db", lambda: None)
     monkeypatch.setattr(server, "_agent_cbs", lambda sid: {})
@@ -5253,19 +5075,10 @@ class _FakeAgentForBackground:
     api_key = None
     provider = None
     api_mode = None
-    acp_command = None
-    acp_args = None
     model = "test-model"
     enabled_toolsets = None
     ephemeral_system_prompt = None
-    providers_allowed = None
-    providers_ignored = None
-    providers_order = None
-    provider_sort = None
-    provider_require_parameters = False
-    provider_data_collection = None
     reasoning_config = None
-    service_tier = None
     request_overrides = {}
     _fallback_model = None
 

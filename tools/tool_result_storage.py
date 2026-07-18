@@ -9,8 +9,7 @@ Defense against context-window overflow operates at three levels:
 2. **Per-result persistence** (maybe_persist_tool_result): After a tool
    returns, if its output exceeds the tool's registered threshold
    (registry.get_max_result_size), the full output is written INTO THE
-   SANDBOX temp dir (for example /tmp/hermes-results/{tool_use_id}.txt on
-   standard Linux, or $TMPDIR/hermes-results/{tool_use_id}.txt on Termux)
+   SANDBOX temp dir (for example /tmp/hermes-results/{tool_use_id}.txt)
    via env.execute(). The in-context content is replaced with a preview +
    file path reference. The model can read_file to access the full output
    on any backend.
@@ -130,7 +129,7 @@ def maybe_persist_tool_result(
     """Layer 2: persist oversized result into the sandbox, return preview + path.
 
     Writes via env.execute() so the file is accessible from any backend
-    (local, Docker, SSH, Modal, Daytona). Falls back to inline truncation
+    (local, Docker, SSH). Falls back to inline truncation
     if write fails or no env is available.
 
     Args:

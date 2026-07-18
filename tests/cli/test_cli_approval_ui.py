@@ -50,7 +50,6 @@ def _make_background_cli_stub():
     cli.enabled_toolsets = []
     cli._session_db = None
     cli.reasoning_config = {}
-    cli.service_tier = None
     cli._providers_only = None
     cli._providers_ignore = None
     cli._providers_order = None

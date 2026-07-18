@@ -83,28 +83,6 @@ class TestPrimaryRuntimeSnapshot:
         assert rt["compressor_context_length"] == cc.context_length
         assert rt["compressor_threshold_tokens"] == cc.threshold_tokens
 
-    def test_snapshot_includes_anthropic_state_when_applicable(self):
-        """Anthropic-mode agents should snapshot Anthropic-specific state."""
-        with (
-            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
-            patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
-        ):
-            agent = AIAgent(
-                api_key="sk-ant-test-12345678",
-                base_url="https://api.anthropic.com",
-                provider="anthropic",
-                api_mode="anthropic_messages",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-        rt = agent._primary_runtime
-        assert "anthropic_api_key" in rt
-        assert "anthropic_base_url" in rt
-        assert "is_anthropic_oauth" in rt
-
     def test_snapshot_omits_anthropic_for_openai_mode(self):
         agent = _make_agent(provider="custom")
         rt = agent._primary_runtime
@@ -187,19 +165,6 @@ class TestRestorePrimaryRuntime:
 
         assert agent.context_compressor.context_length == original_ctx_len
         assert agent.context_compressor.threshold_tokens == original_threshold
-
-    def test_restores_prompt_caching_flag(self):
-        agent = _make_agent()
-        original_caching = agent._use_prompt_caching
-
-        # Simulate fallback changing the caching flag
-        agent._fallback_activated = True
-        agent._use_prompt_caching = not original_caching
-
-        with patch("run_agent.OpenAI", return_value=MagicMock()):
-            agent._restore_primary_runtime()
-
-        assert agent._use_prompt_caching == original_caching
 
     def test_restore_survives_exception(self):
         """If client rebuild fails, the method returns False gracefully."""
@@ -303,38 +268,6 @@ class TestTryRecoverPrimaryTransport:
             error, retry_count=3, max_retries=3,
         )
         assert result is False
-
-    def test_skipped_for_openrouter(self):
-        agent = _make_agent(provider="openrouter", base_url="https://openrouter.ai/api/v1")
-        error = _make_transport_error("ReadTimeout")
-
-        result = agent._try_recover_primary_transport(
-            error, retry_count=3, max_retries=3,
-        )
-        assert result is False
-
-    def test_skipped_for_nous_provider(self):
-        agent = _make_agent(provider="nous", base_url="https://inference.nous.nousresearch.com/v1")
-        error = _make_transport_error("ReadTimeout")
-
-        result = agent._try_recover_primary_transport(
-            error, retry_count=3, max_retries=3,
-        )
-        assert result is False
-
-    def test_allowed_for_anthropic_direct(self):
-        """Direct Anthropic endpoint should get recovery."""
-        agent = _make_agent(provider="anthropic", base_url="https://api.anthropic.com")
-        # For non-anthropic_messages api_mode, it will use OpenAI client
-        error = _make_transport_error("ConnectError")
-
-        with patch("run_agent.OpenAI", return_value=MagicMock()), \
-             patch("time.sleep"):
-            result = agent._try_recover_primary_transport(
-                error, retry_count=3, max_retries=3,
-            )
-
-        assert result is True
 
     def test_allowed_for_ollama(self):
         agent = _make_agent(provider="ollama", base_url="http://localhost:11434/v1")

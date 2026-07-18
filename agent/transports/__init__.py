@@ -2,7 +2,7 @@
 
 Usage:
     from agent.transports import get_transport
-    transport = get_transport("anthropic_messages")
+    transport = get_transport("chat_completions")
     result = transport.normalize_response(raw_response)
 """
 
@@ -51,18 +51,10 @@ def _discover_transports() -> None:
     global _discovered
     _discovered = True
     try:
-        import agent.transports.anthropic  # noqa: F401
-    except ImportError:
-        pass
-    try:
         import agent.transports.codex  # noqa: F401
     except ImportError:
         pass
     try:
         import agent.transports.chat_completions  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import agent.transports.bedrock  # noqa: F401
     except ImportError:
         pass

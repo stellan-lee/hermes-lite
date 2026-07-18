@@ -94,7 +94,7 @@ def _get_live_tracking_cwd(task_id: str = "default") -> str | None:
         container_key = task_id
 
     with _file_ops_lock:
-        cached = _file_ops_cache.get(container_key) or _file_ops_cache.get(task_id)
+        cached = _file_ops_cache.get(task_id) or _file_ops_cache.get(container_key)
     if cached is not None:
         live_cwd = getattr(getattr(cached, "env", None), "cwd", None) or getattr(
             cached, "cwd", None
@@ -237,6 +237,7 @@ _SENSITIVE_PATH_PREFIXES = (
     "/private/etc/", "/private/var/",
 )
 _SENSITIVE_EXACT_PATHS = {"/var/run/docker.sock", "/run/docker.sock"}
+_SAFE_PLATFORM_TEMP_PREFIXES = ("/private/var/folders/",)
 
 _hermes_config_resolved: str | None = None
 _hermes_config_resolved_loaded = False
@@ -270,7 +271,13 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
         f"Refusing to write to sensitive system path: {filepath}\n"
         "Use the terminal tool with sudo if you need to modify system files."
     )
+    safe_platform_temp = any(
+        resolved.startswith(prefix) or normalized.startswith(prefix)
+        for prefix in _SAFE_PLATFORM_TEMP_PREFIXES
+    )
     for prefix in _SENSITIVE_PATH_PREFIXES:
+        if prefix == "/private/var/" and safe_platform_temp:
+            continue
         if resolved.startswith(prefix) or normalized.startswith(prefix):
             return _err
     if resolved in _SENSITIVE_EXACT_PATHS or normalized in _SENSITIVE_EXACT_PATHS:
@@ -334,7 +341,7 @@ def _check_cross_profile_path(filepath: str, task_id: str = "default") -> str | 
       ``skills/plugins/cron/memories`` directory.
     * sandbox-mirror (#32049) — writes that hit the
       ``…/sandboxes/<backend>/<task>/home/.hermes/…`` mirror created by a
-      non-local terminal backend (Docker, Daytona, etc.), where the host
+      non-local terminal backend (Docker or SSH), where the host
       Hermes process never reads the mirror and the authoritative file is
       left untouched.
     * container-mirror (#32049 follow-up) — writes from inside a Docker
@@ -613,12 +620,6 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
 
             if env_type == "docker":
                 image = overrides.get("docker_image") or config["docker_image"]
-            elif env_type == "singularity":
-                image = overrides.get("singularity_image") or config["singularity_image"]
-            elif env_type == "modal":
-                image = overrides.get("modal_image") or config["modal_image"]
-            elif env_type == "daytona":
-                image = overrides.get("daytona_image") or config["daytona_image"]
             else:
                 image = ""
 
@@ -626,7 +627,7 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
             logger.info("Creating new %s environment for task %s...", env_type, task_id[:8])
 
             container_config = None
-            if env_type in {"docker", "singularity", "modal", "daytona"}:
+            if env_type == "docker":
                 container_config = {
                     "container_cpu": config.get("container_cpu", 1),
                     "container_memory": config.get("container_memory", 5120),

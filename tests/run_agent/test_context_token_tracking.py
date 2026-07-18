@@ -1,8 +1,8 @@
 """Tests for context token tracking in run_agent.py's usage extraction.
 
-The context counter (status bar) must show the TOTAL prompt tokens including
-Anthropic's cached portions. This is an integration test for the token
-extraction in run_conversation(), not the ContextCompressor itself (which
+The context counter (status bar) must show the prompt tokens reported by
+retained transports. This is an integration test for token extraction in
+run_conversation(), not the ContextCompressor itself (which
 is tested in tests/agent/test_context_compressor.py).
 """
 
@@ -25,11 +25,6 @@ def _patch_bootstrap(monkeypatch):
     monkeypatch.setattr(run_agent, "check_toolset_requirements", lambda: {})
 
 
-class _FakeAnthropicClient:
-    def close(self):
-        pass
-
-
 class _FakeOpenAIClient:
     """Fake OpenAI client returned by mocked resolve_provider_client."""
     api_key = "fake-codex-key"
@@ -39,8 +34,6 @@ class _FakeOpenAIClient:
 
 def _make_agent(monkeypatch, api_mode, provider, response_fn):
     _patch_bootstrap(monkeypatch)
-    if api_mode == "anthropic_messages":
-        monkeypatch.setattr("agent.anthropic_adapter.build_anthropic_client", lambda k, b=None, **kwargs: _FakeAnthropicClient())
     if provider == "openai-codex":
         monkeypatch.setattr(
             "agent.auxiliary_client.resolve_provider_client",
@@ -62,45 +55,7 @@ def _make_agent(monkeypatch, api_mode, provider, response_fn):
     return _A(model="test-model", api_key="test-key", base_url="http://localhost:1234/v1", provider=provider, api_mode=api_mode)
 
 
-def _anthropic_resp(input_tok, output_tok, cache_read=0, cache_creation=0):
-    usage_fields = {"input_tokens": input_tok, "output_tokens": output_tok}
-    if cache_read:
-        usage_fields["cache_read_input_tokens"] = cache_read
-    if cache_creation:
-        usage_fields["cache_creation_input_tokens"] = cache_creation
-    return SimpleNamespace(
-        content=[SimpleNamespace(type="text", text="ok")],
-        stop_reason="end_turn",
-        usage=SimpleNamespace(**usage_fields),
-        model="claude-sonnet-4-6",
-    )
-
-
-# -- Anthropic: cached tokens must be included --
-
-def test_anthropic_cache_read_and_creation_added(monkeypatch):
-    agent = _make_agent(monkeypatch, "anthropic_messages", "anthropic",
-                        lambda: _anthropic_resp(3, 10, cache_read=15000, cache_creation=2000))
-    agent.run_conversation("hi")
-    assert agent.context_compressor.last_prompt_tokens == 17003  # 3+15000+2000
-    assert agent.session_prompt_tokens == 17003
-
-
-def test_anthropic_no_cache_fields(monkeypatch):
-    agent = _make_agent(monkeypatch, "anthropic_messages", "anthropic",
-                        lambda: _anthropic_resp(500, 20))
-    agent.run_conversation("hi")
-    assert agent.context_compressor.last_prompt_tokens == 500
-
-
-def test_anthropic_cache_read_only(monkeypatch):
-    agent = _make_agent(monkeypatch, "anthropic_messages", "anthropic",
-                        lambda: _anthropic_resp(5, 15, cache_read=17666, cache_creation=15))
-    agent.run_conversation("hi")
-    assert agent.context_compressor.last_prompt_tokens == 17686  # 5+17666+15
-
-
-# -- OpenAI: prompt_tokens already total --
+# -- Compatible chat: prompt_tokens already total --
 
 def test_openai_prompt_tokens_unchanged(monkeypatch):
     resp = lambda: SimpleNamespace(
@@ -110,7 +65,7 @@ def test_openai_prompt_tokens_unchanged(monkeypatch):
         usage=SimpleNamespace(prompt_tokens=5000, completion_tokens=100, total_tokens=5100),
         model="gpt-4o",
     )
-    agent = _make_agent(monkeypatch, "chat_completions", "openrouter", resp)
+    agent = _make_agent(monkeypatch, "chat_completions", "custom", resp)
     agent.run_conversation("hi")
     assert agent.context_compressor.last_prompt_tokens == 5000
 

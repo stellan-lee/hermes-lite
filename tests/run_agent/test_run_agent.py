@@ -152,25 +152,6 @@ def test_aiagent_reuses_existing_errors_log_handler():
 
 
 class TestProviderModelNormalization:
-    def test_aiagent_strips_matching_native_provider_prefix(self):
-        with (
-            patch(
-                "run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")
-            ),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
-        ):
-            agent = AIAgent(
-                model="zai/glm-5.1",
-                provider="zai",
-                base_url="https://api.z.ai/api/paas/v4",
-                api_key="test-key-1234567890",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-
-        assert agent.model == "glm-5.1"
 
     def test_aiagent_keeps_aggregator_vendor_slug(self):
         with (
@@ -733,129 +714,12 @@ class TestMaskApiKey:
 
 
 class TestInit:
-    def test_anthropic_base_url_accepted(self):
-        """Anthropic base URLs should route to native Anthropic client."""
-        with (
-            patch("run_agent.get_tool_definitions", return_value=[]),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("agent.anthropic_adapter._anthropic_sdk") as mock_anthropic,
-        ):
-            agent = AIAgent(
-                api_key="test-key-1234567890",
-                base_url="https://api.anthropic.com/v1/",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            assert agent.api_mode == "anthropic_messages"
-            mock_anthropic.Anthropic.assert_called_once()
 
-    def test_prompt_caching_claude_openrouter(self):
-        """Claude model via OpenRouter should enable prompt caching."""
-        with (
-            patch("run_agent.get_tool_definitions", return_value=[]),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
-        ):
-            a = AIAgent(
-                api_key="test-k...7890",
-                model="anthropic/claude-sonnet-4-20250514",
-                base_url="https://openrouter.ai/api/v1",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            assert a._use_prompt_caching is True
 
-    def test_prompt_caching_non_claude(self):
-        """Non-Claude model should disable prompt caching."""
-        with (
-            patch("run_agent.get_tool_definitions", return_value=[]),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
-        ):
-            a = AIAgent(
-                api_key="test-key-1234567890",
-                base_url="https://openrouter.ai/api/v1",
-                model="openai/gpt-4o",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            assert a._use_prompt_caching is False
 
-    def test_prompt_caching_non_openrouter(self):
-        """Custom base_url (not OpenRouter) should disable prompt caching."""
-        with (
-            patch("run_agent.get_tool_definitions", return_value=[]),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
-        ):
-            a = AIAgent(
-                api_key="test-key-1234567890",
-                model="anthropic/claude-sonnet-4-20250514",
-                base_url="http://localhost:8080/v1",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            assert a._use_prompt_caching is False
 
-    def test_prompt_caching_native_anthropic(self):
-        """Native Anthropic provider should enable prompt caching."""
-        with (
-            patch("run_agent.get_tool_definitions", return_value=[]),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("agent.anthropic_adapter._anthropic_sdk"),
-        ):
-            a = AIAgent(
-                api_key="test-key-1234567890",
-                base_url="https://api.anthropic.com/v1/",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            assert a.api_mode == "anthropic_messages"
-            assert a._use_prompt_caching is True
 
-    def test_prompt_caching_cache_ttl_defaults_without_config(self):
-        """cache_ttl stays 5m when prompt_caching is absent from config."""
-        with (
-            patch("run_agent.get_tool_definitions", return_value=[]),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
-            patch("hermes_cli.config.load_config", return_value={}),
-        ):
-            a = AIAgent(
-                api_key="test-k...7890",
-                model="anthropic/claude-sonnet-4-20250514",
-                base_url="https://openrouter.ai/api/v1",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            assert a._cache_ttl == "5m"
 
-    def test_prompt_caching_cache_ttl_custom_1h(self):
-        """prompt_caching.cache_ttl 1h is applied when present in config."""
-        with (
-            patch("run_agent.get_tool_definitions", return_value=[]),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
-            patch(
-                "hermes_cli.config.load_config",
-                return_value={"prompt_caching": {"cache_ttl": "1h"}},
-            ),
-        ):
-            a = AIAgent(
-                api_key="test-k...7890",
-                model="anthropic/claude-sonnet-4-20250514",
-                base_url="https://openrouter.ai/api/v1",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            assert a._cache_ttl == "1h"
 
     def test_model_max_tokens_from_config(self):
         """model.max_tokens config populates the chat-completions request cap."""
@@ -907,26 +771,6 @@ class TestInit:
 
         assert a.max_tokens == 8192
 
-    def test_prompt_caching_cache_ttl_invalid_falls_back(self):
-        """Non-Anthropic TTL values keep default 5m without raising."""
-        with (
-            patch("run_agent.get_tool_definitions", return_value=[]),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
-            patch(
-                "hermes_cli.config.load_config",
-                return_value={"prompt_caching": {"cache_ttl": "30m"}},
-            ),
-        ):
-            a = AIAgent(
-                api_key="test-k...7890",
-                model="anthropic/claude-sonnet-4-20250514",
-                base_url="https://openrouter.ai/api/v1",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            assert a._cache_ttl == "5m"
 
     def test_valid_tool_names_populated(self):
         """valid_tool_names should contain names from loaded tools."""
@@ -1108,10 +952,6 @@ class TestBuildSystemPrompt:
         else:
             assert False, "Expected a 'Conversation started:' line in the system prompt"
 
-    def test_includes_nous_subscription_prompt(self, agent, monkeypatch):
-        monkeypatch.setattr(run_agent, "build_nous_subscription_prompt", lambda tool_names: "NOUS SUBSCRIPTION BLOCK")
-        prompt = agent._build_system_prompt()
-        assert "NOUS SUBSCRIPTION BLOCK" in prompt
 
     def test_skills_prompt_derives_available_toolsets_from_loaded_tools(self):
         tools = _make_tool_defs("web_search", "skills_list", "skill_view", "skill_manage")
@@ -1231,44 +1071,10 @@ class TestToolUseEnforcementConfig:
         prompt = agent._build_system_prompt()
         assert TOOL_USE_ENFORCEMENT_GUIDANCE not in prompt
 
-    def test_auto_injects_for_grok(self):
-        """xAI Grok / xai-oauth models hit the same enforcement path as GPT."""
-        from agent.prompt_builder import TOOL_USE_ENFORCEMENT_GUIDANCE
-        agent = self._make_agent(model="x-ai/grok-4.3", tool_use_enforcement="auto")
-        prompt = agent._build_system_prompt()
-        assert TOOL_USE_ENFORCEMENT_GUIDANCE in prompt
 
-    def test_auto_injects_for_qwen(self):
-        """Qwen models default to chatty/hallucinatory tool use without enforcement."""
-        from agent.prompt_builder import TOOL_USE_ENFORCEMENT_GUIDANCE
-        agent = self._make_agent(model="qwen/qwen-plus", tool_use_enforcement="auto")
-        prompt = agent._build_system_prompt()
-        assert TOOL_USE_ENFORCEMENT_GUIDANCE in prompt
 
-    def test_auto_injects_for_deepseek(self):
-        """DeepSeek models default to chatty/hallucinatory tool use without enforcement."""
-        from agent.prompt_builder import TOOL_USE_ENFORCEMENT_GUIDANCE
-        agent = self._make_agent(model="deepseek/deepseek-r1", tool_use_enforcement="auto")
-        prompt = agent._build_system_prompt()
-        assert TOOL_USE_ENFORCEMENT_GUIDANCE in prompt
 
-    def test_auto_injects_execution_guidance_for_grok(self):
-        """Grok also gets OPENAI_MODEL_EXECUTION_GUIDANCE (verification,
-        mandatory_tool_use, act_dont_ask). Same failure modes as GPT in
-        practice — claims completion without tool calls, suggests workarounds
-        instead of using existing tools.
-        """
-        from agent.prompt_builder import OPENAI_MODEL_EXECUTION_GUIDANCE
-        agent = self._make_agent(model="x-ai/grok-4.3", tool_use_enforcement="auto")
-        prompt = agent._build_system_prompt()
-        assert OPENAI_MODEL_EXECUTION_GUIDANCE in prompt
 
-    def test_auto_injects_execution_guidance_for_xai_oauth_model(self):
-        """xai-oauth bare model names (no slash) also match the grok pattern."""
-        from agent.prompt_builder import OPENAI_MODEL_EXECUTION_GUIDANCE
-        agent = self._make_agent(model="grok-4.3", tool_use_enforcement="auto")
-        prompt = agent._build_system_prompt()
-        assert OPENAI_MODEL_EXECUTION_GUIDANCE in prompt
 
     def test_auto_does_not_inject_execution_guidance_for_claude(self):
         """Sanity: execution guidance stays off for non-targeted families."""
@@ -1590,117 +1396,14 @@ class TestBuildApiKwargs:
 
         assert "temperature" not in kwargs
 
-    def test_kimi_coding_endpoint_sends_max_tokens_and_reasoning(self, agent):
-        """Kimi endpoint should send max_tokens=32000 and reasoning_effort as
-        top-level params, matching Kimi CLI's default behavior."""
-        agent.provider = "kimi-coding"
-        agent.base_url = "https://api.kimi.com/coding/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.model = "kimi-for-coding"
-        messages = [{"role": "user", "content": "hi"}]
 
-        kwargs = agent._build_api_kwargs(messages)
 
-        assert kwargs["max_tokens"] == 32000
-        assert kwargs["reasoning_effort"] == "medium"
 
-    def test_kimi_coding_endpoint_respects_custom_effort(self, agent):
-        """reasoning_effort should reflect reasoning_config.effort when set."""
-        agent.provider = "kimi-coding"
-        agent.base_url = "https://api.kimi.com/coding/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.model = "kimi-for-coding"
-        agent.reasoning_config = {"enabled": True, "effort": "high"}
-        messages = [{"role": "user", "content": "hi"}]
 
-        kwargs = agent._build_api_kwargs(messages)
 
-        assert kwargs["reasoning_effort"] == "high"
 
-    def test_kimi_coding_endpoint_sends_thinking_extra_body(self, agent):
-        """Kimi endpoint should send extra_body.thinking={"type":"enabled"}
-        to activate reasoning mode, mirroring Kimi CLI's with_thinking()."""
-        agent.provider = "kimi-coding"
-        agent.base_url = "https://api.kimi.com/coding/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.model = "kimi-for-coding"
-        messages = [{"role": "user", "content": "hi"}]
 
-        kwargs = agent._build_api_kwargs(messages)
 
-        assert kwargs["extra_body"]["thinking"] == {"type": "enabled"}
-
-    def test_kimi_coding_endpoint_disables_thinking(self, agent):
-        """When reasoning_config.enabled=False, thinking should be disabled
-        and reasoning_effort should be omitted entirely — mirroring Kimi
-        CLI's with_thinking("off") which maps to reasoning_effort=None."""
-        agent.provider = "kimi-coding"
-        agent.base_url = "https://api.kimi.com/coding/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.model = "kimi-for-coding"
-        agent.reasoning_config = {"enabled": False}
-        messages = [{"role": "user", "content": "hi"}]
-
-        kwargs = agent._build_api_kwargs(messages)
-
-        assert kwargs["extra_body"]["thinking"] == {"type": "disabled"}
-        assert "reasoning_effort" not in kwargs
-
-    def test_moonshot_endpoint_sends_max_tokens_and_reasoning(self, agent):
-        """api.moonshot.ai should get the same Kimi-compatible params."""
-        agent.provider = "kimi-coding"
-        agent.base_url = "https://api.moonshot.ai/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.model = "kimi-k2.5"
-        messages = [{"role": "user", "content": "hi"}]
-
-        kwargs = agent._build_api_kwargs(messages)
-
-        assert kwargs["max_tokens"] == 32000
-        assert kwargs["reasoning_effort"] == "medium"
-        assert kwargs["extra_body"]["thinking"] == {"type": "enabled"}
-
-    def test_moonshot_cn_endpoint_sends_max_tokens_and_reasoning(self, agent):
-        """api.moonshot.cn (China endpoint) should get the same params."""
-        agent.provider = "kimi-coding-cn"
-        agent.base_url = "https://api.moonshot.cn/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.model = "kimi-k2.5"
-        messages = [{"role": "user", "content": "hi"}]
-
-        kwargs = agent._build_api_kwargs(messages)
-
-        assert kwargs["max_tokens"] == 32000
-        assert kwargs["reasoning_effort"] == "medium"
-        assert kwargs["extra_body"]["thinking"] == {"type": "enabled"}
-
-    def test_provider_preferences_injected(self, agent):
-        agent.provider = "openrouter"
-        agent.base_url = "https://openrouter.ai/api/v1"
-        agent.providers_allowed = ["Anthropic"]
-        messages = [{"role": "user", "content": "hi"}]
-        kwargs = agent._build_api_kwargs(messages)
-        assert kwargs["extra_body"]["provider"]["only"] == ["Anthropic"]
-
-    def test_reasoning_config_default_openrouter(self, agent):
-        """Default reasoning config for OpenRouter should be medium."""
-        agent.provider = "openrouter"
-        agent.base_url = "https://openrouter.ai/api/v1"
-        agent.model = "anthropic/claude-sonnet-4-20250514"
-        messages = [{"role": "user", "content": "hi"}]
-        kwargs = agent._build_api_kwargs(messages)
-        reasoning = kwargs["extra_body"]["reasoning"]
-        assert reasoning["enabled"] is True
-        assert reasoning["effort"] == "medium"
-
-    def test_reasoning_config_custom(self, agent):
-        agent.provider = "openrouter"
-        agent.base_url = "https://openrouter.ai/api/v1"
-        agent.model = "anthropic/claude-sonnet-4-20250514"
-        agent.reasoning_config = {"enabled": False}
-        messages = [{"role": "user", "content": "hi"}]
-        kwargs = agent._build_api_kwargs(messages)
-        assert kwargs["extra_body"]["reasoning"] == {"enabled": False}
 
     def test_reasoning_not_sent_for_unsupported_openrouter_model(self, agent):
         agent.base_url = "https://openrouter.ai/api/v1"
@@ -1709,56 +1412,9 @@ class TestBuildApiKwargs:
         kwargs = agent._build_api_kwargs(messages)
         assert "reasoning" not in kwargs.get("extra_body", {})
 
-    def test_reasoning_sent_for_supported_openrouter_model(self, agent):
-        agent.provider = "openrouter"
-        agent.base_url = "https://openrouter.ai/api/v1"
-        agent.model = "qwen/qwen3.5-plus-02-15"
-        messages = [{"role": "user", "content": "hi"}]
-        kwargs = agent._build_api_kwargs(messages)
-        assert kwargs["extra_body"]["reasoning"]["effort"] == "medium"
 
-    def test_reasoning_sent_for_nous_route(self, agent):
-        agent.provider = "nous"
-        agent.base_url = "https://inference-api.nousresearch.com/v1"
-        agent.model = "minimax/minimax-m2.5"
-        messages = [{"role": "user", "content": "hi"}]
-        kwargs = agent._build_api_kwargs(messages)
-        assert kwargs["extra_body"]["reasoning"]["effort"] == "medium"
 
-    def test_reasoning_sent_for_copilot_gpt5(self, agent):
-        """Copilot/GitHub Models: GPT-5 reasoning goes in extra_body.reasoning."""
-        from agent.transports import get_transport
-        from providers import get_provider_profile
 
-        transport = get_transport("chat_completions")
-        profile = get_provider_profile("copilot")
-        msgs = [{"role": "user", "content": "hi"}]
-        kwargs = transport.build_kwargs(
-            model="gpt-5.4",
-            messages=msgs,
-            tools=None,
-            supports_reasoning=True,
-            provider_profile=profile,
-        )
-        assert kwargs["extra_body"]["reasoning"] == {"effort": "medium"}
-
-    def test_reasoning_xhigh_normalized_for_copilot(self, agent):
-        """xhigh effort should normalize to high for Copilot GitHub Models."""
-        from agent.transports import get_transport
-        from providers import get_provider_profile
-
-        transport = get_transport("chat_completions")
-        profile = get_provider_profile("copilot")
-        msgs = [{"role": "user", "content": "hi"}]
-        kwargs = transport.build_kwargs(
-            model="gpt-5.4",
-            messages=msgs,
-            tools=None,
-            supports_reasoning=True,
-            reasoning_config={"enabled": True, "effort": "xhigh"},
-            provider_profile=profile,
-        )
-        assert kwargs["extra_body"]["reasoning"] == {"effort": "high"}
 
     def test_reasoning_omitted_for_non_reasoning_copilot_model(self, agent):
         agent.base_url = "https://api.githubcopilot.com"
@@ -1774,45 +1430,8 @@ class TestBuildApiKwargs:
         assert kwargs["max_tokens"] == 4096
 
 
-    def test_qwen_portal_formats_messages_and_metadata(self, agent):
-        agent.provider = "qwen-oauth"
-        agent.base_url = "https://portal.qwen.ai/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.session_id = "sess-123"
-        messages = [
-            {"role": "system", "content": "You are helpful"},
-            {"role": "assistant", "content": "Got it"},
-            {"role": "user", "content": "hi"},
-        ]
-        kwargs = agent._build_api_kwargs(messages)
-        assert kwargs["metadata"]["sessionId"] == "sess-123"
-        assert kwargs["extra_body"]["vl_high_resolution_images"] is True
-        assert isinstance(kwargs["messages"][0]["content"], list)
-        assert kwargs["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
-        assert kwargs["messages"][2]["content"][0]["text"] == "hi"
 
-    def test_qwen_portal_normalizes_bare_string_content_parts(self, agent):
-        agent.provider = "qwen-oauth"
-        agent.base_url = "https://portal.qwen.ai/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        messages = [
-            {"role": "system", "content": [{"type": "text", "text": "system"}]},
-            {"role": "user", "content": ["hello", {"type": "text", "text": "world"}]},
-        ]
-        kwargs = agent._build_api_kwargs(messages)
-        user_content = kwargs["messages"][1]["content"]
-        assert user_content[0] == {"type": "text", "text": "hello"}
-        assert user_content[1] == {"type": "text", "text": "world"}
 
-    def test_qwen_portal_no_system_message(self, agent):
-        agent.provider = "qwen-oauth"
-        agent.base_url = "https://portal.qwen.ai/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        messages = [{"role": "user", "content": "hi"}]
-        kwargs = agent._build_api_kwargs(messages)
-        # Should not crash even without a system message
-        assert kwargs["messages"][0]["content"][0]["text"] == "hi"
-        assert "cache_control" not in kwargs["messages"][0]["content"][0]
 
     def test_qwen_portal_sends_explicit_max_tokens(self, agent):
         """When the user explicitly sets max_tokens, it should be sent to Qwen Portal."""
@@ -1823,16 +1442,6 @@ class TestBuildApiKwargs:
         kwargs = agent._build_api_kwargs(messages)
         assert kwargs["max_tokens"] == 4096
 
-    def test_qwen_portal_default_max_tokens(self, agent):
-        """When max_tokens is None, Qwen Portal gets a default of 65536
-        to prevent reasoning models from exhausting their output budget."""
-        agent.provider = "qwen-oauth"
-        agent.base_url = "https://portal.qwen.ai/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.max_tokens = None
-        messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
-        kwargs = agent._build_api_kwargs(messages)
-        assert kwargs["max_tokens"] == 65536
 
     def test_ollama_think_false_on_effort_none(self, agent):
         """Custom (Ollama) provider with effort=none should inject think=false."""
@@ -2958,19 +2567,6 @@ class TestHandleMaxIterations:
         kwargs = agent.client.chat.completions.create.call_args.kwargs
         assert "provider" not in kwargs.get("extra_body", {})
 
-    def test_summary_keeps_provider_preferences_for_openrouter(self, agent):
-        agent.base_url = "https://openrouter.ai/api/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.provider = "openrouter"
-        agent.providers_allowed = ["Anthropic"]
-        agent.client.chat.completions.create.return_value = _mock_response(content="Summary")
-        agent._cached_system_prompt = "You are helpful."
-
-        result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
-
-        assert result == "Summary"
-        kwargs = agent.client.chat.completions.create.call_args.kwargs
-        assert kwargs["extra_body"]["provider"]["only"] == ["Anthropic"]
 
     def test_codex_summary_sanitizes_orphan_tool_results(self, agent):
         agent.api_mode = "codex_responses"
@@ -3525,46 +3121,6 @@ class TestRunConversation:
         assert result["final_response"] == "Fresh partial content from this turn"
         assert result["api_calls"] == 1
 
-    def test_nous_401_refreshes_after_remint_and_retries(self, agent):
-        self._setup_agent(agent)
-        agent.provider = "nous"
-        agent.api_mode = "chat_completions"
-
-        calls = {"api": 0, "refresh": 0}
-
-        class _UnauthorizedError(RuntimeError):
-            def __init__(self):
-                super().__init__("Error code: 401 - unauthorized")
-                self.status_code = 401
-
-        def _fake_api_call(api_kwargs):
-            calls["api"] += 1
-            if calls["api"] == 1:
-                raise _UnauthorizedError()
-            return _mock_response(
-                content="Recovered after remint", finish_reason="stop"
-            )
-
-        def _fake_refresh(*, force=True):
-            calls["refresh"] += 1
-            assert force is True
-            return True
-
-        with (
-            patch.object(agent, "_persist_session"),
-            patch.object(agent, "_save_trajectory"),
-            patch.object(agent, "_cleanup_task_resources"),
-            patch.object(agent, "_interruptible_api_call", side_effect=_fake_api_call),
-            patch.object(
-                agent, "_try_refresh_nous_client_credentials", side_effect=_fake_refresh
-            ),
-        ):
-            result = agent.run_conversation("hello")
-
-        assert calls["api"] == 2
-        assert calls["refresh"] == 1
-        assert result["completed"] is True
-        assert result["final_response"] == "Recovered after remint"
 
     def test_context_compression_triggered(self, agent):
         """When compressor says should_compress, compression runs."""
@@ -4197,292 +3753,13 @@ class TestConversationHistoryNotMutated:
 # ---------------------------------------------------------------------------
 
 
-class TestNousCredentialRefresh:
-    """Verify Nous credential refresh rebuilds the runtime client."""
-
-    def test_try_refresh_nous_client_credentials_rebuilds_client(
-        self, agent, monkeypatch
-    ):
-        agent.provider = "nous"
-        agent.api_mode = "chat_completions"
-
-        closed = {"value": False}
-        rebuilt = {"kwargs": None}
-        captured = {}
-
-        class _ExistingClient:
-            def close(self):
-                closed["value"] = True
-
-        class _RebuiltClient:
-            pass
-
-        def _fake_resolve(**kwargs):
-            captured.update(kwargs)
-            return {
-                "api_key": "new-nous-key",
-                "base_url": "https://inference-api.nousresearch.com/v1",
-            }
-
-        def _fake_openai(**kwargs):
-            rebuilt["kwargs"] = kwargs
-            return _RebuiltClient()
-
-        monkeypatch.setattr(
-            "hermes_cli.auth.resolve_nous_runtime_credentials", _fake_resolve
-        )
-
-        agent.client = _ExistingClient()
-        with patch("run_agent.OpenAI", side_effect=_fake_openai):
-            ok = agent._try_refresh_nous_client_credentials(force=True)
-
-        assert ok is True
-        assert closed["value"] is True
-        assert captured["force_refresh"] is True
-        assert rebuilt["kwargs"]["api_key"] == "new-nous-key"
-        assert (
-            rebuilt["kwargs"]["base_url"] == "https://inference-api.nousresearch.com/v1"
-        )
-        assert "default_headers" not in rebuilt["kwargs"]
-        assert isinstance(agent.client, _RebuiltClient)
 
 
-class TestCredentialPoolRecovery:
-    def test_recover_with_pool_rotates_on_402(self, agent):
-        current = SimpleNamespace(label="primary")
-        next_entry = SimpleNamespace(label="secondary")
-
-        class _Pool:
-            def current(self):
-                return current
-
-            def mark_exhausted_and_rotate(self, *, status_code, error_context=None):
-                assert status_code == 402
-                assert error_context is None
-                return next_entry
-
-        agent._credential_pool = _Pool()
-        agent._swap_credential = MagicMock()
-
-        recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=402,
-            has_retried_429=False,
-        )
-
-        assert recovered is True
-        assert retry_same is False
-        agent._swap_credential.assert_called_once_with(next_entry)
-
-    def test_recover_with_pool_rotates_on_billing_reason_even_with_http_400(self, agent):
-        next_entry = SimpleNamespace(label="secondary")
-
-        class _Pool:
-            def mark_exhausted_and_rotate(self, *, status_code, error_context=None):
-                assert status_code == 400
-                assert error_context == {"reason": "out_of_extra_usage"}
-                return next_entry
-
-        agent._credential_pool = _Pool()
-        agent._swap_credential = MagicMock()
-
-        recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=400,
-            has_retried_429=False,
-            classified_reason=FailoverReason.billing,
-            error_context={"reason": "out_of_extra_usage"},
-        )
-
-        assert recovered is True
-        assert retry_same is False
-        agent._swap_credential.assert_called_once_with(next_entry)
-
-    def test_recover_with_pool_retries_first_429_then_rotates(self, agent):
-        next_entry = SimpleNamespace(label="secondary")
-
-        class _Pool:
-            def current(self):
-                return SimpleNamespace(label="primary")
-
-            def mark_exhausted_and_rotate(self, *, status_code, error_context=None):
-                assert status_code == 429
-                assert error_context is None
-                return next_entry
-
-        agent._credential_pool = _Pool()
-        agent._swap_credential = MagicMock()
-
-        recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=429,
-            has_retried_429=False,
-        )
-        assert recovered is False
-        assert retry_same is True
-        agent._swap_credential.assert_not_called()
-
-        recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=429,
-            has_retried_429=True,
-        )
-        assert recovered is True
-        assert retry_same is False
-        agent._swap_credential.assert_called_once_with(next_entry)
-
-
-    def test_recover_with_pool_refreshes_on_401(self, agent):
-        """401 with successful refresh should swap to refreshed credential."""
-        refreshed_entry = SimpleNamespace(label="refreshed-primary", id="abc")
-
-        class _Pool:
-            def try_refresh_current(self):
-                return refreshed_entry
-
-        agent._credential_pool = _Pool()
-        agent._swap_credential = MagicMock()
-
-        recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=401,
-            has_retried_429=False,
-        )
-
-        assert recovered is True
-        agent._swap_credential.assert_called_once_with(refreshed_entry)
-
-    def test_recover_with_pool_rotates_on_401_when_refresh_fails(self, agent):
-        """401 with failed refresh should rotate to next credential."""
-        next_entry = SimpleNamespace(label="secondary", id="def")
-
-        class _Pool:
-            def try_refresh_current(self):
-                return None  # refresh failed
-
-            def mark_exhausted_and_rotate(self, *, status_code, error_context=None):
-                assert status_code == 401
-                assert error_context is None
-                return next_entry
-
-        agent._credential_pool = _Pool()
-        agent._swap_credential = MagicMock()
-
-        recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=401,
-            has_retried_429=False,
-        )
-
-        assert recovered is True
-        assert retry_same is False
-        agent._swap_credential.assert_called_once_with(next_entry)
-
-    def test_recover_with_pool_401_refresh_fails_no_more_credentials(self, agent):
-        """401 with failed refresh and no other credentials returns not recovered."""
-
-        class _Pool:
-            def try_refresh_current(self):
-                return None
-
-            def mark_exhausted_and_rotate(self, *, status_code, error_context=None):
-                assert error_context is None
-                return None  # no more credentials
-
-        agent._credential_pool = _Pool()
-        agent._swap_credential = MagicMock()
-
-        recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=401,
-            has_retried_429=False,
-        )
-
-        assert recovered is False
-        agent._swap_credential.assert_not_called()
-
-    def test_extract_api_error_context_uses_reset_timestamp_and_reason(self, agent):
-        response = SimpleNamespace(headers={})
-        error = SimpleNamespace(
-            body={
-                "error": {
-                    "code": "device_code_exhausted",
-                    "message": "Weekly credits exhausted.",
-                    "resets_at": "2026-04-12T10:30:00Z",
-                }
-            },
-            response=response,
-        )
-
-        context = agent._extract_api_error_context(error)
-
-        assert context["reason"] == "device_code_exhausted"
-        assert context["message"] == "Weekly credits exhausted."
-        assert context["reset_at"] == "2026-04-12T10:30:00Z"
-
-    def test_extract_api_error_context_uses_type_as_reason(self, agent):
-        error = SimpleNamespace(
-            body={
-                "error": {
-                    "type": "usage_limit_reached",
-                    "message": "The usage limit has been reached",
-                }
-            },
-            response=SimpleNamespace(headers={}),
-        )
-
-        context = agent._extract_api_error_context(error)
-
-        assert context["reason"] == "usage_limit_reached"
-        assert context["message"] == "The usage limit has been reached"
-
-    def test_extract_api_error_context_parses_resets_in_hours_and_minutes(self, agent, monkeypatch):
-        from agent import agent_runtime_helpers
-
-        monkeypatch.setattr(agent_runtime_helpers.time, "time", lambda: 1_000.0)
-        error = SimpleNamespace(
-            body={
-                "error": {
-                    "type": "GoUsageLimitError",
-                    "message": "Weekly usage limit reached. Resets in 6hr 29min.",
-                }
-            },
-            response=SimpleNamespace(headers={}),
-        )
-
-        context = agent._extract_api_error_context(error)
-
-        assert context["reason"] == "GoUsageLimitError"
-        assert context["reset_at"] == 1_000.0 + (6 * 60 * 60) + (29 * 60)
-
-    def test_recover_with_pool_passes_error_context_on_rotated_429(self, agent):
-        next_entry = SimpleNamespace(label="secondary")
-        captured = {}
-
-        class _Pool:
-            def current(self):
-                return SimpleNamespace(label="primary")
-
-            def mark_exhausted_and_rotate(self, *, status_code, error_context=None):
-                captured["status_code"] = status_code
-                captured["error_context"] = error_context
-                return next_entry
-
-        agent._credential_pool = _Pool()
-        agent._swap_credential = MagicMock()
-
-        recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=429,
-            has_retried_429=True,
-            error_context={"reason": "device_code_exhausted", "reset_at": "2026-04-12T10:30:00Z"},
-        )
-
-        assert recovered is True
-        assert retry_same is False
-        assert captured["status_code"] == 429
-        assert captured["error_context"]["reason"] == "device_code_exhausted"
 
 
 class TestMaxTokensParam:
     """Verify _max_tokens_param returns the correct key for each provider."""
 
-    def test_returns_max_completion_tokens_for_direct_openai(self, agent):
-        agent.base_url = "https://api.openai.com/v1"
-        result = agent._max_tokens_param(4096)
-        assert result == {"max_completion_tokens": 4096}
 
     def test_returns_max_tokens_for_openrouter(self, agent):
         agent.base_url = "https://openrouter.ai/api/v1"
@@ -4499,91 +3776,10 @@ class TestMaxTokensParam:
         result = agent._max_tokens_param(4096)
         assert result == {"max_tokens": 4096}
 
-    def test_returns_max_completion_tokens_for_azure(self, agent):
-        """Azure OpenAI requires max_completion_tokens for gpt-5.x models."""
-        agent.base_url = "https://my-resource.openai.azure.com/openai/v1"
-        result = agent._max_tokens_param(4096)
-        assert result == {"max_completion_tokens": 4096}
-
-    def test_returns_max_completion_tokens_for_github_copilot(self, agent):
-        """GitHub Copilot's OpenAI-compatible API rejects max_tokens for newer models."""
-        agent.base_url = "https://api.githubcopilot.com"
-        result = agent._max_tokens_param(4096)
-        assert result == {"max_completion_tokens": 4096}
-
-    def test_returns_max_completion_tokens_for_github_copilot_path(self, agent):
-        """Detect Copilot by hostname even when the configured URL includes a path."""
-        agent.base_url = "https://api.githubcopilot.com/chat/completions"
-        result = agent._max_tokens_param(4096)
-        assert result == {"max_completion_tokens": 4096}
 
 
-class TestGpt5ApiModeRouting:
-    """Verify provider-specific GPT-5 API-mode routing."""
 
-    def test_azure_gpt5_stays_on_chat_completions(self, agent):
-        """Azure serves gpt-5.x on /chat/completions — must not upgrade to codex_responses."""
-        agent.base_url = "https://my-resource.openai.azure.com/openai/v1"
-        agent.api_mode = "chat_completions"
-        agent.model = "gpt-5.4-mini"
-        # Mirror the routing logic from __init__
-        if (
-            agent.api_mode == "chat_completions"
-            and not agent._is_azure_openai_url()
-            and (
-                agent._is_direct_openai_url()
-                or agent._provider_model_requires_responses_api(
-                    agent.model, provider=agent.provider,
-                )
-            )
-        ):
-            agent.api_mode = "codex_responses"
-        assert agent.api_mode == "chat_completions"
 
-    def test_non_azure_gpt5_upgrades_to_codex_responses(self, agent):
-        """On api.openai.com, gpt-5.x must still upgrade to codex_responses."""
-        agent.base_url = "https://api.openai.com/v1"
-        agent.api_mode = "chat_completions"
-        agent.model = "gpt-5.4-mini"
-        if (
-            agent.api_mode == "chat_completions"
-            and not agent._is_azure_openai_url()
-            and (
-                agent._is_direct_openai_url()
-                or agent._provider_model_requires_responses_api(
-                    agent.model, provider=agent.provider,
-                )
-            )
-        ):
-            agent.api_mode = "codex_responses"
-        assert agent.api_mode == "codex_responses"
-
-    def test_nous_gpt5_stays_on_chat_completions(self, agent):
-        """Nous serves gpt-5.x on /chat/completions — must not upgrade to codex_responses."""
-        agent.provider = "nous"
-        agent.base_url = "https://inference-api.nousresearch.com/v1"
-        agent.api_mode = "chat_completions"
-        agent.model = "openai/gpt-5.5"
-        if (
-            agent.api_mode == "chat_completions"
-            and not agent._is_azure_openai_url()
-            and (
-                agent._is_direct_openai_url()
-                or agent._provider_model_requires_responses_api(
-                    agent.model, provider=agent.provider,
-                )
-            )
-        ):
-            agent.api_mode = "codex_responses"
-        assert agent.api_mode == "chat_completions"
-
-    def test_is_azure_openai_url_detection(self, agent):
-        assert agent._is_azure_openai_url("https://foo.openai.azure.com/openai/v1") is True
-        assert agent._is_azure_openai_url("https://api.openai.com/v1") is False
-        assert agent._is_azure_openai_url("https://openrouter.ai/api/v1") is False
-        # Path-embedded azure string should still detect — we're ~substring matching
-        agent.base_url = "https://my-resource.openai.azure.com/openai/v1"
-        assert agent._is_azure_openai_url() is True
 
 
 # ---------------------------------------------------------------------------
@@ -4786,195 +3982,10 @@ class TestSafeWriter:
 # ===================================================================
 
 
-class TestBuildApiKwargsAnthropicMaxTokens:
-    """Bug fix: max_tokens was always None for Anthropic mode, ignoring user config."""
-
-    def test_max_tokens_passed_to_anthropic(self, agent):
-        agent.api_mode = "anthropic_messages"
-        agent.max_tokens = 4096
-        agent.reasoning_config = None
-
-        with patch("agent.anthropic_adapter.build_anthropic_kwargs") as mock_build:
-            mock_build.return_value = {"model": "claude-sonnet-4-20250514", "messages": [], "max_tokens": 4096}
-            agent._build_api_kwargs([{"role": "user", "content": "test"}])
-            _, kwargs = mock_build.call_args
-            if not kwargs:
-                kwargs = dict(zip(
-                    ["model", "messages", "tools", "max_tokens", "reasoning_config"],
-                    mock_build.call_args[0],
-                ))
-            assert kwargs.get("max_tokens") == 4096 or mock_build.call_args[1].get("max_tokens") == 4096
-
-    def test_max_tokens_none_when_unset(self, agent):
-        agent.api_mode = "anthropic_messages"
-        agent.max_tokens = None
-        agent.reasoning_config = None
-
-        with patch("agent.anthropic_adapter.build_anthropic_kwargs") as mock_build:
-            mock_build.return_value = {"model": "claude-sonnet-4-20250514", "messages": [], "max_tokens": 16384}
-            agent._build_api_kwargs([{"role": "user", "content": "test"}])
-            call_args = mock_build.call_args
-            # max_tokens should be None (let adapter use its default)
-            if call_args[1]:
-                assert call_args[1].get("max_tokens") is None
-            else:
-                assert call_args[0][3] is None
 
 
-class TestAnthropicImageFallback:
-    def test_build_api_kwargs_converts_multimodal_user_image_to_text(self, agent):
-        agent.api_mode = "anthropic_messages"
-        agent.reasoning_config = None
-
-        api_messages = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Can you see this now?"},
-                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
-            ],
-        }]
-
-        with (
-            patch("tools.vision_tools.vision_analyze_tool", new=AsyncMock(return_value=json.dumps({"success": True, "analysis": "A cat sitting on a chair."}))),
-            patch("agent.anthropic_adapter.build_anthropic_kwargs") as mock_build,
-        ):
-            mock_build.return_value = {"model": "claude-sonnet-4-20250514", "messages": [], "max_tokens": 4096}
-            agent._build_api_kwargs(api_messages)
-
-        kwargs = mock_build.call_args.kwargs or dict(zip(
-            ["model", "messages", "tools", "max_tokens", "reasoning_config"],
-            mock_build.call_args.args,
-        ))
-        transformed = kwargs["messages"]
-        assert isinstance(transformed[0]["content"], str)
-        assert "A cat sitting on a chair." in transformed[0]["content"]
-        assert "Can you see this now?" in transformed[0]["content"]
-        assert "vision_analyze with image_url: https://example.com/cat.png" in transformed[0]["content"]
-
-    def test_build_api_kwargs_reuses_cached_image_analysis_for_duplicate_images(self, agent):
-        agent.api_mode = "anthropic_messages"
-        agent.reasoning_config = None
-        data_url = "data:image/png;base64,QUFBQQ=="
-
-        api_messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "first"},
-                    {"type": "input_image", "image_url": data_url},
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "second"},
-                    {"type": "input_image", "image_url": data_url},
-                ],
-            },
-        ]
-
-        mock_vision = AsyncMock(return_value=json.dumps({"success": True, "analysis": "A small test image."}))
-        with (
-            patch("tools.vision_tools.vision_analyze_tool", new=mock_vision),
-            patch("agent.anthropic_adapter.build_anthropic_kwargs") as mock_build,
-        ):
-            mock_build.return_value = {"model": "claude-sonnet-4-20250514", "messages": [], "max_tokens": 4096}
-            agent._build_api_kwargs(api_messages)
-
-        assert mock_vision.await_count == 1
 
 
-class TestFallbackAnthropicProvider:
-    """Bug fix: _try_activate_fallback had no case for anthropic provider."""
-
-    def test_fallback_to_anthropic_sets_api_mode(self, agent):
-        agent._fallback_activated = False
-        agent._fallback_model = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
-        agent._fallback_chain = [agent._fallback_model]
-        agent._fallback_index = 0
-
-        mock_client = MagicMock()
-        mock_client.base_url = "https://api.anthropic.com/v1"
-        mock_client.api_key = "sk-ant-api03-test"
-
-        with (
-            patch("agent.auxiliary_client.resolve_provider_client", return_value=(mock_client, None)),
-            patch("agent.anthropic_adapter.build_anthropic_client") as mock_build,
-            patch("agent.anthropic_adapter.resolve_anthropic_token", return_value=None),
-        ):
-            mock_build.return_value = MagicMock()
-            result = agent._try_activate_fallback()
-
-        assert result is True
-        assert agent.api_mode == "anthropic_messages"
-        assert agent._anthropic_client is not None
-        assert agent.client is None
-
-    def test_fallback_to_anthropic_enables_prompt_caching(self, agent):
-        agent._fallback_activated = False
-        agent._fallback_model = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
-        agent._fallback_chain = [agent._fallback_model]
-        agent._fallback_index = 0
-
-        mock_client = MagicMock()
-        mock_client.base_url = "https://api.anthropic.com/v1"
-        mock_client.api_key = "sk-ant-api03-test"
-
-        with (
-            patch("agent.auxiliary_client.resolve_provider_client", return_value=(mock_client, None)),
-            patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
-            patch("agent.anthropic_adapter.resolve_anthropic_token", return_value=None),
-        ):
-            agent._try_activate_fallback()
-
-        assert agent._use_prompt_caching is True
-
-    def test_fallback_to_openrouter_uses_openai_client(self, agent):
-        agent._fallback_activated = False
-        agent._fallback_model = {"provider": "openrouter", "model": "anthropic/claude-sonnet-4"}
-        agent._fallback_chain = [agent._fallback_model]
-        agent._fallback_index = 0
-
-        mock_client = MagicMock()
-        mock_client.base_url = "https://openrouter.ai/api/v1"
-        mock_client.api_key = "sk-or-test"
-
-        with patch("agent.auxiliary_client.resolve_provider_client", return_value=(mock_client, None)):
-            result = agent._try_activate_fallback()
-
-        assert result is True
-        assert agent.api_mode == "chat_completions"
-        assert agent.client is mock_client
-
-
-def test_aiagent_uses_copilot_acp_client():
-    with (
-        patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
-        patch("run_agent.check_toolset_requirements", return_value={}),
-        patch("run_agent.OpenAI") as mock_openai,
-        patch("agent.copilot_acp_client.CopilotACPClient") as mock_acp_client,
-    ):
-        acp_client = MagicMock()
-        mock_acp_client.return_value = acp_client
-
-        agent = AIAgent(
-            api_key="copilot-acp",
-            base_url="acp://copilot",
-            provider="copilot-acp",
-            acp_command="/usr/local/bin/copilot",
-            acp_args=["--acp", "--stdio"],
-            quiet_mode=True,
-            skip_context_files=True,
-            skip_memory=True,
-        )
-
-    assert agent.client is acp_client
-    mock_openai.assert_not_called()
-    mock_acp_client.assert_called_once()
-    assert mock_acp_client.call_args.kwargs["base_url"] == "acp://copilot"
-    assert mock_acp_client.call_args.kwargs["api_key"] == "copilot-acp"
-    assert mock_acp_client.call_args.kwargs["command"] == "/usr/local/bin/copilot"
-    assert mock_acp_client.call_args.kwargs["args"] == ["--acp", "--stdio"]
 
 
 def test_quiet_spinner_allowed_with_explicit_print_fn(agent):
@@ -5040,138 +4051,8 @@ def test_is_openai_client_closed_falls_back_to_http_client():
     assert AIAgent._is_openai_client_closed(ClientWithHttpClient(http_closed=True)) is True
 
 
-class TestAnthropicBaseUrlPassthrough:
-    """Bug fix: base_url was filtered with 'anthropic in base_url', blocking proxies."""
-
-    def test_custom_proxy_base_url_passed_through(self):
-        with (
-            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("agent.anthropic_adapter.build_anthropic_client") as mock_build,
-        ):
-            mock_build.return_value = MagicMock()
-            a = AIAgent(
-                api_key="sk-ant-api03-test1234567890",
-                base_url="https://llm-proxy.company.com/v1",
-                api_mode="anthropic_messages",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            call_args = mock_build.call_args
-            # base_url should be passed through, not filtered out
-            assert call_args[0][1] == "https://llm-proxy.company.com/v1"
-
-    def test_none_base_url_passed_as_none(self):
-        with (
-            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("agent.anthropic_adapter.build_anthropic_client") as mock_build,
-        ):
-            mock_build.return_value = MagicMock()
-            a = AIAgent(
-                api_key="sk-ant...7890",
-                api_mode="anthropic_messages",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-            call_args = mock_build.call_args
-            # No base_url provided, should be default empty string or None
-            passed_url = call_args[0][1]
-            assert not passed_url or passed_url is None
 
 
-class TestAnthropicCredentialRefresh:
-    def test_try_refresh_anthropic_client_credentials_rebuilds_client(self):
-        with (
-            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("agent.anthropic_adapter.build_anthropic_client") as mock_build,
-        ):
-            old_client = MagicMock()
-            new_client = MagicMock()
-            mock_build.side_effect = [old_client, new_client]
-            agent = AIAgent(
-                api_key="sk-ant-oat01-stale-token",
-                base_url="https://openrouter.ai/api/v1",
-                api_mode="anthropic_messages",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-
-        agent._anthropic_client = old_client
-        agent._anthropic_api_key = "sk-ant-oat01-stale-token"
-        agent._anthropic_base_url = "https://api.anthropic.com"
-        agent.provider = "anthropic"
-
-        with (
-            patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="sk-ant-oat01-fresh-token"),
-            patch("agent.anthropic_adapter.build_anthropic_client", return_value=new_client) as rebuild,
-        ):
-            assert agent._try_refresh_anthropic_client_credentials() is True
-
-        old_client.close.assert_called_once()
-        rebuild.assert_called_once_with(
-            "sk-ant-oat01-fresh-token", "https://api.anthropic.com", timeout=None,
-        )
-        assert agent._anthropic_client is new_client
-        assert agent._anthropic_api_key == "sk-ant-oat01-fresh-token"
-
-    def test_try_refresh_anthropic_client_credentials_returns_false_when_token_unchanged(self):
-        with (
-            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
-        ):
-            agent = AIAgent(
-                api_key="sk-ant-oat01-same-token",
-                base_url="https://openrouter.ai/api/v1",
-                api_mode="anthropic_messages",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-
-        old_client = MagicMock()
-        agent._anthropic_client = old_client
-        agent._anthropic_api_key = "sk-ant-oat01-same-token"
-
-        with (
-            patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="sk-ant-oat01-same-token"),
-            patch("agent.anthropic_adapter.build_anthropic_client") as rebuild,
-        ):
-            assert agent._try_refresh_anthropic_client_credentials() is False
-
-        old_client.close.assert_not_called()
-        rebuild.assert_not_called()
-
-    def test_anthropic_messages_create_preflights_refresh(self):
-        with (
-            patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
-        ):
-            agent = AIAgent(
-                api_key="sk-ant-oat01-current-token",
-                base_url="https://openrouter.ai/api/v1",
-                api_mode="anthropic_messages",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-            )
-
-        response = SimpleNamespace(content=[])
-        agent._anthropic_client = MagicMock()
-        agent._anthropic_client.messages.create.return_value = response
-
-        with patch.object(agent, "_try_refresh_anthropic_client_credentials", return_value=True) as refresh:
-            result = agent._anthropic_messages_create({"model": "claude-sonnet-4-20250514"})
-
-        refresh.assert_called_once_with()
-        agent._anthropic_client.messages.create.assert_called_once_with(model="claude-sonnet-4-20250514")
-        assert result is response
 
 
 # ===================================================================
@@ -5425,32 +4306,6 @@ class TestInterruptVprintForceTrue:
 # ===================================================================
 
 
-class TestAnthropicInterruptHandler:
-    """_interruptible_api_call must handle Anthropic mode when interrupted."""
-
-    def test_interruptible_has_anthropic_branch(self):
-        """The interrupt handler must check api_mode == 'anthropic_messages'."""
-        import inspect
-        from agent.chat_completion_helpers import interruptible_api_call
-        source = inspect.getsource(interruptible_api_call)
-        assert "anthropic_messages" in source, \
-            "interruptible_api_call must handle Anthropic interrupt (api_mode check)"
-
-    def test_interruptible_rebuilds_anthropic_client(self):
-        """After interrupting, the Anthropic client should be rebuilt."""
-        import inspect
-        from agent.chat_completion_helpers import interruptible_api_call
-        source = inspect.getsource(interruptible_api_call)
-        assert "build_anthropic_client" in source, \
-            "interruptible_api_call must rebuild Anthropic client after interrupt"
-
-    def test_streaming_has_anthropic_branch(self):
-        """_streaming_api_call must also handle Anthropic interrupt."""
-        import inspect
-        from agent.chat_completion_helpers import interruptible_streaming_api_call
-        source = inspect.getsource(interruptible_streaming_api_call)
-        assert "anthropic_messages" in source, \
-            "interruptible_streaming_api_call must handle Anthropic interrupt"
 
 
 # ---------------------------------------------------------------------------
@@ -5583,44 +4438,6 @@ class TestReasoningReplayForStrictProviders:
         agent.compression_enabled = False
         agent.save_trajectories = False
 
-    def test_kimi_tool_replay_includes_space_reasoning_content(self, agent):
-        self._setup_agent(agent)
-        agent.base_url = "https://api.kimi.com/coding/v1"
-        agent._base_url_lower = agent.base_url.lower()
-        agent.provider = "kimi-coding"
-
-        prior_assistant = {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "c1",
-                    "type": "function",
-                    "function": {"name": "terminal", "arguments": "{\"command\":\"date\"}"},
-                }
-            ],
-        }
-        tool_result = {"role": "tool", "tool_call_id": "c1", "content": "Tue Apr 21"}
-        final_resp = _mock_response(content="done", finish_reason="stop")
-        agent.client.chat.completions.create.return_value = final_resp
-
-        with (
-            patch.object(agent, "_persist_session"),
-            patch.object(agent, "_save_trajectory"),
-            patch.object(agent, "_cleanup_task_resources"),
-        ):
-            result = agent.run_conversation(
-                "next step",
-                conversation_history=[prior_assistant, tool_result],
-            )
-
-        assert result["completed"] is True
-        sent_messages = agent.client.chat.completions.create.call_args.kwargs["messages"]
-        replayed_assistant = next(msg for msg in sent_messages if msg.get("role") == "assistant")
-        assert replayed_assistant["role"] == "assistant"
-        assert replayed_assistant["tool_calls"][0]["function"]["name"] == "terminal"
-        assert "reasoning_content" in replayed_assistant
-        assert replayed_assistant["reasoning_content"] == " "
 
     def test_explicit_reasoning_content_beats_normalized_reasoning_on_replay(self, agent):
         self._setup_agent(agent)
@@ -5746,96 +4563,8 @@ class TestNormalizeCodexDictArguments:
 # ---------------------------------------------------------------------------
 
 
-class TestOAuthFlagAfterCredentialRefresh:
-    """_is_anthropic_oauth must update when token type changes during refresh."""
-
-    def test_oauth_flag_updates_api_key_to_oauth(self, agent):
-        """Refreshing from API key to OAuth token must set flag to True."""
-        agent.api_mode = "anthropic_messages"
-        agent.provider = "anthropic"
-        agent._anthropic_api_key = "sk-ant-api-old"
-        agent._anthropic_client = MagicMock()
-        agent._is_anthropic_oauth = False
-
-        with (
-            patch("agent.anthropic_adapter.resolve_anthropic_token",
-                  return_value="sk-ant-setup-oauth-token"),
-            patch("agent.anthropic_adapter.build_anthropic_client",
-                  return_value=MagicMock()),
-        ):
-            result = agent._try_refresh_anthropic_client_credentials()
-
-        assert result is True
-        assert agent._is_anthropic_oauth is True
-
-    def test_oauth_flag_updates_oauth_to_api_key(self, agent):
-        """Refreshing from OAuth to API key must set flag to False."""
-        agent.api_mode = "anthropic_messages"
-        agent.provider = "anthropic"
-        agent._anthropic_api_key = "sk-ant-setup-old"
-        agent._anthropic_client = MagicMock()
-        agent._is_anthropic_oauth = True
-
-        with (
-            patch("agent.anthropic_adapter.resolve_anthropic_token",
-                  return_value="sk-ant-api03-new-key"),
-            patch("agent.anthropic_adapter.build_anthropic_client",
-                  return_value=MagicMock()),
-        ):
-            result = agent._try_refresh_anthropic_client_credentials()
-
-        assert result is True
-        assert agent._is_anthropic_oauth is False
 
 
-class TestFallbackSetsOAuthFlag:
-    """_try_activate_fallback must set _is_anthropic_oauth for Anthropic fallbacks."""
-
-    def test_fallback_to_anthropic_oauth_sets_flag(self, agent):
-        agent._fallback_activated = False
-        agent._fallback_model = {"provider": "anthropic", "model": "claude-sonnet-4-6"}
-        agent._fallback_chain = [agent._fallback_model]
-        agent._fallback_index = 0
-
-        mock_client = MagicMock()
-        mock_client.base_url = "https://api.anthropic.com/v1"
-        mock_client.api_key = "sk-ant-setup-oauth-token"
-
-        with (
-            patch("agent.auxiliary_client.resolve_provider_client",
-                  return_value=(mock_client, None)),
-            patch("agent.anthropic_adapter.build_anthropic_client",
-                  return_value=MagicMock()),
-            patch("agent.anthropic_adapter.resolve_anthropic_token",
-                  return_value=None),
-        ):
-            result = agent._try_activate_fallback()
-
-        assert result is True
-        assert agent._is_anthropic_oauth is True
-
-    def test_fallback_to_anthropic_api_key_clears_flag(self, agent):
-        agent._fallback_activated = False
-        agent._fallback_model = {"provider": "anthropic", "model": "claude-sonnet-4-6"}
-        agent._fallback_chain = [agent._fallback_model]
-        agent._fallback_index = 0
-
-        mock_client = MagicMock()
-        mock_client.base_url = "https://api.anthropic.com/v1"
-        mock_client.api_key = "sk-ant-api03-regular-key"
-
-        with (
-            patch("agent.auxiliary_client.resolve_provider_client",
-                  return_value=(mock_client, None)),
-            patch("agent.anthropic_adapter.build_anthropic_client",
-                  return_value=MagicMock()),
-            patch("agent.anthropic_adapter.resolve_anthropic_token",
-                  return_value=None),
-        ):
-            result = agent._try_activate_fallback()
-
-        assert result is True
-        assert agent._is_anthropic_oauth is False
 
 
 class TestMemoryNudgeCounterPersistence:
@@ -5895,17 +4624,6 @@ class TestSupportsReasoningExtraBody:
         agent.model = ""
         return agent
 
-    def test_xiaomi_models_are_treated_as_reasoning_capable(self):
-        agent = self._make_agent()
-        for model in (
-            "xiaomi/mimo-v2.5-pro",
-            "xiaomi/mimo-v2.5",
-            "xiaomi/mimo-v2-omni",
-            "xiaomi/mimo-v2-pro",
-            "xiaomi/mimo-v2-flash",
-        ):
-            agent.model = model
-            assert agent._supports_reasoning_extra_body() is True, model
 
 
 class TestMemoryContextSanitization:

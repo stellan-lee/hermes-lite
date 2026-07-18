@@ -8,6 +8,22 @@ from gateway.platform_registry import PlatformRegistry, PlatformEntry
 from gateway.config import Platform, GatewayConfig
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _registered_test_platform():
+    from gateway.platform_registry import platform_registry
+
+    entry = PlatformEntry(
+        name="irc",
+        label="IRC",
+        adapter_factory=lambda cfg: MagicMock(),
+        check_fn=lambda: True,
+        source="plugin",
+    )
+    platform_registry.register(entry)
+    yield
+    platform_registry.unregister("irc")
+
+
 # ── Platform enum dynamic members ─────────────────────────────────────────
 
 

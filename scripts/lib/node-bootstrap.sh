@@ -9,7 +9,7 @@
 #   1. modern `node` already on PATH
 #   2. ~/.hermes/node/ from a prior Hermes-managed install
 #   3. fnm, proto, nvm (in that order) if the user already uses a version manager
-#   4. Termux `pkg`, macOS Homebrew
+#   4. macOS Homebrew
 #   5. pinned nodejs.org tarball into ~/.hermes/node/ (always works, zero shell rc edits)
 #
 # Usage:
@@ -39,10 +39,6 @@ _nb_warn() { declare -F log_warn    >/dev/null 2>&1 && log_warn    "$*" || print
 # ---------------------------------------------------------------------------
 # Platform + version helpers
 # ---------------------------------------------------------------------------
-
-_nb_is_termux() {
-    [ -n "${TERMUX_VERSION:-}" ] || [[ "${PREFIX:-}" == *"com.termux/files/usr"* ]]
-}
 
 _nb_node_major() {
     local v
@@ -95,15 +91,6 @@ _nb_try_nvm() {
 # ---------------------------------------------------------------------------
 # Platform package managers
 # ---------------------------------------------------------------------------
-
-_nb_try_termux_pkg() {
-    _nb_is_termux || return 1
-    _nb_log "Installing Node.js via pkg..."
-    pkg install -y nodejs >/dev/null 2>&1 || return 1
-    _nb_have_modern_node || return 1
-    _nb_ok "Node $(node --version) installed via pkg"
-    return 0
-}
 
 _nb_try_brew() {
     [ "$(uname -s)" = "Darwin" ] || return 1
@@ -226,8 +213,7 @@ ensure_node() {
     _nb_try_nvm   && { HERMES_NODE_AVAILABLE=true; return 0; }
 
     # Platform package managers.
-    _nb_try_termux_pkg && { HERMES_NODE_AVAILABLE=true; return 0; }
-    _nb_try_brew       && { HERMES_NODE_AVAILABLE=true; return 0; }
+    _nb_try_brew && { HERMES_NODE_AVAILABLE=true; return 0; }
 
     # Last resort: pinned nodejs.org tarball.
     _nb_install_bundled_node && { HERMES_NODE_AVAILABLE=true; return 0; }

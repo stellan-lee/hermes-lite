@@ -86,33 +86,6 @@ class TestEnvFileReadBlocking:
 # ---------------------------------------------------------------------------
 
 
-class TestCacheFileReadBlocking:
-    """Internal Hermes cache files must remain blocked."""
-
-    def test_hub_index_cache_blocked(self, tmp_path):
-        """Hub index-cache reads are blocked."""
-        hermes_home = tmp_path / ".hermes"
-        cache = hermes_home / "skills" / ".hub" / "index-cache" / "data.json"
-        cache.parent.mkdir(parents=True)
-        cache.write_text("{}")
-
-        with patch("agent.file_safety._hermes_home_path", return_value=hermes_home):
-            error = get_read_block_error(str(cache))
-            assert error is not None
-            assert "internal Hermes cache" in error
-
-    def test_hub_directory_blocked(self, tmp_path):
-        """Hub directory reads are blocked."""
-        hermes_home = tmp_path / ".hermes"
-        hub = hermes_home / "skills" / ".hub" / "metadata.json"
-        hub.parent.mkdir(parents=True)
-        hub.write_text("{}")
-
-        with patch("agent.file_safety._hermes_home_path", return_value=hermes_home):
-            error = get_read_block_error(str(hub))
-            assert error is not None
-
-
 # ---------------------------------------------------------------------------
 # Combined: env guard + cache guard don't interfere
 # ---------------------------------------------------------------------------
@@ -134,15 +107,3 @@ class TestCombinedGuards:
             # .env.example should still be allowed
             error = get_read_block_error("/workspace/.env.example")
             assert error is None
-
-    def test_cache_guard_still_works_with_env_guard(self, tmp_path):
-        """Cache file blocking still works when env guard is active."""
-        hermes_home = tmp_path / ".hermes"
-        cache = hermes_home / "skills" / ".hub" / "index-cache" / "x"
-        cache.parent.mkdir(parents=True)
-        cache.write_text("")
-
-        with patch("agent.file_safety._hermes_home_path", return_value=hermes_home):
-            error = get_read_block_error(str(cache))
-            assert error is not None
-            assert "internal Hermes cache" in error

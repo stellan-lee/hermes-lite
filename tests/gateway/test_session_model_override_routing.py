@@ -48,7 +48,6 @@ def _make_runner():
     runner._show_reasoning = False
     runner._provider_routing = {}
     runner._fallback_model = None
-    runner._service_tier = None
     runner._running_agents = {}
     runner._running_agents_ts = {}
     runner._background_tasks = set()
@@ -260,4 +259,3 @@ fallback_providers:
     assert runtime_kwargs["api_key"] == "env-secret"
     assert runtime_kwargs["base_url"] == "https://fallback.example/v1"
     assert runtime_kwargs["model"] == "fallback-model"
-

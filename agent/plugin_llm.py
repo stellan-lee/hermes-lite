@@ -42,8 +42,8 @@ override knobs (``provider=``, ``model=``, ``agent_id=``,
           llm:
             allow_provider_override: true
             allow_model_override: true
-            allowed_providers: [openrouter, anthropic]   # optional
-            allowed_models:    [openai/gpt-4o-mini]       # optional
+            allowed_providers: [openai-codex, custom]   # optional
+            allowed_models:    [gpt-5.4, local-model]   # optional
             allow_agent_id_override: false
             allow_profile_override: false
 

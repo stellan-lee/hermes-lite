@@ -74,21 +74,6 @@ def test_snapshot_excludes_backups_dir_itself(backup_env):
     )
 
 
-def test_snapshot_excludes_hub_dir(backup_env):
-    """.hub/ is managed by the skills hub. Rolling it back would break
-    lockfile invariants, so the snapshot omits it entirely."""
-    cb = backup_env["cb"]
-    hub = backup_env["skills"] / ".hub"
-    hub.mkdir()
-    (hub / "lock.json").write_text("{}")
-    _write_skill(backup_env["skills"], "alpha")
-    snap = cb.snapshot_skills(reason="t")
-    assert snap is not None
-    with tarfile.open(snap / "skills.tar.gz") as tf:
-        names = tf.getnames()
-    assert not any(n.startswith(".hub") for n in names)
-
-
 def test_snapshot_disabled_returns_none(backup_env, monkeypatch):
     cb = backup_env["cb"]
     monkeypatch.setattr(cb, "is_enabled", lambda: False)

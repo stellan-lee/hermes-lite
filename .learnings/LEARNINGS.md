@@ -144,3 +144,35 @@ test responsibility is demonstrated and recorded in the cleanup review.
 - See Also: LRN-20260718-001
 
 ---
+
+## [LRN-20260718-003] correction
+
+**Logged**: 2026-07-18T00:25:24Z
+**Priority**: critical
+**Status**: in_progress
+**Area**: backend
+
+### Summary
+
+For the approved Hermes feature checklist, checked means remove and unchecked
+means keep.
+
+### Details
+
+The user supplied the complete feature inventory and explicitly defined its
+decision convention. Checkbox state is the authoritative product boundary;
+earlier inferred family-level keep/remove choices must not override it.
+
+### Suggested Action
+
+Implement only the checked IDs, preserve every unchecked ID, and audit shared
+code against retained consumers before deleting it.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: .plans/approved-feature-cleanup.md
+- Tags: cleanup, checklist, scope, preservation
+- See Also: LRN-20260718-002
+
+---

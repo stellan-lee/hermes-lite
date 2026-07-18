@@ -1,7 +1,7 @@
 """Managed uv — one path, no guessing.
 
-Hermes owns its own uv binary at ``$HERMES_HOME/bin/uv`` (or ``uv.exe`` on
-Windows).  Every code path that needs uv resolves it from that single location.
+Hermes owns its own uv binary at ``$HERMES_HOME/bin/uv``. Every code path that
+needs uv resolves it from that single location.
 If the binary is missing, ``ensure_uv()`` bootstraps it via the official
 standalone installer with ``UV_UNMANAGED_INSTALL`` / ``UV_INSTALL_DIR`` pointed
 at ``$HERMES_HOME/bin`` so the installer writes directly there — no PATH
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import os
-import platform
 import shutil
 import subprocess
 import tempfile
@@ -35,13 +34,10 @@ logger = logging.getLogger(__name__)
 def managed_uv_path() -> Path:
     """Return the path where Hermes keeps *its* uv binary.
 
-    ``$HERMES_HOME/bin/uv`` on POSIX, ``$HERMES_HOME\\bin\\uv.exe`` on
-    Windows.  The directory may not exist yet — callers should use
-    ``ensure_uv()`` to bootstrap it.
+    The directory may not exist yet — callers should use ``ensure_uv()`` to
+    bootstrap it.
     """
     home = get_hermes_home()
-    if platform.system() == "Windows":
-        return home / "bin" / "uv.exe"
     return home / "bin" / "uv"
 
 
@@ -117,7 +113,7 @@ def rebuild_venv(uv_bin: str, venv_dir: Path, python_version: str = "3.11") -> b
         check=False,
     )
     if result.returncode == 0:
-        venv_python = venv_dir / ("Scripts" if platform.system() == "Windows" else "bin") / "python"
+        venv_python = venv_dir / "bin" / "python"
         py_ver = subprocess.run(
             [str(venv_python), "--version"],
             capture_output=True,
@@ -171,24 +167,16 @@ def update_managed_uv() -> Optional[str]:
 def _install_uv(target: Path) -> None:
     """Bootstrap uv into *target* using the official standalone installer.
 
-    Uses ``UV_UNMANAGED_INSTALL`` (POSIX) or ``UV_INSTALL_DIR`` (Windows)
-    so the astral installer writes the binary directly into
+    Uses ``UV_UNMANAGED_INSTALL`` so the astral installer writes the binary directly into
     ``$HERMES_HOME/bin/`` instead of ``~/.local/bin/``.
     """
-    system = platform.system()
     env = {
         **os.environ,
         # Tell the astral installer to drop the binary in our dir, not
-        # ~/.local/bin.  UV_UNMANAGED_INSTALL is the POSIX env var; Windows
-        # uses UV_INSTALL_DIR.
+        # ~/.local/bin.
         "UV_UNMANAGED_INSTALL": str(target.parent),
-        "UV_INSTALL_DIR": str(target.parent),
     }
-
-    if system == "Windows":
-        _install_uv_windows(env)
-    else:
-        _install_uv_posix(env)
+    _install_uv_posix(env)
 
 
 def _install_uv_posix(env: dict[str, str]) -> None:
@@ -213,16 +201,3 @@ def _install_uv_posix(env: dict[str, str]) -> None:
             os.unlink(installer_path)
         except OSError:
             pass
-
-
-def _install_uv_windows(env: dict[str, str]) -> None:
-    """Invoke the PowerShell installer."""
-    cmd = (
-        'irm https://astral.sh/uv/install.ps1 | iex'
-    )
-    subprocess.run(
-        ["powershell", "-ExecutionPolicy", "Bypass", "-c", cmd],
-        env=env,
-        check=True,
-        capture_output=True,
-    )

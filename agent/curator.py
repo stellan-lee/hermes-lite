@@ -369,7 +369,7 @@ CURATOR_REVIEW_PROMPT = (
     "bodies + `references/`, `templates/`, and `scripts/` subfiles for "
     "session-specific detail — not one-session-one-skill micro-entries.\n\n"
     "Hard rules — do not violate:\n"
-    "1. DO NOT touch bundled or hub-installed skills. The candidate list "
+    "1. DO NOT touch bundled skills. The candidate list "
     "below is already filtered to agent-created skills only.\n"
     "2. DO NOT delete any skill. Archiving (moving the skill's directory "
     "into ~/.hermes/skills/.archive/) is the maximum destructive action. "
@@ -1513,16 +1513,14 @@ def run_curator_review(
             else:
                 # When pruning built-ins is enabled, the candidate list now
                 # includes bundled skills. Override the default "don't touch
-                # bundled" rule for them — but only archiving is permitted, and
-                # hub-installed skills remain strictly off-limits.
+                # bundled" rule for them — but only archiving is permitted.
                 builtins_note = ""
                 if get_prune_builtins():
                     builtins_note = (
                         "\n\nPRUNE-BUILTINS MODE IS ON: bundled built-in skills "
                         "ARE included in the candidate list below and MAY be "
                         "archived for staleness/irrelevance, overriding hard "
-                        "rule #1 for bundled skills ONLY. Hub-installed skills "
-                        "remain strictly off-limits. Treat a stale built-in the "
+                        "rule #1 for bundled skills ONLY. Treat a stale built-in the "
                         "same as a stale agent-created skill: archive it (never "
                         "delete). It will be restored on `hermes update` only if "
                         "the user explicitly restores it."

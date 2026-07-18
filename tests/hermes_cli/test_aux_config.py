@@ -261,9 +261,7 @@ def test_select_provider_and_model_dispatches_to_aux_menu(tmp_path, monkeypatch)
 
     monkeypatch.setattr(main_mod, "_prompt_provider_choice", fake_prompt)
     monkeypatch.setattr(main_mod, "_aux_config_menu", lambda: called.__setitem__("aux", called["aux"] + 1))
-    # Guard against any main flow accidentally running
-    monkeypatch.setattr(main_mod, "_model_flow_openrouter",
-                        lambda *a, **kw: called.__setitem__("flow", called["flow"] + 1))
+    monkeypatch.setattr("hermes_cli.auth.resolve_provider", lambda provider: None)
 
     main_mod.select_provider_and_model()
 
@@ -291,6 +289,7 @@ def test_leave_unchanged_replaces_cancel_label(tmp_path, monkeypatch):
         raise AssertionError("Leave unchanged not in provider list")
 
     monkeypatch.setattr(main_mod, "_prompt_provider_choice", fake_prompt)
+    monkeypatch.setattr("hermes_cli.auth.resolve_provider", lambda provider: None)
 
     main_mod.select_provider_and_model()
 

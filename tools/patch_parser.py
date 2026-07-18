@@ -363,12 +363,6 @@ def apply_v4a_operations(operations: List[PatchOperation],
     files_created = []
     files_deleted = []
     all_diffs = []
-    # Per-file LSP diagnostics blocks captured from underlying write_file
-    # calls.  V4A bypasses the WriteResult / PatchResult plumbing that
-    # write_file and patch_replace use, so without explicit propagation
-    # the LSP tier's output gets silently dropped — see
-    # ``PatchResult.lsp_diagnostics`` aggregation below.
-    lsp_blocks: List[str] = []
     errors = []
 
     for op in operations:
@@ -378,8 +372,6 @@ def apply_v4a_operations(operations: List[PatchOperation],
                 if result[0]:
                     files_created.append(op.file_path)
                     all_diffs.append(result[1])
-                    if result[2]:
-                        lsp_blocks.append(result[2])
                 else:
                     errors.append(f"Failed to add {op.file_path}: {result[1]}")
 
@@ -404,8 +396,6 @@ def apply_v4a_operations(operations: List[PatchOperation],
                 if result[0]:
                     files_modified.append(op.file_path)
                     all_diffs.append(result[1])
-                    if result[2]:
-                        lsp_blocks.append(result[2])
                 else:
                     errors.append(f"Failed to update {op.file_path}: {result[1]}")
 
@@ -421,13 +411,6 @@ def apply_v4a_operations(operations: List[PatchOperation],
 
     combined_diff = '\n'.join(all_diffs)
 
-    # Combine per-file LSP diagnostics blocks.  Each block already has
-    # the ``<diagnostics file="...">`` header from
-    # ``LSPService.report_for_file`` so concatenation is safe — the
-    # agent (and any downstream parsers) can still attribute each
-    # diagnostic to its file.
-    combined_lsp = "\n\n".join(lsp_blocks) if lsp_blocks else None
-
     if errors:
         return PatchResult(
             success=False,
@@ -436,7 +419,6 @@ def apply_v4a_operations(operations: List[PatchOperation],
             files_created=files_created,
             files_deleted=files_deleted,
             lint=lint_results if lint_results else None,
-            lsp_diagnostics=combined_lsp,
             error="Apply phase failed (state may be inconsistent — run `git diff` to assess):\n"
                   + "\n".join(f"  • {e}" for e in errors),
         )
@@ -448,7 +430,6 @@ def apply_v4a_operations(operations: List[PatchOperation],
         files_created=files_created,
         files_deleted=files_deleted,
         lint=lint_results if lint_results else None,
-        lsp_diagnostics=combined_lsp,
     )
 
 

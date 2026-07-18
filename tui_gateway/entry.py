@@ -19,7 +19,6 @@ import traceback
 
 from tui_gateway import server
 from tui_gateway.server import _CRASH_LOG, dispatch, resolve_skin, write_json
-from tui_gateway.transport import TeeTransport
 
 logger = logging.getLogger(__name__)
 
@@ -27,25 +26,6 @@ logger = logging.getLogger(__name__)
 # agent build briefly joins this so already-spawning fast servers land before
 # the agent snapshots its tool list (see wait_for_mcp_discovery).
 _mcp_discovery_thread = None
-
-
-def _install_sidecar_publisher() -> None:
-    """Mirror every dispatcher emit to the dashboard sidebar via WS.
-
-    Activated by `HERMES_TUI_SIDECAR_URL`, set by the dashboard's
-    ``/api/pty`` endpoint when a chat tab passes a ``channel`` query param.
-    Best-effort: connect failure or runtime drop falls back to stdio-only.
-    """
-    url = os.environ.get("HERMES_TUI_SIDECAR_URL")
-
-    if not url:
-        return
-
-    from tui_gateway.event_publisher import WsPublisherTransport
-
-    server._stdio_transport = TeeTransport(
-        server._stdio_transport, WsPublisherTransport(url)
-    )
 
 
 # How long to wait for orderly shutdown (atexit + finalisers) before
@@ -89,13 +69,12 @@ def _log_signal(signum: int, frame) -> None:
     thread, and fall back to ``os._exit(0)`` so a wedged write/flush
     can never strand the process.
     """
-    # SIGPIPE and SIGHUP don't exist on Windows — build the lookup
-    # dict from attributes that actually exist on the current platform.
-    _signal_names: dict[int, str] = {}
-    for _attr in ("SIGPIPE", "SIGTERM", "SIGHUP", "SIGINT", "SIGBREAK"):
-        _sig = getattr(signal, _attr, None)
-        if _sig is not None:
-            _signal_names[int(_sig)] = _attr
+    _signal_names = {
+        int(signal.SIGPIPE): "SIGPIPE",
+        int(signal.SIGTERM): "SIGTERM",
+        int(signal.SIGHUP): "SIGHUP",
+        int(signal.SIGINT): "SIGINT",
+    }
     name = _signal_names.get(signum, f"signal {signum}")
     try:
         os.makedirs(os.path.dirname(_CRASH_LOG), exist_ok=True)
@@ -152,22 +131,10 @@ def _log_signal(signum: int, frame) -> None:
 # the main command pipe is still readable.  Terminal signals still
 # route through _log_signal so kills and hangups are diagnosable.
 #
-# SIGPIPE and SIGHUP don't exist on Windows; guard each installation
-# with hasattr so ``python -m tui_gateway.entry`` (spawned by
-# ``hermes --tui``) imports cleanly there.  SIGBREAK (Windows' Ctrl+Break)
-# is installed when available as a weaker equivalent of SIGHUP.
-if hasattr(signal, "SIGPIPE"):
-    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-if hasattr(signal, "SIGTERM"):
-    signal.signal(signal.SIGTERM, _log_signal)
-if hasattr(signal, "SIGHUP"):
-    signal.signal(signal.SIGHUP, _log_signal)
-elif hasattr(signal, "SIGBREAK"):
-    # Windows-only: Ctrl+Break in a console window delivers SIGBREAK.
-    # Route it through the same handler so kills are diagnosable.
-    signal.signal(signal.SIGBREAK, _log_signal)
-if hasattr(signal, "SIGINT"):
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+signal.signal(signal.SIGTERM, _log_signal)
+signal.signal(signal.SIGHUP, _log_signal)
+signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def _log_exit(reason: str) -> None:
@@ -211,7 +178,6 @@ def wait_for_mcp_discovery(timeout: float = 0.75) -> None:
 
 
 def main():
-    _install_sidecar_publisher()
 
     # MCP tool discovery — runs in a background daemon thread so a slow or
     # unreachable MCP server can't freeze TUI startup.  Previously this ran

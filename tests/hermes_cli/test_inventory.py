@@ -263,12 +263,11 @@ def test_picker_hints_api_key_warning_format():
         payload = build_models_payload(
             ctx, include_unconfigured=True, picker_hints=True,
         )
-    # anthropic uses api_key + ANTHROPIC_API_KEY.
-    anthropic = next(
-        r for r in payload["providers"] if r["slug"] == "anthropic"
+    lmstudio = next(
+        r for r in payload["providers"] if r["slug"] == "lmstudio"
     )
-    assert "ANTHROPIC_API_KEY" in anthropic["warning"]
-    assert anthropic["warning"].startswith("paste ")
+    assert "LM_API_KEY" in lmstudio["warning"]
+    assert lmstudio["warning"].startswith("paste ")
 
 
 # ─── canonical_order ───────────────────────────────────────────────────
@@ -283,10 +282,10 @@ def test_canonical_order_uses_slug_not_is_user_defined_flag():
     """
     from hermes_cli.models import CANONICAL_PROVIDERS
 
-    canonical_slug = CANONICAL_PROVIDERS[2].slug  # any canonical
+    canonical_slug = CANONICAL_PROVIDERS[0].slug
     rows = [
         # A truly-custom row (correct: is_user_defined=True)
-        {"slug": "custom:Ollama", "name": "Ollama", "models": [],
+        {"slug": "custom-endpoint", "name": "Custom endpoint", "models": [],
          "total_models": 0, "is_current": False, "is_user_defined": True,
          "source": "user-config"},
         # A canonical row that the substrate flagged as user-defined
@@ -302,7 +301,7 @@ def test_canonical_order_uses_slug_not_is_user_defined_flag():
     # Canonical-slug row must come BEFORE truly-custom rows, regardless
     # of is_user_defined.
     canonical_idx = slugs.index(canonical_slug)
-    custom_idx = slugs.index("custom:Ollama")
+    custom_idx = slugs.index("custom-endpoint")
     assert canonical_idx < custom_idx, (
         f"canonical {canonical_slug} demoted to tail "
         f"(canonical_idx={canonical_idx} > custom_idx={custom_idx})"

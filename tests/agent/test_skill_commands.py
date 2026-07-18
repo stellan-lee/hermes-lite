@@ -8,7 +8,6 @@ import pytest
 
 import tools.skills_tool as skills_tool_module
 from agent.skill_commands import (
-    build_preloaded_skills_prompt,
     build_skill_invocation_message,
     resolve_skill_command_key,
     scan_skill_commands,
@@ -423,33 +422,6 @@ class TestResolveSkillCommandKey:
             assert resolve_skill_command_key("foo-bar") == "/foo-bar"
             # Underscore form also works (Telegram round-trip)
             assert resolve_skill_command_key("foo_bar") == "/foo-bar"
-
-
-class TestBuildPreloadedSkillsPrompt:
-    def test_builds_prompt_for_multiple_named_skills(self, tmp_path):
-        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
-            _make_skill(tmp_path, "first-skill")
-            _make_skill(tmp_path, "second-skill")
-            prompt, loaded, missing = build_preloaded_skills_prompt(
-                ["first-skill", "second-skill"]
-            )
-
-        assert missing == []
-        assert loaded == ["first-skill", "second-skill"]
-        assert "first-skill" in prompt
-        assert "second-skill" in prompt
-        assert "preloaded" in prompt.lower()
-
-    def test_reports_missing_named_skills(self, tmp_path):
-        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
-            _make_skill(tmp_path, "present-skill")
-            prompt, loaded, missing = build_preloaded_skills_prompt(
-                ["present-skill", "missing-skill"]
-            )
-
-        assert "present-skill" in prompt
-        assert loaded == ["present-skill"]
-        assert missing == ["missing-skill"]
 
 
 class TestBuildSkillInvocationMessage:

@@ -83,55 +83,6 @@ class TestResolveDisplaySetting:
 # Backward compatibility: tool_progress_overrides
 # ---------------------------------------------------------------------------
 
-class TestBackwardCompat:
-    """Legacy tool_progress_overrides is still respected as a fallback."""
-
-    def test_legacy_overrides_read(self):
-        """tool_progress_overrides is read when no platforms entry exists."""
-        from gateway.display_config import resolve_display_setting
-
-        config = {
-            "display": {
-                "tool_progress": "all",
-                "tool_progress_overrides": {
-                    "signal": "off",
-                    "telegram": "verbose",
-                },
-            }
-        }
-        assert resolve_display_setting(config, "signal", "tool_progress") == "off"
-        assert resolve_display_setting(config, "telegram", "tool_progress") == "verbose"
-
-    def test_new_platforms_takes_precedence_over_legacy(self):
-        """display.platforms beats tool_progress_overrides."""
-        from gateway.display_config import resolve_display_setting
-
-        config = {
-            "display": {
-                "tool_progress": "all",
-                "tool_progress_overrides": {"telegram": "verbose"},
-                "platforms": {"telegram": {"tool_progress": "new"}},
-            }
-        }
-        assert resolve_display_setting(config, "telegram", "tool_progress") == "new"
-
-    def test_legacy_overrides_only_for_tool_progress(self):
-        """Legacy overrides don't affect other settings."""
-        from gateway.display_config import resolve_display_setting
-
-        config = {
-            "display": {
-                "tool_progress_overrides": {"telegram": "verbose"},
-            }
-        }
-        # show_reasoning should NOT read from tool_progress_overrides
-        assert resolve_display_setting(config, "telegram", "show_reasoning") is False
-
-
-# ---------------------------------------------------------------------------
-# YAML normalisation
-# ---------------------------------------------------------------------------
-
 class TestYAMLNormalisation:
     """YAML 1.1 quirks (bare off → False, on → True) are handled."""
 
@@ -188,11 +139,10 @@ class TestPlatformDefaults:
         assert resolve_display_setting({}, "discord", "tool_progress") == "all"
 
     def test_medium_tier_platforms(self):
-        """Mattermost, Matrix, Feishu, WhatsApp default to 'new' tool progress."""
+        """Feishu defaults to 'new' tool progress."""
         from gateway.display_config import resolve_display_setting
 
-        for plat in ("mattermost", "matrix", "feishu", "whatsapp"):
-            assert resolve_display_setting({}, plat, "tool_progress") == "new", plat
+        assert resolve_display_setting({}, "feishu", "tool_progress") == "new"
 
     def test_slack_defaults_tool_progress_off(self):
         """Slack defaults to quiet tool progress (permanent chat noise otherwise)."""
@@ -200,25 +150,17 @@ class TestPlatformDefaults:
 
         assert resolve_display_setting({}, "slack", "tool_progress") == "off"
 
-    def test_low_tier_platforms(self):
-        """Signal, BlueBubbles, etc. default to 'off' tool progress."""
-        from gateway.display_config import resolve_display_setting
-
-        for plat in ("signal", "bluebubbles", "weixin", "wecom", "dingtalk"):
-            assert resolve_display_setting({}, plat, "tool_progress") == "off", plat
-
     def test_minimal_tier_platforms(self):
-        """Email, SMS, webhook default to 'off' tool progress."""
+        """Email and webhook default to 'off' tool progress."""
         from gateway.display_config import resolve_display_setting
 
-        for plat in ("email", "sms", "webhook", "homeassistant"):
+        for plat in ("email", "webhook"):
             assert resolve_display_setting({}, plat, "tool_progress") == "off", plat
 
-    def test_low_tier_streaming_defaults_to_false(self):
-        """Low-tier platforms default streaming to False."""
+    def test_email_streaming_defaults_to_false(self):
+        """Email defaults streaming to False."""
         from gateway.display_config import resolve_display_setting
 
-        assert resolve_display_setting({}, "signal", "streaming") is False
         assert resolve_display_setting({}, "email", "streaming") is False
 
     def test_high_tier_streaming_defaults_to_none(self):
@@ -270,67 +212,6 @@ class TestPlatformDefaults:
 
 # ---------------------------------------------------------------------------
 # Config migration: tool_progress_overrides → display.platforms
-# ---------------------------------------------------------------------------
-
-class TestConfigMigration:
-    """Version 16 migration moves tool_progress_overrides into display.platforms."""
-
-    def test_migration_creates_platforms_entries(self, tmp_path, monkeypatch):
-        """Old overrides are migrated into display.platforms.<plat>.tool_progress."""
-        import yaml
-
-        config_path = tmp_path / "config.yaml"
-        config = {
-            "_config_version": 15,
-            "display": {
-                "tool_progress_overrides": {
-                    "signal": "off",
-                    "telegram": "all",
-                },
-            },
-        }
-        config_path.write_text(yaml.dump(config), encoding="utf-8")
-
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        # Re-import to pick up the new HERMES_HOME
-        import importlib
-        import hermes_cli.config as cfg_mod
-        importlib.reload(cfg_mod)
-
-        result = cfg_mod.migrate_config(interactive=False, quiet=True)
-        # Re-read config
-        updated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        platforms = updated.get("display", {}).get("platforms", {})
-        assert platforms.get("signal", {}).get("tool_progress") == "off"
-        assert platforms.get("telegram", {}).get("tool_progress") == "all"
-
-    def test_migration_preserves_existing_platforms_entries(self, tmp_path, monkeypatch):
-        """Existing display.platforms entries are NOT overwritten by migration."""
-        import yaml
-
-        config_path = tmp_path / "config.yaml"
-        config = {
-            "_config_version": 15,
-            "display": {
-                "tool_progress_overrides": {"telegram": "off"},
-                "platforms": {"telegram": {"tool_progress": "verbose"}},
-            },
-        }
-        config_path.write_text(yaml.dump(config), encoding="utf-8")
-
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        import importlib
-        import hermes_cli.config as cfg_mod
-        importlib.reload(cfg_mod)
-
-        cfg_mod.migrate_config(interactive=False, quiet=True)
-        updated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        # Existing "verbose" should NOT be overwritten by legacy "off"
-        assert updated["display"]["platforms"]["telegram"]["tool_progress"] == "verbose"
-
-
-# ---------------------------------------------------------------------------
-# Streaming per-platform (None = follow global)
 # ---------------------------------------------------------------------------
 
 class TestStreamingPerPlatform:

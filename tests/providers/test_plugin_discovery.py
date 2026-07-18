@@ -1,7 +1,7 @@
 """Tests for the model-providers plugin discovery system.
 
 Verifies that:
- 1. All bundled providers at plugins/model-providers/<name>/ are discovered
+ 1. The retained bundled providers are discovered
  2. User plugins at $HERMES_HOME/plugins/model-providers/<name>/ override bundled
  3. plugin.yaml manifests with kind=model-provider are correctly categorized
 """
@@ -36,8 +36,8 @@ def test_bundled_plugins_discovered():
     plugins_dir = REPO_ROOT / "plugins" / "model-providers"
     assert plugins_dir.is_dir(), f"Missing {plugins_dir}"
 
-    child_dirs = [c for c in plugins_dir.iterdir() if c.is_dir()]
-    assert len(child_dirs) >= 27, f"Expected at least 27 provider plugins, found {len(child_dirs)}"
+    child_dirs = [c for c in plugins_dir.iterdir() if (c / "plugin.yaml").is_file()]
+    assert {child.name for child in child_dirs} == {"custom", "openai-codex"}
 
     for child in child_dirs:
         assert (child / "__init__.py").exists(), f"{child.name} missing __init__.py"
@@ -55,7 +55,7 @@ def test_all_profiles_register():
     from providers import list_providers
 
     plugins_dir = REPO_ROOT / "plugins" / "model-providers"
-    plugin_dir_count = sum(1 for c in plugins_dir.iterdir() if c.is_dir())
+    plugin_dir_count = sum(1 for c in plugins_dir.iterdir() if (c / "plugin.yaml").is_file())
 
     profiles = list_providers()
     names = sorted(p.name for p in profiles)
@@ -65,11 +65,7 @@ def test_all_profiles_register():
         f"Expected at least {plugin_dir_count} profiles (one per plugin dir), got {len(names)}: {names}"
     )
 
-    # Spot-check representative providers from different categories
-    for required in (
-        "openrouter", "anthropic", "custom", "bedrock", "openai-codex",
-        "minimax-oauth", "gmi", "xiaomi", "alibaba-coding-plan",
-    ):
+    for required in ("custom", "openai-codex"):
         assert required in names, f"Missing profile: {required}"
 
 
@@ -82,24 +78,24 @@ def test_user_plugin_overrides_bundled(tmp_path, monkeypatch):
     # get_hermes_home() may be module-cached depending on codebase; ensure the
     # env var is the source of truth. Most code paths re-read it each call.
 
-    # Drop a user plugin that replaces 'gmi'
-    user_gmi = hermes_home / "plugins" / "model-providers" / "gmi"
-    user_gmi.mkdir(parents=True)
-    (user_gmi / "__init__.py").write_text(
+    # Drop a user plugin that replaces the bundled custom profile.
+    user_custom = hermes_home / "plugins" / "model-providers" / "custom"
+    user_custom.mkdir(parents=True)
+    (user_custom / "__init__.py").write_text(
         "from providers import register_provider\n"
         "from providers.base import ProviderProfile\n"
         "\n"
-        "custom_gmi = ProviderProfile(\n"
-        '    name="gmi",\n'
-        '    aliases=("gmi-user-override-test",),\n'
-        '    env_vars=("GMI_API_KEY",),\n'
+        "custom_profile = ProviderProfile(\n"
+        '    name="custom",\n'
+        '    aliases=("custom-user-override-test",),\n'
+        '    env_vars=("OPENAI_API_KEY",),\n'
         '    base_url="https://user-override.example.com/v1",\n'
         '    auth_type="api_key",\n'
         ")\n"
-        "register_provider(custom_gmi)\n"
+        "register_provider(custom_profile)\n"
     )
-    (user_gmi / "plugin.yaml").write_text(
-        "name: gmi-user-override\n"
+    (user_custom / "plugin.yaml").write_text(
+        "name: custom-user-override\n"
         "kind: model-provider\n"
         "version: 0.0.1\n"
         "description: Test user override\n"
@@ -108,12 +104,12 @@ def test_user_plugin_overrides_bundled(tmp_path, monkeypatch):
     _clear_provider_caches()
     from providers import get_provider_profile
 
-    gmi = get_provider_profile("gmi")
-    assert gmi is not None
-    assert gmi.base_url == "https://user-override.example.com/v1", (
-        f"User override not applied; got base_url={gmi.base_url!r}"
+    custom = get_provider_profile("custom")
+    assert custom is not None
+    assert custom.base_url == "https://user-override.example.com/v1", (
+        f"User override not applied; got base_url={custom.base_url!r}"
     )
-    assert "gmi-user-override-test" in gmi.aliases
+    assert "custom-user-override-test" in custom.aliases
 
     # Clean up: reset discovery state so other tests see the bundled version
     _clear_provider_caches()

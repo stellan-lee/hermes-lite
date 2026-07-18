@@ -58,10 +58,7 @@ class TestFailoverReason:
             "model_not_found", "format_error",
             "invalid_encrypted_content",
             "multimodal_tool_content_unsupported",
-            "provider_policy_blocked",
             "content_policy_blocked",
-            "thinking_signature", "long_context_tier",
-            "oauth_long_context_beta_forbidden",
             "llama_cpp_grammar_pattern",
             "unknown",
         }
@@ -425,53 +422,7 @@ class TestClassifyApiError:
         assert result.retryable is True
         assert result.should_fallback is False
 
-    # ── Provider policy-block (OpenRouter privacy/guardrail) ──
-
-    def test_404_openrouter_policy_blocked(self):
-        # Real OpenRouter error when the user's account privacy setting
-        # excludes the only endpoint serving a model (e.g. DeepSeek V4 Pro
-        # which is hosted only by DeepSeek, and their endpoint may log
-        # inputs).  Must NOT classify as model_not_found — the model
-        # exists, falling back won't help (same account setting applies),
-        # and the error body already tells the user where to fix it.
-        e = MockAPIError(
-            "No endpoints available matching your guardrail restrictions "
-            "and data policy. Configure: https://openrouter.ai/settings/privacy",
-            status_code=404,
-        )
-        result = classify_api_error(e)
-        assert result.reason == FailoverReason.provider_policy_blocked
-        assert result.retryable is False
-        assert result.should_fallback is False
-
-    def test_400_openrouter_policy_blocked(self):
-        # Defense-in-depth: if OpenRouter ever returns this as 400 instead
-        # of 404, still classify it distinctly rather than as format_error
-        # or model_not_found.
-        e = MockAPIError(
-            "No endpoints available matching your data policy",
-            status_code=400,
-        )
-        result = classify_api_error(e)
-        assert result.reason == FailoverReason.provider_policy_blocked
-        assert result.retryable is False
-        assert result.should_fallback is False
-
-    def test_message_only_openrouter_policy_blocked(self):
-        # No status code — classifier should still catch the fingerprint
-        # via the message-pattern fallback.
-        e = Exception(
-            "No endpoints available matching your guardrail restrictions "
-            "and data policy"
-        )
-        result = classify_api_error(e)
-        assert result.reason == FailoverReason.provider_policy_blocked
-
     # ── Provider content-policy block (per-prompt safety filter) ──
-    #
-    # Distinct from ``provider_policy_blocked`` above — these are upstream
-    # model-provider safety refusals for THIS prompt, not OpenRouter
-    # account-level data policy. Recovery is fallback model, not config fix.
     # See issue #18028 — OpenAI Codex was burning 3 retries on identical
     # refusals before users saw "API failed after 3 retries" on Telegram.
 
@@ -643,24 +594,6 @@ class TestClassifyApiError:
         assert result.reason == FailoverReason.timeout
         assert result.should_compress is False
 
-    # ── Provider-specific: Anthropic thinking signature ──
-
-    def test_anthropic_thinking_signature(self):
-        e = MockAPIError(
-            "thinking block has invalid signature",
-            status_code=400,
-        )
-        result = classify_api_error(e, provider="anthropic")
-        assert result.reason == FailoverReason.thinking_signature
-        assert result.retryable is True
-
-    def test_non_anthropic_400_with_signature_not_classified_as_thinking(self):
-        """400 with 'signature' but from non-Anthropic → format error."""
-        e = MockAPIError("invalid signature", status_code=400)
-        result = classify_api_error(e, provider="openrouter", approx_tokens=0)
-        # Without "thinking" in the message, it shouldn't be thinking_signature
-        assert result.reason != FailoverReason.thinking_signature
-
     def test_invalid_encrypted_content_classified_as_retryable_replay_failure(self):
         body = {
             "error": {
@@ -742,57 +675,6 @@ class TestClassifyApiError:
         e = MockAPIError("error parsing grammar", status_code=500)
         result = classify_api_error(e, provider="openai-compatible")
         assert result.reason != FailoverReason.llama_cpp_grammar_pattern
-
-    # ── Provider-specific: Anthropic long-context tier ──
-
-    def test_anthropic_long_context_tier(self):
-        e = MockAPIError(
-            "Extra usage is required for long context requests over 200k tokens",
-            status_code=429,
-        )
-        result = classify_api_error(e, provider="anthropic", model="claude-sonnet-4")
-        assert result.reason == FailoverReason.long_context_tier
-        assert result.should_compress is True
-
-    def test_normal_429_not_long_context(self):
-        """Normal 429 without 'extra usage' + 'long context' → rate_limit."""
-        e = MockAPIError("Too Many Requests", status_code=429)
-        result = classify_api_error(e, provider="anthropic")
-        assert result.reason == FailoverReason.rate_limit
-
-    # ── Provider-specific: Anthropic OAuth 1M-context beta forbidden ──
-
-    def test_anthropic_oauth_1m_beta_forbidden(self):
-        """400 + 'long context beta is not yet available for this subscription'
-        → oauth_long_context_beta_forbidden (retryable, no compression)."""
-        e = MockAPIError(
-            "The long context beta is not yet available for this subscription.",
-            status_code=400,
-        )
-        result = classify_api_error(e, provider="anthropic", model="claude-sonnet-4.6")
-        assert result.reason == FailoverReason.oauth_long_context_beta_forbidden
-        assert result.retryable is True
-        assert result.should_compress is False
-
-    def test_anthropic_oauth_1m_beta_forbidden_does_not_collide_with_tier_gate(self):
-        """The 429 'extra usage' + 'long context' tier gate keeps its own
-        classification even though its message mentions 'long context'."""
-        e = MockAPIError(
-            "Extra usage is required for long context requests over 200k tokens",
-            status_code=429,
-        )
-        result = classify_api_error(e, provider="anthropic", model="claude-sonnet-4.6")
-        assert result.reason == FailoverReason.long_context_tier
-
-    def test_400_without_beta_phrase_is_not_1m_beta_forbidden(self):
-        """A generic 400 that happens to mention 'long context' but not the
-        exact beta-availability phrase should not be misclassified."""
-        e = MockAPIError(
-            "long context window exceeded",
-            status_code=400,
-        )
-        result = classify_api_error(e, provider="anthropic")
-        assert result.reason != FailoverReason.oauth_long_context_beta_forbidden
 
     # ── Transport errors ──
 
@@ -1238,16 +1120,6 @@ class TestAdversarialEdgeCases:
         )
         result = classify_api_error(e, provider="openrouter")
         assert result.reason == FailoverReason.rate_limit
-
-    def test_thinking_signature_via_openrouter(self):
-        """Thinking signature errors proxied through OpenRouter must be caught."""
-        e = MockAPIError(
-            "thinking block has invalid signature",
-            status_code=400,
-        )
-        # provider is openrouter, not anthropic — old code missed this
-        result = classify_api_error(e, provider="openrouter", model="anthropic/claude-sonnet-4")
-        assert result.reason == FailoverReason.thinking_signature
 
     def test_generic_400_large_by_message_count(self):
         """Many small messages (>80) should trigger context overflow heuristic."""
