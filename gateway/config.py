@@ -235,6 +235,69 @@ class HomeChannel:
 
 
 @dataclass
+class AdminApprovalConfig:
+    """Secure destination and identity for routed gateway approvals.
+
+    ``user_id`` is the authorization boundary. ``chat_id`` and ``thread_id``
+    only control delivery and can be updated by the configured administrator
+    through ``/set_admin_channel``.
+    """
+
+    enabled: bool = False
+    platform: Optional[Platform] = None
+    user_id: str = ""
+    chat_id: str = ""
+    thread_id: Optional[str] = None
+
+    @property
+    def is_complete(self) -> bool:
+        return bool(
+            self.enabled
+            and self.platform is not None
+            and self.user_id.strip()
+            and self.chat_id.strip()
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "enabled": self.enabled,
+            "user_id": self.user_id,
+            "chat_id": self.chat_id,
+        }
+        if self.platform is not None:
+            result["platform"] = self.platform.value
+        if self.thread_id:
+            result["thread_id"] = self.thread_id
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "AdminApprovalConfig":
+        if not isinstance(data, dict):
+            return cls()
+        platform = None
+        raw_platform = str(data.get("platform") or "").strip().lower()
+        if raw_platform:
+            try:
+                platform = Platform(raw_platform)
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid approvals.admin.platform=%r",
+                    raw_platform,
+                )
+        return cls(
+            enabled=_coerce_bool(data.get("enabled"), False),
+            platform=platform,
+            user_id=str(data.get("user_id") or "").strip(),
+            chat_id=str(data.get("chat_id") or "").strip(),
+            thread_id=(
+                str(data.get("thread_id")).strip()
+                if data.get("thread_id") not in (None, "")
+                else None
+            ),
+        )
+
+
+@dataclass
 class SessionResetPolicy:
     """
     Controls when sessions reset (lose context).
@@ -464,6 +527,9 @@ class GatewayConfig:
     """
     # Platform configurations
     platforms: Dict[Platform, PlatformConfig] = field(default_factory=dict)
+
+    # Optional exact-user route for privileged action approvals.
+    admin_approval: AdminApprovalConfig = field(default_factory=AdminApprovalConfig)
     
     # Session reset policies by type
     default_reset_policy: SessionResetPolicy = field(default_factory=SessionResetPolicy)
@@ -585,6 +651,7 @@ class GatewayConfig:
             "platforms": {
                 p.value: c.to_dict() for p, c in self.platforms.items()
             },
+            "admin_approval": self.admin_approval.to_dict(),
             "default_reset_policy": self.default_reset_policy.to_dict(),
             "reset_by_type": {
                 k: v.to_dict() for k, v in self.reset_by_type.items()
@@ -658,6 +725,9 @@ class GatewayConfig:
 
         return cls(
             platforms=platforms,
+            admin_approval=AdminApprovalConfig.from_dict(
+                data.get("admin_approval", {})
+            ),
             default_reset_policy=default_policy,
             reset_by_type=reset_by_type,
             reset_by_platform=reset_by_platform,
@@ -779,6 +849,12 @@ def load_gateway_config() -> GatewayConfig:
                 gw_data["filter_silence_narration"] = yaml_cfg[
                     "filter_silence_narration"
                 ]
+
+            approvals_cfg = yaml_cfg.get("approvals")
+            if isinstance(approvals_cfg, dict):
+                admin_cfg = approvals_cfg.get("admin")
+                if admin_cfg is not None:
+                    gw_data["admin_approval"] = admin_cfg
 
             if "unauthorized_dm_behavior" in yaml_cfg:
                 gw_data["unauthorized_dm_behavior"] = _normalize_unauthorized_dm_behavior(

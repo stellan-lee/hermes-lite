@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import unicodedata
+import uuid
 from typing import Optional
 from hermes_cli.config import cfg_get
 
@@ -535,11 +536,13 @@ _permanent_approved: set = set()
 
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
-    __slots__ = ("event", "data", "result")
+    __slots__ = ("event", "data", "request_id", "result")
 
     def __init__(self, data: dict):
         self.event = threading.Event()
         self.data = data          # command, description, pattern_keys, …
+        self.request_id = str(data.get("request_id") or uuid.uuid4().hex)
+        self.data["request_id"] = self.request_id
         self.result: Optional[str] = None  # "once"|"session"|"always"|"deny"
 
 
@@ -573,24 +576,61 @@ def unregister_gateway_notify(session_key: str) -> None:
 
 
 def resolve_gateway_approval(session_key: str, choice: str,
-                             resolve_all: bool = False) -> int:
+                             resolve_all: bool = False,
+                             request_id: Optional[str] = None) -> int:
     """Called by the gateway's /approve or /deny handler to unblock
     waiting agent thread(s).
 
-    When *resolve_all* is True every pending approval in the session is
-    resolved at once (``/approve all``).  Otherwise only the oldest one
-    is resolved (FIFO).
+    When *request_id* is provided, only that exact approval is resolved. This
+    is the safe path for interactive cards because multiple tool threads may
+    ask for approval concurrently and cards can be clicked out of order.
+    Otherwise, *resolve_all* resolves every pending approval in the session,
+    while the default preserves the legacy FIFO ``/approve`` behavior.
 
     Returns the number of approvals resolved (0 means nothing was pending).
     """
+    choice = str(choice or "").strip().lower()
+    if choice not in {"once", "session", "always", "deny"}:
+        logger.warning("Ignoring invalid gateway approval choice %r", choice)
+        return 0
+
     with _lock:
         queue = _gateway_queues.get(session_key)
         if not queue:
             return 0
-        if resolve_all:
-            targets = list(queue)
-            queue.clear()
+
+        def _accepts(entry: _ApprovalEntry) -> bool:
+            # Admin-routed entries may only be resolved by the correlated
+            # interactive control. This blocks stale legacy buttons or direct
+            # FIFO calls from approving a newer privileged request.
+            if not request_id and entry.data.get("request_scoped_only"):
+                return False
+            allowed = entry.data.get("allowed_choices")
+            return not allowed or choice in {
+                str(value).strip().lower()
+                for value in allowed
+                if str(value).strip()
+            }
+
+        if request_id:
+            target = next(
+                (entry for entry in queue if entry.request_id == request_id),
+                None,
+            )
+            if target is None or not _accepts(target):
+                return 0
+            targets = [target]
+            queue.remove(target)
+        elif resolve_all:
+            targets = [entry for entry in queue if _accepts(entry)]
+            if not targets:
+                return 0
+            for target in targets:
+                queue.remove(target)
         else:
+            target = queue[0]
+            if not _accepts(target):
+                return 0
             targets = [queue.pop(0)]
         if not queue:
             _gateway_queues.pop(session_key, None)
@@ -875,6 +915,22 @@ def _get_approval_mode() -> str:
     return _normalize_approval_mode(mode)
 
 
+def _is_admin_approval_enforced(approval_config: Optional[dict] = None) -> bool:
+    """Return whether gateway approvals must use the configured admin route.
+
+    Admin routing is a stricter security mode. In an active gateway session it
+    takes precedence over YOLO, ``approvals.mode: off``, smart auto-approval,
+    and previously persisted/session-scoped command grants; otherwise those
+    settings could silently bypass the exact administrator configured to make
+    the decision.
+    """
+    if not _is_gateway_approval_context():
+        return False
+    config = approval_config if isinstance(approval_config, dict) else _get_approval_config()
+    admin = config.get("admin")
+    return bool(isinstance(admin, dict) and is_truthy_value(admin.get("enabled")))
+
+
 def _get_approval_timeout() -> int:
     """Read the approval timeout from config. Defaults to 60 seconds."""
     try:
@@ -971,9 +1027,12 @@ def check_dangerous_command(command: str, env_type: str,
         logger.warning("Hardline block: %s (command: %s)", hardline_desc, command[:200])
         return _hardline_block_result(hardline_desc)
 
-    # --yolo: bypass all approval prompts. Gateway /yolo is session-scoped;
-    # CLI --yolo remains process-scoped via the env var for local use.
-    if _YOLO_MODE_FROZEN or is_current_session_yolo_enabled():
+    # --yolo: bypass all approval prompts unless exact-admin routing is the
+    # active gateway security boundary.
+    admin_enforced = _is_admin_approval_enforced()
+    if not admin_enforced and (
+        _YOLO_MODE_FROZEN or is_current_session_yolo_enabled()
+    ):
         return {"approved": True, "message": None}
 
     is_dangerous, pattern_key, description = detect_dangerous_command(command)
@@ -981,7 +1040,7 @@ def check_dangerous_command(command: str, env_type: str,
         return {"approved": True, "message": None}
 
     session_key = get_current_session_key()
-    if is_approved(session_key, pattern_key):
+    if not admin_enforced and is_approved(session_key, pattern_key):
         return {"approved": True, "message": None}
 
     is_cli = env_var_enabled("HERMES_INTERACTIVE")
@@ -1093,6 +1152,9 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     notify callback raised.  Persistence of an approved choice and building
     the final tool-facing result dict remain the caller's responsibility.
     """
+    # Work with a private copy because the request id is transport metadata;
+    # callers may reuse their input dict in logs or fallback results.
+    approval_data = dict(approval_data)
     command = approval_data.get("command", "")
     description = approval_data.get("description", "")
     primary_key = approval_data.get("pattern_key", "")
@@ -1124,11 +1186,22 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
 
     # Notify the user (bridges sync agent thread → async gateway)
     try:
-        notify_cb(approval_data)
+        notify_cb(entry.data)
     except Exception as exc:
         logger.warning("Gateway approval notify failed: %s", exc)
         _drop_entry()
-        return {"resolved": False, "choice": None, "notify_failed": True}
+        _resume_cb = getattr(notify_cb, "on_resolved", None)
+        if callable(_resume_cb):
+            try:
+                _resume_cb()
+            except Exception:
+                logger.debug("Gateway approval resume callback failed", exc_info=True)
+        return {
+            "resolved": False,
+            "choice": None,
+            "request_id": entry.request_id,
+            "notify_failed": True,
+        }
 
     # Block until the user responds or timeout (default 5 min). Poll in short
     # slices so we can fire activity heartbeats every ~10s to the agent's
@@ -1161,6 +1234,16 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
 
     _drop_entry()
 
+    # The prompt may have been routed to an admin on another chat/platform.
+    # Resume the originating chat's typing state from the core wait path so
+    # every outcome (approve, decline, timeout, cancellation) is covered.
+    _resume_cb = getattr(notify_cb, "on_resolved", None)
+    if callable(_resume_cb):
+        try:
+            _resume_cb()
+        except Exception:
+            logger.debug("Gateway approval resume callback failed", exc_info=True)
+
     choice = entry.result
     # Normalize outcome for the post hook. Unresolved (timeout) and None both
     # mean the user never responded; report that explicitly so plugins can
@@ -1176,7 +1259,89 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
         surface=surface,
         choice=_outcome,
     )
-    return {"resolved": resolved, "choice": choice}
+    return {
+        "resolved": resolved,
+        "choice": choice,
+        "request_id": entry.request_id,
+    }
+
+
+def request_admin_approval(action: str, reason: str = "") -> dict:
+    """Request a one-shot administrator decision for an arbitrary action.
+
+    The gateway's registered approval callback owns routing and exact admin
+    authorization. This primitive only enqueues the request and blocks the
+    current tool thread until the configured administrator approves, declines,
+    or the request times out. Missing gateway/admin routing fails closed.
+    """
+    action = str(action or "").strip()
+    reason = str(reason or "").strip()
+    if not action:
+        return {
+            "approved": False,
+            "decision": "invalid",
+            "message": "An action description is required.",
+        }
+
+    session_key = get_current_session_key(default="")
+    if not session_key:
+        return {
+            "approved": False,
+            "decision": "unavailable",
+            "message": "Admin approval is not available outside an active gateway session.",
+        }
+
+    with _lock:
+        notify_cb = _gateway_notify_cbs.get(session_key)
+    if notify_cb is None:
+        return {
+            "approved": False,
+            "decision": "unavailable",
+            "message": "No gateway approval route is registered for this session.",
+        }
+
+    decision = _await_gateway_decision(
+        session_key,
+        notify_cb,
+        {
+            "kind": "admin_action",
+            "command": action,
+            "description": reason or "Administrator authorization is required.",
+            "pattern_key": "admin_action",
+            "pattern_keys": ["admin_action"],
+            "allowed_choices": ["once", "deny"],
+            "request_scoped_only": True,
+        },
+        surface="gateway_admin",
+    )
+    request_id = decision.get("request_id")
+    if decision.get("notify_failed"):
+        return {
+            "approved": False,
+            "decision": "delivery_failed",
+            "request_id": request_id,
+            "message": "Admin approval request could not be delivered. Do not perform the action.",
+        }
+    if not decision.get("resolved"):
+        return {
+            "approved": False,
+            "decision": "timeout",
+            "request_id": request_id,
+            "message": "Admin approval timed out. Silence is not consent; do not perform the action.",
+        }
+    if decision.get("choice") != "once":
+        return {
+            "approved": False,
+            "decision": "declined",
+            "request_id": request_id,
+            "message": "The administrator declined the action. Do not perform it or retry through another tool.",
+        }
+    return {
+        "approved": True,
+        "decision": "approved",
+        "request_id": request_id,
+        "message": "The administrator approved this action once.",
+    }
 
 
 def check_all_command_guards(command: str, env_type: str,
@@ -1212,10 +1377,16 @@ def check_all_command_guards(command: str, env_type: str,
                        sudo_guess_desc, command[:200])
         return _sudo_stdin_block_result(sudo_guess_desc)
 
-    # --yolo or approvals.mode=off: bypass all approval prompts.
-    # Gateway /yolo is session-scoped; CLI --yolo remains process-scoped.
-    approval_mode = _get_approval_mode()
-    if _YOLO_MODE_FROZEN or is_current_session_yolo_enabled() or approval_mode == "off":
+    # Exact-admin gateway routing is stricter than YOLO/mode=off because those
+    # settings would otherwise bypass the configured decision maker entirely.
+    approval_config = _get_approval_config()
+    approval_mode = _normalize_approval_mode(approval_config.get("mode", "manual"))
+    admin_enforced = _is_admin_approval_enforced(approval_config)
+    if not admin_enforced and (
+        _YOLO_MODE_FROZEN
+        or is_current_session_yolo_enabled()
+        or approval_mode == "off"
+    ):
         return {"approved": True, "message": None}
 
     is_cli = env_var_enabled("HERMES_INTERACTIVE")
@@ -1273,11 +1444,11 @@ def check_all_command_guards(command: str, env_type: str,
         rule_id = findings[0].get("rule_id", "unknown") if findings else "unknown"
         tirith_key = f"tirith:{rule_id}"
         tirith_desc = _format_tirith_description(tirith_result)
-        if not is_approved(session_key, tirith_key):
+        if admin_enforced or not is_approved(session_key, tirith_key):
             warnings.append((tirith_key, tirith_desc, True))
 
     if is_dangerous:
-        if not is_approved(session_key, pattern_key):
+        if admin_enforced or not is_approved(session_key, pattern_key):
             warnings.append((pattern_key, description, False))
 
     # Nothing to warn about
@@ -1288,7 +1459,7 @@ def check_all_command_guards(command: str, env_type: str,
     # When approvals.mode=smart, ask the aux LLM before prompting the user.
     # Inspired by OpenAI Codex's Smart Approvals guardian subagent
     # (openai/codex#13860).
-    if approval_mode == "smart":
+    if approval_mode == "smart" and not admin_enforced:
         combined_desc_for_llm = "; ".join(desc for _, desc, _ in warnings)
         verdict = _smart_approve(command, combined_desc_for_llm)
         if verdict == "approve":
@@ -1338,6 +1509,11 @@ def check_all_command_guards(command: str, env_type: str,
                 "pattern_keys": all_keys,
                 "description": combined_desc,
             }
+            if admin_enforced:
+                approval_data.update({
+                    "allowed_choices": ["once", "deny"],
+                    "request_scoped_only": True,
+                })
             decision = _await_gateway_decision(
                 session_key, notify_cb, approval_data, surface="gateway"
             )
@@ -1503,9 +1679,15 @@ def check_execute_code_guard(code: str, env_type: str) -> dict:
     if env_type in {"docker", "singularity", "modal", "daytona", "vercel_sandbox"}:
         return {"approved": True, "message": None}
 
-    # --yolo or approvals.mode=off: bypass (session- or process-scoped).
-    approval_mode = _get_approval_mode()
-    if _YOLO_MODE_FROZEN or is_current_session_yolo_enabled() or approval_mode == "off":
+    # Exact-admin gateway routing takes precedence over all approval bypasses.
+    approval_config = _get_approval_config()
+    approval_mode = _normalize_approval_mode(approval_config.get("mode", "manual"))
+    admin_enforced = _is_admin_approval_enforced(approval_config)
+    if not admin_enforced and (
+        _YOLO_MODE_FROZEN
+        or is_current_session_yolo_enabled()
+        or approval_mode == "off"
+    ):
         return {"approved": True, "message": None}
 
     is_gateway = _is_gateway_approval_context()
@@ -1547,7 +1729,7 @@ def check_execute_code_guard(code: str, env_type: str) -> dict:
     # Smart mode: ask the aux LLM about the whole script. An APPROVE here only
     # suppresses the redundant whole-script prompt; the per-call terminal()
     # guards (restored by context propagation) still run independently.
-    if approval_mode == "smart":
+    if approval_mode == "smart" and not admin_enforced:
         verdict = _smart_approve(command, description)
         if verdict == "approve":
             logger.debug("Smart approval: auto-approved execute_code for session %s",
@@ -1600,6 +1782,11 @@ def check_execute_code_guard(code: str, env_type: str) -> dict:
         "pattern_keys": [pattern_key],
         "description": description,
     }
+    if admin_enforced:
+        approval_data.update({
+            "allowed_choices": ["once", "deny"],
+            "request_scoped_only": True,
+        })
     decision = _await_gateway_decision(
         session_key, notify_cb, approval_data, surface="gateway"
     )

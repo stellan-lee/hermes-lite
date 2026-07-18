@@ -51,7 +51,7 @@ _HERMES_CORE_TOOLS = [
     # Session history search
     "session_search",
     # Clarifying questions
-    "clarify",
+    "clarify", "request_admin_approval",
     # Code execution + delegation
     "execute_code", "delegate_task",
     # Cronjob management
@@ -223,6 +223,12 @@ TOOLSETS = {
     "clarify": {
         "description": "Ask the user clarifying questions (multiple-choice or open-ended)",
         "tools": ["clarify"],
+        "includes": []
+    },
+
+    "admin_approval": {
+        "description": "Request a one-shot decision from the configured gateway administrator",
+        "tools": ["request_admin_approval"],
         "includes": []
     },
     

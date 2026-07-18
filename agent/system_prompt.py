@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.prompt_builder import (
     CLARIFY_GUIDANCE,
+    ADMIN_APPROVAL_GUIDANCE,
     DEFAULT_AGENT_IDENTITY,
     GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     HERMES_AGENT_HELP_GUIDANCE,
@@ -118,6 +119,8 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         tool_guidance.append(SESSION_SEARCH_GUIDANCE)
     if "clarify" in agent.valid_tool_names:
         tool_guidance.append(CLARIFY_GUIDANCE)
+    if "request_admin_approval" in agent.valid_tool_names:
+        tool_guidance.append(ADMIN_APPROVAL_GUIDANCE)
     if "skill_manage" in agent.valid_tool_names:
         tool_guidance.append(SKILLS_GUIDANCE)
     if tool_guidance:

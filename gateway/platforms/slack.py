@@ -335,6 +335,7 @@ class SlackAdapter(BasePlatformAdapter):
         # Track pending approval message_ts → resolved flag to prevent
         # double-clicks on approval buttons.
         self._approval_resolved: Dict[str, bool] = {}
+        self._approval_state: Dict[str, Dict[str, str]] = {}
         # Track timestamps of messages sent by the bot so we can respond
         # to thread replies even without an explicit @mention.
         self._bot_message_ts: set = set()
@@ -2650,6 +2651,10 @@ class SlackAdapter(BasePlatformAdapter):
         session_key: str,
         description: str = "dangerous command",
         metadata: Optional[Dict[str, Any]] = None,
+        request_id: str = "",
+        authorized_user_id: str = "",
+        binary: bool = False,
+        title: str = "Command Approval Required",
     ) -> SendResult:
         """Send a Block Kit approval prompt with interactive buttons.
 
@@ -2663,13 +2668,45 @@ class SlackAdapter(BasePlatformAdapter):
             cmd_preview = command[:2900] + "..." if len(command) > 2900 else command
             thread_ts = self._resolve_thread_ts(None, metadata)
 
+            action_elements = [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Approve" if binary else "Allow Once"},
+                    "style": "primary",
+                    "action_id": "hermes_approve_once",
+                    "value": session_key,
+                },
+            ]
+            if not binary:
+                action_elements.extend([
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Allow Session"},
+                        "action_id": "hermes_approve_session",
+                        "value": session_key,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Always Allow"},
+                        "action_id": "hermes_approve_always",
+                        "value": session_key,
+                    },
+                ])
+            action_elements.append({
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Decline" if binary else "Deny"},
+                "style": "danger",
+                "action_id": "hermes_deny",
+                "value": session_key,
+            })
+
             blocks = [
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f":warning: *Command Approval Required*\n"
+                            f":warning: *{title}*\n"
                             f"```{cmd_preview}```\n"
                             f"Reason: {description}"
                         ),
@@ -2677,34 +2714,7 @@ class SlackAdapter(BasePlatformAdapter):
                 },
                 {
                     "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "Allow Once"},
-                            "style": "primary",
-                            "action_id": "hermes_approve_once",
-                            "value": session_key,
-                        },
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "Allow Session"},
-                            "action_id": "hermes_approve_session",
-                            "value": session_key,
-                        },
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "Always Allow"},
-                            "action_id": "hermes_approve_always",
-                            "value": session_key,
-                        },
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "Deny"},
-                            "style": "danger",
-                            "action_id": "hermes_deny",
-                            "value": session_key,
-                        },
-                    ],
+                    "elements": action_elements,
                 },
             ]
 
@@ -2720,6 +2730,13 @@ class SlackAdapter(BasePlatformAdapter):
             msg_ts = result.get("ts", "")
             if msg_ts:
                 self._approval_resolved[msg_ts] = False
+                self._approval_state[msg_ts] = {
+                    "session_key": session_key,
+                    "request_id": request_id,
+                    "authorized_user_id": authorized_user_id,
+                    "chat_id": str(chat_id),
+                    "thread_id": str(thread_ts or ""),
+                }
 
             return SendResult(success=True, message_id=msg_ts, raw_response=result)
         except Exception as e:
@@ -2917,19 +2934,43 @@ class SlackAdapter(BasePlatformAdapter):
         user_name = body.get("user", {}).get("name", "unknown")
         user_id = body.get("user", {}).get("id", "")
 
-        # Only authorized users may click approval buttons.  Button clicks
+        approval_state = self._approval_state.get(msg_ts, {})
+        if approval_state.get("session_key"):
+            session_key = approval_state["session_key"]
+
+        # Only authorized users may click approval buttons. Button clicks
         # bypass the normal message auth flow in gateway/run.py, so we must
-        # check here as well.
-        allowed_csv = os.getenv("SLACK_ALLOWED_USERS", "").strip()
-        if allowed_csv:
-            allowed_ids = {uid.strip() for uid in allowed_csv.split(",") if uid.strip()}
-            if "*" not in allowed_ids and user_id not in allowed_ids:
+        # check here as well. Admin routing overrides broad allowlists with
+        # an exact-user match.
+        expected_admin = approval_state.get("authorized_user_id", "")
+        if expected_admin:
+            expected_chat = str(approval_state.get("chat_id") or "")
+            expected_thread = str(approval_state.get("thread_id") or "")
+            callback_thread = str(message.get("thread_ts") or "")
+            if (
+                not user_id
+                or user_id != expected_admin
+                or (expected_chat and channel_id != expected_chat)
+                or (expected_thread and callback_thread != expected_thread)
+            ):
                 logger.warning(
-                    "[Slack] Unauthorized approval click by %s (%s) — ignoring",
+                    "[Slack] Unauthorized admin approval click by %s (%s) in %s",
                     user_name,
                     user_id,
+                    channel_id,
                 )
                 return
+        else:
+            allowed_csv = os.getenv("SLACK_ALLOWED_USERS", "").strip()
+            if allowed_csv:
+                allowed_ids = {uid.strip() for uid in allowed_csv.split(",") if uid.strip()}
+                if "*" not in allowed_ids and user_id not in allowed_ids:
+                    logger.warning(
+                        "[Slack] Unauthorized approval click by %s (%s) — ignoring",
+                        user_name,
+                        user_id,
+                    )
+                    return
 
         # Map action_id to approval choice
         choice_map = {
@@ -2943,6 +2984,7 @@ class SlackAdapter(BasePlatformAdapter):
         # Prevent double-clicks — atomic pop; first caller gets False, others get True (default)
         if self._approval_resolved.pop(msg_ts, True):
             return
+        approval_state = self._approval_state.pop(msg_ts, approval_state)
 
         # Update the message to show the decision and remove buttons
         label_map = {
@@ -2990,7 +3032,13 @@ class SlackAdapter(BasePlatformAdapter):
         try:
             from tools.approval import resolve_gateway_approval
 
-            count = resolve_gateway_approval(session_key, choice)
+            request_id = approval_state.get("request_id", "")
+            if request_id:
+                count = resolve_gateway_approval(
+                    session_key, choice, request_id=request_id
+                )
+            else:
+                count = resolve_gateway_approval(session_key, choice)
             logger.info(
                 "Slack button resolved %d approval(s) for session %s (choice=%s, user=%s)",
                 count,

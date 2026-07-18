@@ -124,6 +124,33 @@ class TestTelegramExecApproval:
         assert adapter._approval_state[approval_id] == "my-session-key"
 
     @pytest.mark.asyncio
+    async def test_admin_prompt_stores_exact_identity_and_request(self):
+        adapter = _make_adapter()
+        mock_msg = MagicMock(message_id=43)
+        adapter._bot.send_message = AsyncMock(return_value=mock_msg)
+
+        await adapter.send_exec_approval(
+            chat_id="12345",
+            command="deploy production",
+            session_key="requester-session",
+            request_id="request-123",
+            authorized_user_id="777",
+            binary=True,
+            title="Admin Approval Required",
+        )
+
+        approval_id = next(iter(adapter._approval_state))
+        assert adapter._approval_state[approval_id] == {
+            "session_key": "requester-session",
+            "request_id": "request-123",
+            "authorized_user_id": "777",
+            "chat_id": "12345",
+            "thread_id": "",
+        }
+        sent = adapter._bot.send_message.call_args.kwargs
+        assert "Admin Approval Required" in sent["text"]
+
+    @pytest.mark.asyncio
     async def test_sends_in_thread(self):
         adapter = _make_adapter()
         mock_msg = MagicMock()
@@ -237,6 +264,45 @@ class TestTelegramExecApproval:
 
 class TestTelegramApprovalCallback:
     """Test the approval callback handling in _handle_callback_query."""
+
+    @pytest.mark.asyncio
+    async def test_admin_click_requires_exact_user_route_and_request_id(self):
+        adapter = _make_adapter()
+        adapter._approval_state[99] = {
+            "session_key": "requester-session",
+            "request_id": "request-123",
+            "authorized_user_id": "777",
+            "chat_id": "12345",
+            "thread_id": "",
+        }
+
+        query = AsyncMock()
+        query.data = "ea:once:99"
+        query.message = MagicMock()
+        query.message.chat_id = 12345
+        query.message.chat.type = "private"
+        query.message.message_thread_id = None
+        query.from_user = MagicMock()
+        query.from_user.first_name = "Attacker"
+        query.from_user.id = 666
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock(callback_query=query)
+
+        with patch("tools.approval.resolve_gateway_approval") as resolve:
+            await adapter._handle_callback_query(update, MagicMock())
+            resolve.assert_not_called()
+            assert 99 in adapter._approval_state
+
+            query.from_user.first_name = "Admin"
+            query.from_user.id = 777
+            resolve.return_value = 1
+            await adapter._handle_callback_query(update, MagicMock())
+
+        resolve.assert_called_once_with(
+            "requester-session", "once", request_id="request-123"
+        )
+        assert 99 not in adapter._approval_state
 
     @pytest.mark.asyncio
     async def test_resolves_approval_on_click(self):

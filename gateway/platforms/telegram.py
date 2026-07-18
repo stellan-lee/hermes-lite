@@ -491,7 +491,7 @@ class TelegramAdapter(BasePlatformAdapter):
         # Interactive model picker state per chat
         self._model_picker_state: Dict[str, dict] = {}
         # Approval button state: message_id → session_key
-        self._approval_state: Dict[int, str] = {}
+        self._approval_state: Dict[int, Any] = {}
         # Slash-confirm button state: confirm_id → session_key (for /reload-mcp
         # and any other slash-confirm prompts; see GatewayRunner._request_slash_confirm).
         self._slash_confirm_state: Dict[str, str] = {}
@@ -2701,6 +2701,10 @@ class TelegramAdapter(BasePlatformAdapter):
         self, chat_id: str, command: str, session_key: str,
         description: str = "dangerous command",
         metadata: Optional[Dict[str, Any]] = None,
+        request_id: str = "",
+        authorized_user_id: str = "",
+        binary: bool = False,
+        title: str = "Command Approval Required",
     ) -> SendResult:
         """Send an inline-keyboard approval prompt with interactive buttons.
 
@@ -2713,7 +2717,7 @@ class TelegramAdapter(BasePlatformAdapter):
         try:
             cmd_preview = command[:3800] + "..." if len(command) > 3800 else command
             text = (
-                f"⚠️ <b>Command Approval Required</b>\n\n"
+                f"⚠️ <b>{_html.escape(title)}</b>\n\n"
                 f"<pre>{_html.escape(cmd_preview)}</pre>\n\n"
                 f"Reason: {_html.escape(description)}"
             )
@@ -2729,16 +2733,22 @@ class TelegramAdapter(BasePlatformAdapter):
                 self._approval_counter = itertools.count(1)
             approval_id = next(self._approval_counter)
 
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Allow Once", callback_data=f"ea:once:{approval_id}"),
-                    InlineKeyboardButton("✅ Session", callback_data=f"ea:session:{approval_id}"),
-                ],
-                [
-                    InlineKeyboardButton("✅ Always", callback_data=f"ea:always:{approval_id}"),
-                    InlineKeyboardButton("❌ Deny", callback_data=f"ea:deny:{approval_id}"),
-                ],
-            ])
+            if binary:
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Approve", callback_data=f"ea:once:{approval_id}"),
+                    InlineKeyboardButton("❌ Decline", callback_data=f"ea:deny:{approval_id}"),
+                ]])
+            else:
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ Allow Once", callback_data=f"ea:once:{approval_id}"),
+                        InlineKeyboardButton("✅ Session", callback_data=f"ea:session:{approval_id}"),
+                    ],
+                    [
+                        InlineKeyboardButton("✅ Always", callback_data=f"ea:always:{approval_id}"),
+                        InlineKeyboardButton("❌ Deny", callback_data=f"ea:deny:{approval_id}"),
+                    ],
+                ])
 
             kwargs: Dict[str, Any] = {
                 "chat_id": int(chat_id),
@@ -2759,10 +2769,27 @@ class TelegramAdapter(BasePlatformAdapter):
                 )
             )
 
-            msg = await self._send_message_with_thread_fallback(**kwargs)
+            # An admin topic is part of the authorization route. Do not
+            # silently fall back to the parent chat when that configured
+            # topic is stale or missing.
+            if authorized_user_id and thread_id is not None:
+                msg = await self._bot.send_message(**kwargs)
+            else:
+                msg = await self._send_message_with_thread_fallback(**kwargs)
 
             # Store session_key keyed by approval_id for the callback handler
-            self._approval_state[approval_id] = session_key
+            if request_id or authorized_user_id or binary:
+                self._approval_state[approval_id] = {
+                    "session_key": session_key,
+                    "request_id": request_id,
+                    "authorized_user_id": authorized_user_id,
+                    "chat_id": str(chat_id),
+                    "thread_id": str(thread_id) if thread_id is not None else "",
+                }
+            else:
+                # Preserve the legacy state shape for compatibility with
+                # existing integrations that inspect this private mapping.
+                self._approval_state[approval_id] = session_key
 
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
@@ -3385,22 +3412,64 @@ class TelegramAdapter(BasePlatformAdapter):
                     await query.answer(text="Invalid approval data.")
                     return
 
-                # Only authorized users may click approval buttons.
+                approval_state = self._approval_state.get(approval_id)
+                if not approval_state:
+                    await query.answer(text="This approval has already been resolved.")
+                    return
+
+                # Admin-routed approvals require exact identity. Legacy
+                # approvals retain the platform's normal authorization rules.
                 caller_id = str(getattr(query.from_user, "id", ""))
-                if not self._is_callback_user_authorized(
-                    caller_id,
-                    chat_id=query_chat_id,
-                    chat_type=str(query_chat_type) if query_chat_type is not None else None,
-                    thread_id=str(query_thread_id) if query_thread_id is not None else None,
-                    user_name=query_user_name,
-                ):
+                expected_admin = (
+                    str(approval_state.get("authorized_user_id") or "")
+                    if isinstance(approval_state, dict)
+                    else ""
+                )
+                expected_chat = (
+                    str(approval_state.get("chat_id") or "")
+                    if isinstance(approval_state, dict)
+                    else ""
+                )
+                expected_thread = (
+                    str(approval_state.get("thread_id") or "")
+                    if isinstance(approval_state, dict)
+                    else ""
+                )
+                callback_chat = str(query_chat_id or "")
+                callback_thread = str(query_thread_id or "")
+                route_matches = (
+                    (not expected_chat or callback_chat == expected_chat)
+                    and (not expected_thread or callback_thread == expected_thread)
+                )
+                is_authorized = (
+                    bool(
+                        caller_id
+                        and caller_id == expected_admin
+                        and route_matches
+                    )
+                    if expected_admin
+                    else self._is_callback_user_authorized(
+                        caller_id,
+                        chat_id=query_chat_id,
+                        chat_type=str(query_chat_type) if query_chat_type is not None else None,
+                        thread_id=str(query_thread_id) if query_thread_id is not None else None,
+                        user_name=query_user_name,
+                    )
+                )
+                if not is_authorized:
                     await query.answer(text="⛔ You are not authorized to approve commands.")
                     return
 
-                session_key = self._approval_state.pop(approval_id, None)
-                if not session_key:
+                approval_state = self._approval_state.pop(approval_id, None)
+                if not approval_state:
                     await query.answer(text="This approval has already been resolved.")
                     return
+                if isinstance(approval_state, dict):
+                    session_key = str(approval_state.get("session_key") or "")
+                    request_id = str(approval_state.get("request_id") or "")
+                else:
+                    session_key = str(approval_state)
+                    request_id = ""
 
                 # Map choice to human-readable label
                 label_map = {
@@ -3427,7 +3496,12 @@ class TelegramAdapter(BasePlatformAdapter):
                 # Resolve the approval — unblocks the agent thread
                 try:
                     from tools.approval import resolve_gateway_approval
-                    count = resolve_gateway_approval(session_key, choice)
+                    if request_id:
+                        count = resolve_gateway_approval(
+                            session_key, choice, request_id=request_id
+                        )
+                    else:
+                        count = resolve_gateway_approval(session_key, choice)
                     logger.info(
                         "Telegram button resolved %d approval(s) for session %s (choice=%s, user=%s)",
                         count, session_key, choice, user_display,

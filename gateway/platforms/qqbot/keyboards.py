@@ -47,6 +47,9 @@ UPDATE_PROMPT_PREFIX = "update_prompt:"
 _APPROVAL_DATA_RE = re.compile(
     r"^approve:(.+):(allow-once|allow-always|deny)$"
 )
+_APPROVAL_DATA_WITH_REQUEST_RE = re.compile(
+    r"^approve:(.+):r_([A-Za-z0-9_-]{6,64}):(allow-once|allow-always|deny)$"
+)
 
 # Pattern: update_prompt:y | update_prompt:n
 _UPDATE_PROMPT_RE = re.compile(r"^update_prompt:(y|n)$")
@@ -158,13 +161,20 @@ class InlineKeyboard:
 
 # ── INTERACTION_CREATE parsing ───────────────────────────────────────
 
-def parse_approval_button_data(button_data: str) -> Optional[tuple[str, str]]:
-    """Parse approval ``button_data`` into ``(session_key, decision)``.
+def parse_approval_button_data(
+    button_data: str,
+) -> Optional[tuple[str, str] | tuple[str, str, str]]:
+    """Parse legacy or request-scoped approval ``button_data``.
 
     :param button_data: Raw ``data.resolved.button_data`` from
         ``INTERACTION_CREATE``.
-    :returns: ``(session_key, decision)`` or ``None`` if not an approval button.
+    :returns: ``(session_key, decision)`` for legacy buttons,
+        ``(session_key, decision, request_id)`` for request-scoped buttons,
+        or ``None`` when the payload is not an approval button.
     """
+    m = _APPROVAL_DATA_WITH_REQUEST_RE.match(button_data or "")
+    if m:
+        return m.group(1), m.group(3), m.group(2)
     m = _APPROVAL_DATA_RE.match(button_data or "")
     if not m:
         return None
@@ -201,8 +211,12 @@ def _make_callback_button(
     )
 
 
-def build_approval_keyboard(session_key: str) -> InlineKeyboard:
-    """Build the 3-button approval keyboard.
+def build_approval_keyboard(
+    session_key: str,
+    request_id: str = "",
+    binary: bool = False,
+) -> InlineKeyboard:
+    """Build a legacy three-choice or binary admin approval keyboard.
 
     Layout: ``[✅ 允许一次] [⭐ 始终允许] [❌ 拒绝]`` — all three share
     ``group_id='approval'`` so clicking one greys out the rest.
@@ -210,35 +224,42 @@ def build_approval_keyboard(session_key: str) -> InlineKeyboard:
     :param session_key: Embedded into ``button_data`` so the decision
         routes back to the right pending approval.
     """
+    route_key = f"{session_key}:r_{request_id}" if request_id else session_key
+    buttons = [
+        _make_callback_button(
+            btn_id="allow",
+            label="✅ 批准" if binary else "✅ 允许一次",
+            visited_label="已批准" if binary else "已允许",
+            data=f"{APPROVAL_BUTTON_PREFIX}{route_key}:allow-once",
+            style=1,
+            group_id="approval",
+        ),
+    ]
+    if not binary:
+        buttons.append(
+            _make_callback_button(
+                btn_id="always",
+                label="⭐ 始终允许",
+                visited_label="已始终允许",
+                data=f"{APPROVAL_BUTTON_PREFIX}{route_key}:allow-always",
+                style=1,
+                group_id="approval",
+            )
+        )
+    buttons.append(
+        _make_callback_button(
+            btn_id="deny",
+            label="❌ 拒绝",
+            visited_label="已拒绝",
+            data=f"{APPROVAL_BUTTON_PREFIX}{route_key}:deny",
+            style=0,
+            group_id="approval",
+        )
+    )
     return InlineKeyboard(
         content=KeyboardContent(
             rows=[
-                KeyboardRow(buttons=[
-                    _make_callback_button(
-                        btn_id="allow",
-                        label="✅ 允许一次",
-                        visited_label="已允许",
-                        data=f"{APPROVAL_BUTTON_PREFIX}{session_key}:allow-once",
-                        style=1,
-                        group_id="approval",
-                    ),
-                    _make_callback_button(
-                        btn_id="always",
-                        label="⭐ 始终允许",
-                        visited_label="已始终允许",
-                        data=f"{APPROVAL_BUTTON_PREFIX}{session_key}:allow-always",
-                        style=1,
-                        group_id="approval",
-                    ),
-                    _make_callback_button(
-                        btn_id="deny",
-                        label="❌ 拒绝",
-                        visited_label="已拒绝",
-                        data=f"{APPROVAL_BUTTON_PREFIX}{session_key}:deny",
-                        style=0,
-                        group_id="approval",
-                    ),
-                ]),
+                KeyboardRow(buttons=buttons),
             ]
         )
     )
@@ -295,6 +316,8 @@ class ApprovalRequest:
     tool_name: str = ""
     severity: str = ""
     timeout_sec: int = 120
+    request_id: str = ""
+    binary: bool = False
 
 
 def build_approval_text(req: ApprovalRequest) -> str:
@@ -380,7 +403,11 @@ class ApprovalSender:
         :returns: ``True`` on success, ``False`` on failure.
         """
         text = build_approval_text(req)
-        keyboard = build_approval_keyboard(req.session_key)
+        keyboard = build_approval_keyboard(
+            req.session_key,
+            request_id=req.request_id,
+            binary=req.binary,
+        )
 
         logger.info(
             "[%s] Sending approval request to %s:%s (session=%.20s…)",

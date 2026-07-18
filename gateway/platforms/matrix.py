@@ -112,11 +112,21 @@ logger = logging.getLogger(__name__)
 class _MatrixApprovalPrompt:
     """Tracks a pending Matrix reaction-based exec approval prompt."""
 
-    def __init__(self, session_key: str, chat_id: str, message_id: str, resolved: bool = False):
+    def __init__(
+        self,
+        session_key: str,
+        chat_id: str,
+        message_id: str,
+        resolved: bool = False,
+        request_id: str = "",
+        authorized_user_id: str = "",
+    ):
         self.session_key = session_key
         self.chat_id = chat_id
         self.message_id = message_id
         self.resolved = resolved
+        self.request_id = request_id
+        self.authorized_user_id = authorized_user_id
         self.bot_reaction_events: dict[str, str] = {}  # emoji -> event_id
 
 # Matrix message size limit (4000 chars practical, spec has no hard limit
@@ -1269,6 +1279,10 @@ class MatrixAdapter(BasePlatformAdapter):
         session_key: str,
         description: str = "dangerous command",
         metadata: Optional[dict] = None,
+        request_id: str = "",
+        authorized_user_id: str = "",
+        binary: bool = False,
+        title: str = "Command Approval Required",
     ) -> SendResult:
         """Send a reaction-based exec approval prompt for Matrix."""
         if not self._client:
@@ -1276,14 +1290,19 @@ class MatrixAdapter(BasePlatformAdapter):
 
         cmd_preview = command[:2000] + "..." if len(command) > 2000 else command
         text = (
-            "⚠️ **Dangerous command requires approval**\n"
+            f"⚠️ **{title}**\n"
             f"```\n{cmd_preview}\n```\n"
             f"Reason: {description}\n\n"
-            "Reply `/approve` to execute, `/approve session` to approve this pattern for the session, "
-            "`/approve always` to approve permanently, or `/deny` to cancel.\n\n"
-            "You can also click the reaction to approve:\n"
-            "✅ = /approve\n"
-            "❎ = /deny"
+            + (
+                "React to decide:\n✅ = Approve\n❎ = Decline"
+                if binary
+                else (
+                    "Reply `/approve` to execute, `/approve session` to approve this pattern for the session, "
+                    "`/approve always` to approve permanently, or `/deny` to cancel.\n\n"
+                    "You can also click the reaction to approve:\n"
+                    "✅ = /approve\n❎ = /deny"
+                )
+            )
         )
 
         result = await self.send(chat_id, text, metadata=metadata)
@@ -1294,10 +1313,12 @@ class MatrixAdapter(BasePlatformAdapter):
             session_key=session_key,
             chat_id=chat_id,
             message_id=result.message_id,
+            request_id=request_id,
+            authorized_user_id=authorized_user_id,
         )
-        old_event = self._approval_prompt_by_session.get(session_key)
-        if old_event:
-            self._approval_prompts_by_event.pop(old_event, None)
+        # Keep every event entry: concurrent approvals for one session can be
+        # clicked out of order and are resolved by request_id. The session map
+        # remains a legacy pointer to the newest prompt only.
         self._approval_prompts_by_event[result.message_id] = prompt
         self._approval_prompt_by_session[session_key] = result.message_id
 
@@ -2236,8 +2257,15 @@ class MatrixAdapter(BasePlatformAdapter):
             if prompt and not prompt.resolved:
                 if room_id != prompt.chat_id:
                     return
-                _allow_all = os.getenv("GATEWAY_ALLOW_ALL_USERS", "").lower() in {"true", "1", "yes"}
-                if not _allow_all and not (self._allowed_user_ids and sender in self._allowed_user_ids):
+                if prompt.authorized_user_id:
+                    authorized = sender == prompt.authorized_user_id
+                else:
+                    _allow_all = os.getenv("GATEWAY_ALLOW_ALL_USERS", "").lower() in {"true", "1", "yes"}
+                    authorized = bool(
+                        _allow_all
+                        or (self._allowed_user_ids and sender in self._allowed_user_ids)
+                    )
+                if not authorized:
                     logger.info(
                         "Matrix: ignoring approval reaction from unauthorized user %s on %s",
                         sender, reacts_to,
@@ -2249,11 +2277,19 @@ class MatrixAdapter(BasePlatformAdapter):
                 try:
                     from tools.approval import resolve_gateway_approval
 
-                    count = resolve_gateway_approval(prompt.session_key, choice)
+                    if prompt.request_id:
+                        count = resolve_gateway_approval(
+                            prompt.session_key,
+                            choice,
+                            request_id=prompt.request_id,
+                        )
+                    else:
+                        count = resolve_gateway_approval(prompt.session_key, choice)
                     if count:
                         prompt.resolved = True
                         self._approval_prompts_by_event.pop(reacts_to, None)
-                        self._approval_prompt_by_session.pop(prompt.session_key, None)
+                        if self._approval_prompt_by_session.get(prompt.session_key) == reacts_to:
+                            self._approval_prompt_by_session.pop(prompt.session_key, None)
                         logger.info(
                             "Matrix reaction resolved %d approval(s) for session %s "
                             "(choice=%s, user=%s)",
