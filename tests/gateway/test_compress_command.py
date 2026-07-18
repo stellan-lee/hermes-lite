@@ -140,7 +140,7 @@ async def test_compress_command_explains_when_token_estimate_rises():
 @pytest.mark.asyncio
 async def test_in_place_compress_keeps_archived_rows(tmp_path):
     """Gateway must not hard-rewrite after the agent soft-archives in place."""
-    from hermes_state import SessionDB
+    from marlow_state import SessionDB
 
     history = _make_history()
     compressed = [{"role": "user", "content": "durable summary"}]

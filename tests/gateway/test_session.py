@@ -281,7 +281,7 @@ class TestBuildSessionContextPrompt:
         assert "Local" in prompt
         assert "machine running this agent" in prompt
 
-    def test_local_delivery_path_uses_display_hermes_home(self):
+    def test_local_delivery_path_uses_display_marlow_home(self):
         config = GatewayConfig()
         source = SessionSource(
             platform=Platform.LOCAL,
@@ -291,11 +291,11 @@ class TestBuildSessionContextPrompt:
         )
         ctx = build_session_context(source, config)
         with patch(
-            "hermes_constants.display_hermes_home",
-            return_value="~/.hermes/profiles/coder",
+            "marlow_constants.display_marlow_home",
+            return_value="~/.marlow/profiles/coder",
         ):
             prompt = build_session_context_prompt(ctx)
-        assert "~/.hermes/profiles/coder/cron/output/" in prompt
+        assert "~/.marlow/profiles/coder/cron/output/" in prompt
 
     def test_multi_user_thread_prompt(self):
         """Shared thread sessions show multi-user note instead of single user."""
@@ -445,9 +445,9 @@ class TestSessionStoreRewriteTranscript:
 
     @pytest.fixture()
     def store(self, tmp_path, monkeypatch):
-        import hermes_state
+        import marlow_state
 
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
+        monkeypatch.setattr(marlow_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
         config = GatewayConfig()
         s = SessionStore(sessions_dir=tmp_path, config=config)
         return s
@@ -515,18 +515,18 @@ class TestLoadTranscriptDBOnly:
     """After spec 002, load_transcript reads only from state.db."""
 
     def test_db_only_returns_empty_for_nonexistent(self, tmp_path, monkeypatch):
-        import hermes_state
+        import marlow_state
 
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
+        monkeypatch.setattr(marlow_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
         config = GatewayConfig()
         store = SessionStore(sessions_dir=tmp_path, config=config)
         result = store.load_transcript("nonexistent")
         assert result == []
 
     def test_db_only_returns_messages(self, tmp_path, monkeypatch):
-        import hermes_state
+        import marlow_state
 
-        monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
+        monkeypatch.setattr(marlow_state, "DEFAULT_DB_PATH", tmp_path / "state.db")
         config = GatewayConfig()
         store = SessionStore(sessions_dir=tmp_path, config=config)
         sid = "db_only_session"
@@ -543,7 +543,7 @@ class TestSessionStoreSwitchSession:
     """Regression coverage for gateway /resume session switching semantics."""
 
     def test_switch_session_reopens_target_session_in_db(self, tmp_path):
-        from hermes_state import SessionDB
+        from marlow_state import SessionDB
 
         config = GatewayConfig()
         with patch("gateway.session.SessionStore._ensure_loaded"):
@@ -963,7 +963,7 @@ class TestRewriteTranscriptPreservesReasoning:
     """rewrite_transcript must not drop reasoning fields from SQLite."""
 
     def test_reasoning_survives_rewrite(self, tmp_path):
-        from hermes_state import SessionDB
+        from marlow_state import SessionDB
 
         db = SessionDB(db_path=tmp_path / "test.db")
         session_id = "reasoning-test"
@@ -1003,7 +1003,7 @@ class TestRewriteTranscriptPreservesReasoning:
         ]
 
     def test_db_rewrite_is_atomic_on_insert_failure(self, tmp_path, monkeypatch):
-        from hermes_state import SessionDB
+        from marlow_state import SessionDB
 
         db = SessionDB(db_path=tmp_path / "test.db")
         session_id = "atomic-rewrite-test"

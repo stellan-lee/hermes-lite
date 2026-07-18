@@ -1,7 +1,7 @@
 """
-Hermes Gateway - Multi-platform messaging integration.
+Marlow Gateway - Multi-platform messaging integration.
 
-This module provides a unified gateway for connecting the Hermes agent
+This module provides a unified gateway for connecting the Marlow agent
 to messaging platforms (Telegram, Discord, Slack, Feishu, email, and webhooks) with:
 - Session management (persistent conversations with reset policies)
 - Dynamic context injection (agent knows where messages come from)

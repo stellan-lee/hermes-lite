@@ -1,6 +1,6 @@
 """Session workspace grouping contracts."""
 
-from hermes_state import workspace_key
+from marlow_state import workspace_key
 
 
 def test_workspace_key_prefers_repo_root():

@@ -1,6 +1,6 @@
 """Deterministic structured memory cards (PR4).
 
-After a completed turn, Hermes can distil a few small, structured "memory
+After a completed turn, Marlow can distil a few small, structured "memory
 cards" — durable signals like decisions, preferences, todos, constraints,
 implementation details, and open questions — and write them into external
 memory so future *recall* finds them more reliably.

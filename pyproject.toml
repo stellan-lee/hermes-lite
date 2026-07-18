@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hermes-agent"
+name = "marlow-agent"
 version = "0.15.1"
 description = "A self-improving AI agent with local tools, gateways, skills, and extensions"
 readme = "README.md"
@@ -25,7 +25,7 @@ dependencies = [
   # `uv lock` so the transitive resolution stays consistent. Don't
   # introduce ranges back without a written justification.
   #
-  # Scope rule: only packages used by EVERY hermes session belong here.
+  # Scope rule: only packages used by EVERY marlow session belong here.
   # Anything that's backend-specific (for example `edge-tts`) belongs in an
   # extra and gets lazy-installed via `tools/lazy_deps.py` when the
   # user picks that backend. Smaller `dependencies` = smaller blast
@@ -81,7 +81,7 @@ honcho = ["honcho-ai==2.0.1"]
 # a vulnerable pre-1.0.1 transitive. Bump in lockstep with uv.lock.
 mcp = ["mcp==1.26.0", "starlette==1.0.1"]  # starlette: CVE-2026-48710
 # Computer use — macOS background desktop control via cua-driver (MCP stdio).
-# The cua-driver binary itself is installed via `hermes tools` post-setup
+# The cua-driver binary itself is installed via `marlow tools` post-setup
 # (curl install script); this extra just pins the MCP client used to talk
 # to it, which is already provided by the `mcp` extra.
 computer-use = ["mcp==1.26.0", "starlette==1.0.1"]  # starlette: CVE-2026-48710
@@ -106,23 +106,23 @@ all = [
   # otherwise one quarantined PyPI release breaks every fresh install.
   #
   # Optional messaging, voice, memory, and speech backends install lazily.
-  "hermes-agent[cli]",
-  "hermes-agent[dev]",
-  "hermes-agent[mcp]",
+  "marlow-agent[cli]",
+  "marlow-agent[dev]",
+  "marlow-agent[mcp]",
 ]
 
 [project.scripts]
-hermes = "hermes_cli.main:main"
-hermes-agent = "run_agent:main"
+marlow = "marlow_cli.main:main"
+marlow-agent = "run_agent:main"
 
 [tool.setuptools]
-py-modules = ["run_agent", "model_tools", "toolsets", "batch_runner", "trajectory_compressor", "toolset_distributions", "cli", "hermes_constants", "hermes_state", "hermes_time", "hermes_logging", "utils", "mcp_serve"]
+py-modules = ["run_agent", "model_tools", "toolsets", "batch_runner", "trajectory_compressor", "toolset_distributions", "cli", "marlow_constants", "marlow_state", "marlow_time", "marlow_logging", "utils", "mcp_serve"]
 
 [tool.setuptools.package-data]
-hermes_cli = ["tui_dist/**/*", "scripts/install.sh", "data/*.json"]
+marlow_cli = ["tui_dist/**/*", "scripts/install.sh", "data/*.json"]
 gateway = ["assets/**/*"]
 plugins = [
-  # Plugin discovery (hermes_cli/plugins.py) reads a plugin.yaml/plugin.yml
+  # Plugin discovery (marlow_cli/plugins.py) reads a plugin.yaml/plugin.yml
   # manifest from each bundled plugin directory to register it. Wheels only
   # carry files declared here, so without this glob the wheel ships every
   # plugin's Python code but none of its manifests — the scan finds zero
@@ -133,13 +133,13 @@ plugins = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
+include = ["agent", "agent.*", "tools", "tools.*", "marlow_cli", "marlow_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "plugins", "plugins.*", "providers", "providers.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
     "integration: marks tests requiring external services or API keys",
-    "real_concurrent_gate: opt out of the autouse stub that disables _detect_concurrent_hermes_instances",
+    "real_concurrent_gate: opt out of the autouse stub that disables _detect_concurrent_marlow_instances",
 ]
 # pytest-timeout: per-test 30s hard cap with signal method.
 # This is the fallback inside each per-file pytest subprocess (see

@@ -108,7 +108,7 @@ approvals:
             encoding="utf-8",
         )
 
-        with patch.object(gateway_config, "get_hermes_home", return_value=tmp_path):
+        with patch.object(gateway_config, "get_marlow_home", return_value=tmp_path):
             config = gateway_config.load_gateway_config()
 
         assert config.admin_approval == AdminApprovalConfig(

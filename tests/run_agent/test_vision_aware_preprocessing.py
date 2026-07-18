@@ -109,21 +109,21 @@ class TestModelSupportsVision:
 
     def test_unknown_custom_model_returns_false(self):
         agent = _make_agent()
-        with patch("hermes_cli.config.load_config", return_value={}):
+        with patch("marlow_cli.config.load_config", return_value={}):
             assert agent._model_supports_vision() is False
 
     def test_codex_model_supports_vision(self):
         agent = _make_agent()
         agent.provider = "openai-codex"
         agent.model = "gpt-5.4"
-        with patch("hermes_cli.config.load_config", return_value={}):
+        with patch("marlow_cli.config.load_config", return_value={}):
             assert agent._model_supports_vision() is True
 
     def test_top_level_model_override_wins(self):
         agent = _make_agent()
         agent.provider = "custom"
         agent.model = "my-llava"
-        with patch("hermes_cli.config.load_config", return_value={"model": {"supports_vision": True}}):
+        with patch("marlow_cli.config.load_config", return_value={"model": {"supports_vision": True}}):
             assert agent._model_supports_vision() is True
 
     def test_per_provider_per_model_override_wins(self):
@@ -131,7 +131,7 @@ class TestModelSupportsVision:
         agent.provider = "custom"
         agent.model = "my-llava"
         cfg = {"providers": {"custom": {"models": {"my-llava": {"supports_vision": True}}}}}
-        with patch("hermes_cli.config.load_config", return_value=cfg):
+        with patch("marlow_cli.config.load_config", return_value=cfg):
             assert agent._model_supports_vision() is True
 
     def test_named_custom_provider_resolved_via_config_provider(self):
@@ -145,12 +145,12 @@ class TestModelSupportsVision:
             "model": {"provider": "my-vllm", "default": "my-llava"},
             "providers": {"my-vllm": {"models": {"my-llava": {"supports_vision": True}}}},
         }
-        with patch("hermes_cli.config.load_config", return_value=cfg):
+        with patch("marlow_cli.config.load_config", return_value=cfg):
             assert agent._model_supports_vision() is True
 
     def test_override_false_disables_codex_vision(self):
         agent = _make_agent()
         agent.provider = "openai-codex"
         agent.model = "gpt-5.4"
-        with patch("hermes_cli.config.load_config", return_value={"model": {"supports_vision": False}}):
+        with patch("marlow_cli.config.load_config", return_value={"model": {"supports_vision": False}}):
             assert agent._model_supports_vision() is False

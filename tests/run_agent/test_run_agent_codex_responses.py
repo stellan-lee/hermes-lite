@@ -154,7 +154,7 @@ class _FakeCreateStream:
 def _codex_request_kwargs():
     return {
         "model": "gpt-5-codex",
-        "instructions": "You are Hermes.",
+        "instructions": "You are Marlow.",
         "input": [{"role": "user", "content": "Ping"}],
         "tools": None,
         "store": False,
@@ -200,13 +200,13 @@ def test_build_api_kwargs_codex(monkeypatch):
     agent = _build_agent(monkeypatch)
     kwargs = agent._build_api_kwargs(
         [
-            {"role": "system", "content": "You are Hermes."},
+            {"role": "system", "content": "You are Marlow."},
             {"role": "user", "content": "Ping"},
         ]
     )
 
     assert kwargs["model"] == "gpt-5-codex"
-    assert kwargs["instructions"] == "You are Hermes."
+    assert kwargs["instructions"] == "You are Marlow."
     assert kwargs["store"] is False
     assert isinstance(kwargs["input"], list)
     assert kwargs["input"][0]["role"] == "user"
@@ -252,7 +252,7 @@ def test_build_api_kwargs_codex_clamps_minimal_effort(monkeypatch):
 
     kwargs = agent._build_api_kwargs(
         [
-            {"role": "system", "content": "You are Hermes."},
+            {"role": "system", "content": "You are Marlow."},
             {"role": "user", "content": "Ping"},
         ]
     )
@@ -399,7 +399,7 @@ def test_run_codex_stream_ignores_completed_response_with_null_output(monkeypatc
 
     The SDK's high-level ``responses.stream(...)`` helper used to reconstruct
     the final Response from that terminal field and raised ``TypeError:
-    'NoneType' object is not iterable``. The Hermes runtime consumes raw
+    'NoneType' object is not iterable``. The Marlow runtime consumes raw
     ``response.output_item.done`` events instead, so a null terminal ``output``
     must not affect the returned assistant/function-call items.
     """
@@ -470,7 +470,7 @@ def test_run_conversation_does_not_persist_or_hook_echoed_experience(monkeypatch
     )
     hooks: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        "hermes_cli.plugins.invoke_hook",
+        "marlow_cli.plugins.invoke_hook",
         lambda name, **kwargs: hooks.append((name, kwargs)),
     )
 
@@ -494,7 +494,7 @@ def test_post_api_hook_keeps_raw_response_when_no_internal_echo(monkeypatch):
     )
     hooks: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        "hermes_cli.plugins.invoke_hook",
+        "marlow_cli.plugins.invoke_hook",
         lambda name, **kwargs: hooks.append((name, kwargs)),
     )
 
@@ -542,7 +542,7 @@ def test_run_conversation_scrubs_echoed_experience_from_reasoning_state(monkeypa
     monkeypatch.setattr(agent, "_interruptible_api_call", lambda _kwargs: response)
     hooks: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        "hermes_cli.plugins.invoke_hook",
+        "marlow_cli.plugins.invoke_hook",
         lambda name, **kwargs: hooks.append((name, kwargs)),
     )
 
@@ -584,7 +584,7 @@ def test_experience_is_wire_only_with_prompt_cache_and_observability_hook(monkey
     )
     hooks: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        "hermes_cli.plugins.invoke_hook",
+        "marlow_cli.plugins.invoke_hook",
         lambda name, **kwargs: hooks.append((name, kwargs)),
     )
 
@@ -715,7 +715,7 @@ def test_try_refresh_codex_client_credentials_rebuilds_client(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "hermes_cli.auth.resolve_codex_runtime_credentials",
+        "marlow_cli.auth.resolve_codex_runtime_credentials",
         _fake_resolve,
     )
     monkeypatch.setattr(run_agent, "OpenAI", _fake_openai)
@@ -809,7 +809,7 @@ def test_run_conversation_scrubs_experience_from_tool_arguments(monkeypatch):
         hooks.append((name, kwargs))
         return []
 
-    monkeypatch.setattr("hermes_cli.plugins.invoke_hook", _capture_hook)
+    monkeypatch.setattr("marlow_cli.plugins.invoke_hook", _capture_hook)
 
     result = agent.run_conversation("run a command")
 
@@ -883,7 +883,7 @@ def test_preflight_codex_api_kwargs_strips_optional_function_call_id(monkeypatch
     preflight = _preflight_codex_api_kwargs(
         {
             "model": "gpt-5-codex",
-            "instructions": "You are Hermes.",
+            "instructions": "You are Marlow.",
             "input": [
                 {"role": "user", "content": "hi"},
                 {
@@ -912,7 +912,7 @@ def test_preflight_codex_api_kwargs_rejects_function_call_output_without_call_id
         _preflight_codex_api_kwargs(
             {
                 "model": "gpt-5-codex",
-                "instructions": "You are Hermes.",
+                "instructions": "You are Marlow.",
                 "input": [{"type": "function_call_output", "output": "{}"}],
                 "tools": [],
                 "store": False,

@@ -14,16 +14,16 @@ import pytest
 
 @pytest.fixture
 def backup_env(monkeypatch, tmp_path):
-    """Isolate HERMES_HOME + reload modules so every test starts clean."""
-    home = tmp_path / ".hermes"
+    """Isolate MARLOW_HOME + reload modules so every test starts clean."""
+    home = tmp_path / ".marlow"
     home.mkdir()
     (home / "skills").mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("MARLOW_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    # Reload so get_hermes_home picks up the env var fresh.
-    import hermes_constants
-    importlib.reload(hermes_constants)
+    # Reload so get_marlow_home picks up the env var fresh.
+    import marlow_constants
+    importlib.reload(marlow_constants)
     from agent import curator_backup
     importlib.reload(curator_backup)
     return {"home": home, "skills": home / "skills", "cb": curator_backup}
@@ -254,7 +254,7 @@ def test_real_run_takes_pre_snapshot(backup_env, monkeypatch):
     skills = backup_env["skills"]
     _write_skill(skills, "alpha")
 
-    # Reload curator module against the freshly-env'd hermes_constants
+    # Reload curator module against the freshly-env'd marlow_constants
     from agent import curator
     importlib.reload(curator)
 

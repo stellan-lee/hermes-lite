@@ -65,7 +65,7 @@ def test_checker_returns_true_when_configured(platform, checker, monkeypatch):
 
     # Set up platform-specific mock extra fields so the checker succeeds
     if platform == Platform.EMAIL:
-        mock_config.extra = {"address": "hermes@example.com"}
+        mock_config.extra = {"address": "marlow@example.com"}
     elif platform == Platform.WEBHOOK:
         mock_config.extra = {}
     elif platform == Platform.FEISHU:

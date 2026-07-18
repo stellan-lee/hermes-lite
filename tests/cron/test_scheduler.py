@@ -839,12 +839,12 @@ class TestRunJobSessionPersistence:
         }
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
+             patch("marlow_state.SessionDB", return_value=fake_db), \
              patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 "marlow_cli.runtime_provider.resolve_runtime_provider",
                  return_value={
                      "api_key": "test-key",
                      "base_url": "https://example.invalid/v1",
@@ -886,12 +886,12 @@ class TestRunJobSessionPersistence:
         }
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
+             patch("marlow_state.SessionDB", return_value=fake_db), \
              patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 "marlow_cli.runtime_provider.resolve_runtime_provider",
                  return_value={
                      "api_key": "***",
                      "base_url": "https://example.invalid/v1",
@@ -923,12 +923,12 @@ class TestRunJobSessionPersistence:
         }
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
+             patch("marlow_state.SessionDB", return_value=fake_db), \
              patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 "marlow_cli.runtime_provider.resolve_runtime_provider",
                  return_value={
                      "api_key": "***",
                      "base_url": "https://example.invalid/v1",
@@ -951,12 +951,12 @@ class TestRunJobSessionPersistence:
         """Common patches for run_job tests."""
         fake_db = MagicMock()
         return fake_db, [
-            patch("cron.scheduler._hermes_home", tmp_path),
+            patch("cron.scheduler._marlow_home", tmp_path),
             patch("cron.scheduler._resolve_origin", return_value=None),
             patch("dotenv.load_dotenv"),
-            patch("hermes_state.SessionDB", return_value=fake_db),
+            patch("marlow_state.SessionDB", return_value=fake_db),
             patch(
-                "hermes_cli.runtime_provider.resolve_runtime_provider",
+                "marlow_cli.runtime_provider.resolve_runtime_provider",
                 return_value={
                     "api_key": "test-key",
                     "base_url": "https://example.invalid/v1",
@@ -1022,7 +1022,7 @@ class TestRunJobSessionPersistence:
 
     def test_run_job_enabled_toolsets_resolves_from_platform_config_when_not_set(self, tmp_path):
         """When a job has no explicit enabled_toolsets, the scheduler now
-        resolves them from ``hermes tools`` platform config for ``cron``
+        resolves them from ``marlow tools`` platform config for ``cron``
         (PR #14xxx — blanket fix for Norbert's surprise ``moa`` run).
 
         The legacy "pass None → AIAgent loads full default" path is still
@@ -1045,7 +1045,7 @@ class TestRunJobSessionPersistence:
         kwargs = mock_agent_cls.call_args.kwargs
         # Resolution happened — not None, is a list.
         assert isinstance(kwargs["enabled_toolsets"], list)
-        # The cron default is _HERMES_CORE_TOOLS with _DEFAULT_OFF_TOOLSETS
+        # The cron default is _MARLOW_CORE_TOOLS with _DEFAULT_OFF_TOOLSETS
         # (``moa``, ``rl``) removed. The most important
         # invariant: ``moa`` is NOT in the default cron toolset, so a cron
         # run cannot accidentally spin up frontier models.
@@ -1053,7 +1053,7 @@ class TestRunJobSessionPersistence:
 
     def test_run_job_per_job_toolsets_win_over_platform_config(self, tmp_path):
         """Per-job enabled_toolsets (via cronjob tool) always take precedence
-        over the platform-level ``hermes tools`` config."""
+        over the platform-level ``marlow tools`` config."""
         job = {
             "id": "override-job",
             "name": "test",
@@ -1061,12 +1061,12 @@ class TestRunJobSessionPersistence:
             "enabled_toolsets": ["terminal"],
         }
         fake_db, patches = self._make_run_job_patches(tmp_path)
-        # Even if the user has ``hermes tools`` configured to enable web+file
+        # Even if the user has ``marlow tools`` configured to enable web+file
         # for cron, the per-job override wins.
         with patches[0], patches[1], patches[2], patches[3], patches[4], \
              patch("run_agent.AIAgent") as mock_agent_cls, \
              patch(
-                 "hermes_cli.tools_config._get_platform_tools",
+                 "marlow_cli.tools_config._get_platform_tools",
                  return_value={"web", "file"},
              ):
             mock_agent = MagicMock()
@@ -1090,12 +1090,12 @@ class TestRunJobSessionPersistence:
         }
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
+             patch("marlow_state.SessionDB", return_value=fake_db), \
              patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 "marlow_cli.runtime_provider.resolve_runtime_provider",
                  return_value={
                      "api_key": "***",
                      "base_url": "https://example.invalid/v1",
@@ -1166,12 +1166,12 @@ class TestRunJobSessionPersistence:
         }
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
+             patch("marlow_state.SessionDB", return_value=fake_db), \
              patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 "marlow_cli.runtime_provider.resolve_runtime_provider",
                  return_value={
                      "api_key": "***",
                      "base_url": "https://example.invalid/v1",
@@ -1205,12 +1205,12 @@ class TestRunJobSessionPersistence:
         }
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
+             patch("marlow_state.SessionDB", return_value=fake_db), \
              patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 "marlow_cli.runtime_provider.resolve_runtime_provider",
                  return_value={
                      "api_key": "***",
                      "base_url": "https://example.invalid/v1",
@@ -1252,7 +1252,7 @@ class TestRunJobSessionPersistence:
 
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler.get_due_jobs", return_value=[job]), \
              patch("cron.scheduler.advance_next_run"), \
              patch("cron.scheduler.mark_job_run") as mock_mark, \
@@ -1280,9 +1280,9 @@ class TestRunJobSessionPersistence:
 
         (tmp_path / ".env").write_text("TELEGRAM_HOME_CHANNEL=-2002\n")
         monkeypatch.delenv("TELEGRAM_HOME_CHANNEL", raising=False)
-        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_PLATFORM", raising=False)
-        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID", raising=False)
-        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_THREAD_ID", raising=False)
+        monkeypatch.delenv("MARLOW_CRON_AUTO_DELIVER_PLATFORM", raising=False)
+        monkeypatch.delenv("MARLOW_CRON_AUTO_DELIVER_CHAT_ID", raising=False)
+        monkeypatch.delenv("MARLOW_CRON_AUTO_DELIVER_THREAD_ID", raising=False)
 
         class FakeAgent:
             def __init__(self, *args, **kwargs):
@@ -1290,15 +1290,15 @@ class TestRunJobSessionPersistence:
 
             def run_conversation(self, *args, **kwargs):
                 from gateway.session_context import get_session_env
-                seen["platform"] = get_session_env("HERMES_CRON_AUTO_DELIVER_PLATFORM") or None
-                seen["chat_id"] = get_session_env("HERMES_CRON_AUTO_DELIVER_CHAT_ID") or None
-                seen["thread_id"] = get_session_env("HERMES_CRON_AUTO_DELIVER_THREAD_ID") or None
+                seen["platform"] = get_session_env("MARLOW_CRON_AUTO_DELIVER_PLATFORM") or None
+                seen["chat_id"] = get_session_env("MARLOW_CRON_AUTO_DELIVER_CHAT_ID") or None
+                seen["thread_id"] = get_session_env("MARLOW_CRON_AUTO_DELIVER_THREAD_ID") or None
                 return {"final_response": "ok"}
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
+             patch("marlow_state.SessionDB", return_value=fake_db), \
              patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 "marlow_cli.runtime_provider.resolve_runtime_provider",
                  return_value={
                      "api_key": "***",
                      "base_url": "https://example.invalid/v1",
@@ -1318,9 +1318,9 @@ class TestRunJobSessionPersistence:
             "chat_id": "-2002",
             "thread_id": None,
         }
-        assert os.getenv("HERMES_CRON_AUTO_DELIVER_PLATFORM") is None
-        assert os.getenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID") is None
-        assert os.getenv("HERMES_CRON_AUTO_DELIVER_THREAD_ID") is None
+        assert os.getenv("MARLOW_CRON_AUTO_DELIVER_PLATFORM") is None
+        assert os.getenv("MARLOW_CRON_AUTO_DELIVER_CHAT_ID") is None
+        assert os.getenv("MARLOW_CRON_AUTO_DELIVER_THREAD_ID") is None
         fake_db.close.assert_called_once()
 
     def test_run_job_clears_stale_auto_delivery_thread_id_between_jobs(self, tmp_path, monkeypatch):
@@ -1341,9 +1341,9 @@ class TestRunJobSessionPersistence:
         fake_db = MagicMock()
         seen = []
 
-        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_PLATFORM", raising=False)
-        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID", raising=False)
-        monkeypatch.delenv("HERMES_CRON_AUTO_DELIVER_THREAD_ID", raising=False)
+        monkeypatch.delenv("MARLOW_CRON_AUTO_DELIVER_PLATFORM", raising=False)
+        monkeypatch.delenv("MARLOW_CRON_AUTO_DELIVER_CHAT_ID", raising=False)
+        monkeypatch.delenv("MARLOW_CRON_AUTO_DELIVER_THREAD_ID", raising=False)
 
         class FakeAgent:
             def __init__(self, *args, **kwargs):
@@ -1354,17 +1354,17 @@ class TestRunJobSessionPersistence:
 
                 seen.append(
                     {
-                        "platform": get_session_env("HERMES_CRON_AUTO_DELIVER_PLATFORM") or None,
-                        "chat_id": get_session_env("HERMES_CRON_AUTO_DELIVER_CHAT_ID") or None,
-                        "thread_id": get_session_env("HERMES_CRON_AUTO_DELIVER_THREAD_ID") or None,
+                        "platform": get_session_env("MARLOW_CRON_AUTO_DELIVER_PLATFORM") or None,
+                        "chat_id": get_session_env("MARLOW_CRON_AUTO_DELIVER_CHAT_ID") or None,
+                        "thread_id": get_session_env("MARLOW_CRON_AUTO_DELIVER_THREAD_ID") or None,
                     }
                 )
                 return {"final_response": "ok"}
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
+             patch("marlow_state.SessionDB", return_value=fake_db), \
              patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 "marlow_cli.runtime_provider.resolve_runtime_provider",
                  return_value={
                      "api_key": "***",
                      "base_url": "https://example.invalid/v1",
@@ -1392,9 +1392,9 @@ class TestRunJobSessionPersistence:
                 "thread_id": None,
             },
         ]
-        assert os.getenv("HERMES_CRON_AUTO_DELIVER_PLATFORM") is None
-        assert os.getenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID") is None
-        assert os.getenv("HERMES_CRON_AUTO_DELIVER_THREAD_ID") is None
+        assert os.getenv("MARLOW_CRON_AUTO_DELIVER_PLATFORM") is None
+        assert os.getenv("MARLOW_CRON_AUTO_DELIVER_CHAT_ID") is None
+        assert os.getenv("MARLOW_CRON_AUTO_DELIVER_THREAD_ID") is None
         assert fake_db.close.call_count == 2
 
 
@@ -1417,10 +1417,10 @@ class TestRunJobConfigLogging:
         # resolution and MCP discovery, both of which can spawn subprocesses
         # / hit the network and have caused this test to time out on CI
         # (>30s wall clock) under load. See PR #33661 follow-up.
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_cli.runtime_provider.resolve_runtime_provider",
+             patch("marlow_cli.runtime_provider.resolve_runtime_provider",
                    return_value={"provider": "openrouter", "api_key": "x",
                                  "base_url": "https://example.invalid",
                                  "api_mode": "chat_completions"}), \
@@ -1451,10 +1451,10 @@ class TestRunJobConfigLogging:
             "prompt": "hello",
         }
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_cli.runtime_provider.resolve_runtime_provider",
+             patch("marlow_cli.runtime_provider.resolve_runtime_provider",
                    return_value={"provider": "openrouter", "api_key": "x",
                                  "base_url": "https://example.invalid",
                                  "api_mode": "chat_completions"}), \
@@ -1483,17 +1483,17 @@ class TestRunJobConfigEnvVarExpansion:
 
     def test_model_env_ref_in_config_yaml_is_expanded(self, tmp_path, monkeypatch):
         """${VAR} in config.yaml model: is expanded using env after .env is loaded."""
-        (tmp_path / "config.yaml").write_text("model: ${_HERMES_TEST_CRON_MODEL}\n")
-        monkeypatch.setenv("_HERMES_TEST_CRON_MODEL", "gpt-4o-mini-cron-test")
+        (tmp_path / "config.yaml").write_text("model: ${_MARLOW_TEST_CRON_MODEL}\n")
+        monkeypatch.setenv("_MARLOW_TEST_CRON_MODEL", "gpt-4o-mini-cron-test")
 
         job = {"id": "env-job", "name": "env test", "prompt": "hi"}
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
-             patch("hermes_cli.runtime_provider.resolve_runtime_provider",
+             patch("marlow_state.SessionDB", return_value=fake_db), \
+             patch("marlow_cli.runtime_provider.resolve_runtime_provider",
                    return_value=self._RUNTIME), \
              patch("run_agent.AIAgent") as mock_agent_cls:
             mock_agent = MagicMock()
@@ -1514,18 +1514,18 @@ class TestRunJobConfigEnvVarExpansion:
         (tmp_path / "config.yaml").write_text(
             "fallback_providers:\n"
             "  - provider: openrouter\n"
-            "    model: ${_HERMES_TEST_CRON_FALLBACK}\n"
+            "    model: ${_MARLOW_TEST_CRON_FALLBACK}\n"
         )
-        monkeypatch.setenv("_HERMES_TEST_CRON_FALLBACK", "gpt-4o-fallback-test")
+        monkeypatch.setenv("_MARLOW_TEST_CRON_FALLBACK", "gpt-4o-fallback-test")
 
         job = {"id": "fb-job", "name": "fallback test", "prompt": "hi"}
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
-             patch("hermes_cli.runtime_provider.resolve_runtime_provider",
+             patch("marlow_state.SessionDB", return_value=fake_db), \
+             patch("marlow_cli.runtime_provider.resolve_runtime_provider",
                    return_value=self._RUNTIME), \
              patch("run_agent.AIAgent") as mock_agent_cls:
             mock_agent = MagicMock()
@@ -1544,17 +1544,17 @@ class TestRunJobConfigEnvVarExpansion:
 
     def test_unexpanded_ref_passthrough_when_var_unset(self, tmp_path, monkeypatch):
         """When the env var is not set, the literal ${VAR} is kept verbatim (not crashed)."""
-        (tmp_path / "config.yaml").write_text("model: ${_HERMES_TEST_CRON_UNSET_VAR}\n")
-        monkeypatch.delenv("_HERMES_TEST_CRON_UNSET_VAR", raising=False)
+        (tmp_path / "config.yaml").write_text("model: ${_MARLOW_TEST_CRON_UNSET_VAR}\n")
+        monkeypatch.delenv("_MARLOW_TEST_CRON_UNSET_VAR", raising=False)
 
         job = {"id": "unset-job", "name": "unset var test", "prompt": "hi"}
         fake_db = MagicMock()
 
-        with patch("cron.scheduler._hermes_home", tmp_path), \
+        with patch("cron.scheduler._marlow_home", tmp_path), \
              patch("cron.scheduler._resolve_origin", return_value=None), \
              patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
-             patch("hermes_cli.runtime_provider.resolve_runtime_provider",
+             patch("marlow_state.SessionDB", return_value=fake_db), \
+             patch("marlow_cli.runtime_provider.resolve_runtime_provider",
                    return_value=self._RUNTIME), \
              patch("run_agent.AIAgent") as mock_agent_cls:
             mock_agent = MagicMock()
@@ -1565,7 +1565,7 @@ class TestRunJobConfigEnvVarExpansion:
         assert success is True
         kwargs = mock_agent_cls.call_args.kwargs
         # Unresolved refs are kept verbatim — _expand_env_vars contract
-        assert kwargs["model"] == "${_HERMES_TEST_CRON_UNSET_VAR}"
+        assert kwargs["model"] == "${_MARLOW_TEST_CRON_UNSET_VAR}"
 
 
 
@@ -1796,7 +1796,7 @@ class TestRunJobWakeGate:
             "requested_provider": None,
         }
         with patch(
-            "hermes_cli.runtime_provider.resolve_runtime_provider",
+            "marlow_cli.runtime_provider.resolve_runtime_provider",
             return_value=fake_runtime,
         ):
             yield
@@ -2034,8 +2034,8 @@ class TestParallelTick:
             )
             import time
             time.sleep(0.05)  # give other thread time to set its vars
-            platform = get_session_env("HERMES_SESSION_PLATFORM")
-            chat_id = get_session_env("HERMES_SESSION_CHAT_ID")
+            platform = get_session_env("MARLOW_SESSION_PLATFORM")
+            chat_id = get_session_env("MARLOW_SESSION_CHAT_ID")
             seen[job["id"]] = {"platform": platform, "chat_id": chat_id}
             clear_session_vars(tokens)
             return (True, "output", "response", None)
@@ -2060,8 +2060,8 @@ class TestParallelTick:
         assert seen["dc-job"] == {"platform": "discord", "chat_id": "222"}
 
     def test_max_parallel_env_var(self, monkeypatch):
-        """HERMES_CRON_MAX_PARALLEL=1 should restore serial behaviour."""
-        monkeypatch.setenv("HERMES_CRON_MAX_PARALLEL", "1")
+        """MARLOW_CRON_MAX_PARALLEL=1 should restore serial behaviour."""
+        monkeypatch.setenv("MARLOW_CRON_MAX_PARALLEL", "1")
         call_times = []
 
         def mock_run_job(job):

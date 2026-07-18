@@ -74,7 +74,7 @@ class TestHeredocMarker:
         content = f"some text with {HEREDOC_MARKER} embedded"
         marker = _heredoc_marker(content)
         assert marker != HEREDOC_MARKER
-        assert marker.startswith("HERMES_PERSIST_")
+        assert marker.startswith("MARLOW_PERSIST_")
         assert marker not in content
 
 
@@ -84,7 +84,7 @@ class TestWriteToSandbox:
     def test_success(self):
         env = MagicMock()
         env.execute.return_value = {"output": "", "returncode": 0}
-        result = _write_to_sandbox("hello world", "/tmp/hermes-results/abc.txt", env)
+        result = _write_to_sandbox("hello world", "/tmp/marlow-results/abc.txt", env)
         assert result is True
         env.execute.assert_called_once()
         cmd = env.execute.call_args[0][0]
@@ -98,7 +98,7 @@ class TestWriteToSandbox:
     def test_failure_returns_false(self):
         env = MagicMock()
         env.execute.return_value = {"output": "error", "returncode": 1}
-        result = _write_to_sandbox("content", "/tmp/hermes-results/abc.txt", env)
+        result = _write_to_sandbox("content", "/tmp/marlow-results/abc.txt", env)
         assert result is False
 
     def test_large_content_via_stdin(self):
@@ -107,7 +107,7 @@ class TestWriteToSandbox:
         env = MagicMock()
         env.execute.return_value = {"output": "", "returncode": 0}
         big = "x" * 200_000
-        _write_to_sandbox(big, "/tmp/hermes-results/big.txt", env)
+        _write_to_sandbox(big, "/tmp/marlow-results/big.txt", env)
         cmd = env.execute.call_args[0][0]
         assert len(cmd) < 1_000  # cmd is just `mkdir -p X && cat > Y`
         assert env.execute.call_args[1]["stdin_data"] == big
@@ -115,35 +115,35 @@ class TestWriteToSandbox:
     def test_timeout_passed(self):
         env = MagicMock()
         env.execute.return_value = {"output": "", "returncode": 0}
-        _write_to_sandbox("content", "/tmp/hermes-results/abc.txt", env)
+        _write_to_sandbox("content", "/tmp/marlow-results/abc.txt", env)
         assert env.execute.call_args[1]["timeout"] == 30
 
     def test_uses_parent_dir_of_remote_path(self):
         env = MagicMock()
         env.execute.return_value = {"output": "", "returncode": 0}
-        remote_path = "/var/tmp/hermes-custom/hermes-results/abc.txt"
+        remote_path = "/var/tmp/marlow-custom/marlow-results/abc.txt"
         _write_to_sandbox("content", remote_path, env)
         cmd = env.execute.call_args[0][0]
-        assert "mkdir -p /var/tmp/hermes-custom/hermes-results" in cmd
+        assert "mkdir -p /var/tmp/marlow-custom/marlow-results" in cmd
 
     def test_path_with_spaces_is_quoted(self):
         env = MagicMock()
         env.execute.return_value = {"output": "", "returncode": 0}
-        remote_path = "/tmp/hermes results/abc file.txt"
+        remote_path = "/tmp/marlow results/abc file.txt"
         _write_to_sandbox("content", remote_path, env)
         cmd = env.execute.call_args[0][0]
-        assert "'/tmp/hermes results'" in cmd
-        assert "'/tmp/hermes results/abc file.txt'" in cmd
+        assert "'/tmp/marlow results'" in cmd
+        assert "'/tmp/marlow results/abc file.txt'" in cmd
 
     def test_shell_metacharacters_neutralized(self):
         """Paths with shell metacharacters must be quoted to prevent injection."""
         env = MagicMock()
         env.execute.return_value = {"output": "", "returncode": 0}
-        malicious_path = "/tmp/hermes-results/$(whoami).txt"
+        malicious_path = "/tmp/marlow-results/$(whoami).txt"
         _write_to_sandbox("content", malicious_path, env)
         cmd = env.execute.call_args[0][0]
         # The $() must not appear unquoted — shlex.quote wraps it
-        assert "'/tmp/hermes-results/$(whoami).txt'" in cmd
+        assert "'/tmp/marlow-results/$(whoami).txt'" in cmd
 
     def test_semicolon_injection_neutralized(self):
         env = MagicMock()
@@ -161,8 +161,8 @@ class TestResolveStorageDir:
 
     def test_uses_env_temp_dir_when_available(self):
         env = MagicMock()
-        env.get_temp_dir.return_value = "/var/tmp/hermes-custom"
-        assert _resolve_storage_dir(env) == "/var/tmp/hermes-custom/hermes-results"
+        env.get_temp_dir.return_value = "/var/tmp/marlow-custom"
+        assert _resolve_storage_dir(env) == "/var/tmp/marlow-custom/marlow-results"
 
 
 # ── _build_persisted_message ──────────────────────────────────────────
@@ -173,12 +173,12 @@ class TestBuildPersistedMessage:
             preview="first 100 chars...",
             has_more=True,
             original_size=50_000,
-            file_path="/tmp/hermes-results/test123.txt",
+            file_path="/tmp/marlow-results/test123.txt",
         )
         assert msg.startswith(PERSISTED_OUTPUT_TAG)
         assert msg.endswith(PERSISTED_OUTPUT_CLOSING_TAG)
         assert "50,000 characters" in msg
-        assert "/tmp/hermes-results/test123.txt" in msg
+        assert "/tmp/marlow-results/test123.txt" in msg
         assert "read_file" in msg
         assert "first 100 chars..." in msg
         assert "..." in msg  # has_more indicator
@@ -188,7 +188,7 @@ class TestBuildPersistedMessage:
             preview="complete content",
             has_more=False,
             original_size=16,
-            file_path="/tmp/hermes-results/x.txt",
+            file_path="/tmp/marlow-results/x.txt",
         )
         # Should not have the trailing "..." indicator before closing tag
         lines = msg.strip().split("\n")
@@ -199,7 +199,7 @@ class TestBuildPersistedMessage:
             preview="x",
             has_more=True,
             original_size=2_000_000,
-            file_path="/tmp/hermes-results/big.txt",
+            file_path="/tmp/marlow-results/big.txt",
         )
         assert "MB" in msg
 
@@ -393,7 +393,7 @@ class TestMaybePersistToolResult:
     def test_env_temp_dir_changes_persisted_path(self):
         env = MagicMock()
         env.execute.return_value = {"output": "", "returncode": 0}
-        env.get_temp_dir.return_value = "/var/tmp/hermes-custom"
+        env.get_temp_dir.return_value = "/var/tmp/marlow-custom"
         content = "x" * 60_000
         result = maybe_persist_tool_result(
             content=content,
@@ -402,9 +402,9 @@ class TestMaybePersistToolResult:
             env=env,
             threshold=30_000,
         )
-        assert "/var/tmp/hermes-custom/hermes-results/tc_custom.txt" in result
+        assert "/var/tmp/marlow-custom/marlow-results/tc_custom.txt" in result
         cmd = env.execute.call_args[0][0]
-        assert "mkdir -p /var/tmp/hermes-custom/hermes-results" in cmd
+        assert "mkdir -p /var/tmp/marlow-custom/marlow-results" in cmd
 
     def test_threshold_zero_forces_persist(self):
         env = MagicMock()

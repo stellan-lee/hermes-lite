@@ -1,4 +1,4 @@
-"""Tests for HermesCLI initialization -- catches configuration bugs
+"""Tests for MarlowCLI initialization -- catches configuration bugs
 that only manifest at runtime (not in mocked unit tests)."""
 
 import os
@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 def _make_cli(env_overrides=None, config_overrides=None, **kwargs):
-    """Create a HermesCLI instance with minimal mocking."""
+    """Create a MarlowCLI instance with minimal mocking."""
     import importlib
 
     _clean_config = {
@@ -25,7 +25,7 @@ def _make_cli(env_overrides=None, config_overrides=None, **kwargs):
     }
     if config_overrides:
         _clean_config.update(config_overrides)
-    clean_env = {"LLM_MODEL": "", "HERMES_MAX_ITERATIONS": ""}
+    clean_env = {"LLM_MODEL": "", "MARLOW_MAX_ITERATIONS": ""}
     if env_overrides:
         clean_env.update(env_overrides)
     prompt_toolkit_stubs = {
@@ -51,7 +51,7 @@ def _make_cli(env_overrides=None, config_overrides=None, **kwargs):
         _cli_mod = importlib.reload(_cli_mod)
         with patch.object(_cli_mod, "get_tool_definitions", return_value=[]), \
              patch.dict(_cli_mod.__dict__, {"CLI_CONFIG": _clean_config}):
-            return _cli_mod.HermesCLI(**kwargs)
+            return _cli_mod.MarlowCLI(**kwargs)
 
 
 class TestMaxTurnsResolution:
@@ -73,12 +73,12 @@ class TestMaxTurnsResolution:
 
     def test_env_var_max_turns(self):
         """Env var is used when config file doesn't set max_turns."""
-        cli_obj = _make_cli(env_overrides={"HERMES_MAX_ITERATIONS": "42"})
+        cli_obj = _make_cli(env_overrides={"MARLOW_MAX_ITERATIONS": "42"})
         assert cli_obj.max_turns == 42
 
     def test_invalid_env_var_max_turns_falls_back_to_default(self):
         """Invalid env values should not crash CLI init."""
-        cli_obj = _make_cli(env_overrides={"HERMES_MAX_ITERATIONS": "not-a-number"})
+        cli_obj = _make_cli(env_overrides={"MARLOW_MAX_ITERATIONS": "not-a-number"})
         assert cli_obj.max_turns == 90
 
     def test_max_turns_never_none_for_agent(self):
@@ -266,11 +266,11 @@ class TestHistoryDisplay:
         output = capsys.readouterr().out
 
         assert "[You #1]" in output
-        assert "[Hermes #2]" in output
+        assert "[Marlow #2]" in output
         assert "(requested 2 tool calls)" in output
         assert "[Tools]" in output
         assert "(2 tool messages hidden)" in output
-        assert "[Hermes #3]" in output
+        assert "[Marlow #3]" in output
         assert "[You #4]" in output
         assert "[You #5]" not in output
         assert "A" * 250 in output
@@ -289,8 +289,8 @@ class TestHistoryDisplay:
             },
             {
                 "id": "20260401_201329_d85961",
-                "title": "Checking Running Hermes Agent",
-                "preview": "check running gateways for hermes agent",
+                "title": "Checking Running Marlow Agent",
+                "preview": "check running gateways for marlow agent",
                 "last_active": 0,
             },
         ]
@@ -299,7 +299,7 @@ class TestHistoryDisplay:
         output = capsys.readouterr().out
 
         assert "No messages in the current chat yet" in output
-        assert "Checking Running Hermes Agent" in output
+        assert "Checking Running Marlow Agent" in output
         assert "20260401_201329_d85961" in output
         assert "/resume" in output
         assert "Current preview" not in output
@@ -317,8 +317,8 @@ class TestHistoryDisplay:
             },
             {
                 "id": "20260401_201329_d85961",
-                "title": "Checking Running Hermes Agent",
-                "preview": "check running gateways for hermes agent",
+                "title": "Checking Running Marlow Agent",
+                "preview": "check running gateways for marlow agent",
                 "last_active": 0,
             },
         ]
@@ -327,13 +327,13 @@ class TestHistoryDisplay:
         output = capsys.readouterr().out
 
         assert "Recent sessions" in output
-        assert "Checking Running Hermes Agent" in output
+        assert "Checking Running Marlow Agent" in output
         assert "Use /resume" in output
         assert "session title" in output
 
-    def test_resume_updates_hermes_session_id_env_and_context(self, tmp_path):
+    def test_resume_updates_marlow_session_id_env_and_context(self, tmp_path):
         from gateway.session_context import _UNSET, _VAR_MAP, get_session_env
-        from hermes_state import SessionDB
+        from marlow_state import SessionDB
 
         cli = _make_cli()
         cli.session_id = "current_session"
@@ -344,19 +344,19 @@ class TestHistoryDisplay:
         cli._session_db.create_session("target_session", "cli")
         cli._session_db.append_message("target_session", "user", "hello from resumed session")
 
-        os.environ["HERMES_SESSION_ID"] = "current_session"
-        _VAR_MAP["HERMES_SESSION_ID"].set("current_session")
+        os.environ["MARLOW_SESSION_ID"] = "current_session"
+        _VAR_MAP["MARLOW_SESSION_ID"].set("current_session")
 
         try:
             cli._handle_resume_command("/resume target_session")
 
             assert cli.session_id == "target_session"
-            assert os.environ["HERMES_SESSION_ID"] == "target_session"
-            assert get_session_env("HERMES_SESSION_ID") == "target_session"
+            assert os.environ["MARLOW_SESSION_ID"] == "target_session"
+            assert get_session_env("MARLOW_SESSION_ID") == "target_session"
         finally:
             cli._session_db.close()
-            os.environ.pop("HERMES_SESSION_ID", None)
-            _VAR_MAP["HERMES_SESSION_ID"].set(_UNSET)
+            os.environ.pop("MARLOW_SESSION_ID", None)
+            _VAR_MAP["MARLOW_SESSION_ID"].set(_UNSET)
 
     def test_resume_list_shows_full_long_titles(self, capsys):
         """Long session titles render in full in the /resume table — not
@@ -400,8 +400,8 @@ class TestHistoryDisplay:
         cli._session_db.list_sessions_rich.return_value = [
             {
                 "id": "20260401_201329_d85961",
-                "title": "Checking Running Hermes Agent",
-                "preview": "check running gateways for hermes agent",
+                "title": "Checking Running Marlow Agent",
+                "preview": "check running gateways for marlow agent",
                 "last_active": 0,
             },
         ]
@@ -413,7 +413,7 @@ class TestHistoryDisplay:
 
         assert "Unknown command" not in output
         assert "Recent sessions" in output
-        assert "Checking Running Hermes Agent" in output
+        assert "Checking Running Marlow Agent" in output
         assert "20260401_201329_d85961" in output
 
     def test_sessions_list_subcommand_lists_recent_sessions(self, capsys):
@@ -424,8 +424,8 @@ class TestHistoryDisplay:
         cli._session_db.list_sessions_rich.return_value = [
             {
                 "id": "20260401_201329_d85961",
-                "title": "Checking Running Hermes Agent",
-                "preview": "check running gateways for hermes agent",
+                "title": "Checking Running Marlow Agent",
+                "preview": "check running gateways for marlow agent",
                 "last_active": 0,
             },
         ]
@@ -435,7 +435,7 @@ class TestHistoryDisplay:
 
         assert "Unknown command" not in output
         assert "Recent sessions" in output
-        assert "Checking Running Hermes Agent" in output
+        assert "Checking Running Marlow Agent" in output
 
     def test_sessions_with_target_delegates_to_resume(self):
         """/sessions <id_or_title> behaves identically to /resume <id_or_title>.
@@ -446,10 +446,10 @@ class TestHistoryDisplay:
         """
         cli = _make_cli()
         with patch.object(cli, "_handle_resume_command") as mock_resume:
-            cli.process_command("/sessions Checking Running Hermes Agent")
+            cli.process_command("/sessions Checking Running Marlow Agent")
 
         mock_resume.assert_called_once_with(
-            "/resume Checking Running Hermes Agent"
+            "/resume Checking Running Marlow Agent"
         )
 
     def test_sessions_command_is_dispatched(self):

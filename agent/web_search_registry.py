@@ -19,7 +19,7 @@ The active provider is chosen by configuration with this precedence:
 4. Bundled preference order — ``brave-free`` → ``ddgs`` — filtered by
    availability.
 5. Otherwise ``None`` — the tool surfaces a helpful error pointing at
-   ``hermes tools``.
+   ``marlow tools``.
 
 The capability filter (``supports_search`` / ``supports_extract``) is
 applied at every step so a search-only provider (``brave-free``)
@@ -95,7 +95,7 @@ def get_provider(name: str) -> Optional[WebSearchProvider]:
 def _read_config_key(*path: str) -> Optional[str]:
     """Resolve a dotted config key from ``config.yaml``. Returns None on miss."""
     try:
-        from hermes_cli.config import load_config
+        from marlow_cli.config import load_config
 
         cfg = load_config()
         cur = cfg

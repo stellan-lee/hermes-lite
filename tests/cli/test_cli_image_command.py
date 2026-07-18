@@ -2,14 +2,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cli import (
-    HermesCLI,
+    MarlowCLI,
     _collect_query_images,
     _format_image_attachment_badges,
 )
 
 
 def _make_cli():
-    cli_obj = HermesCLI.__new__(HermesCLI)
+    cli_obj = MarlowCLI.__new__(MarlowCLI)
     cli_obj._attached_images = []
     return cli_obj
 

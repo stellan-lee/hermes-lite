@@ -1,6 +1,6 @@
 """
 SQLite-backed fact store with entity resolution and trust scoring.
-Single-user Hermes memory store plugin.
+Single-user Marlow memory store plugin.
 """
 
 import re
@@ -105,8 +105,8 @@ class MemoryStore:
         hrr_dim: int = 1024,
     ) -> None:
         if db_path is None:
-            from hermes_constants import get_hermes_home
-            db_path = str(get_hermes_home() / "memory_store.db")
+            from marlow_constants import get_marlow_home
+            db_path = str(get_marlow_home() / "memory_store.db")
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.default_trust = _clamp_trust(default_trust)
@@ -128,8 +128,8 @@ class MemoryStore:
     def _init_db(self) -> None:
         """Create tables, indexes, and triggers if they do not exist. Enable WAL mode."""
         # Use the shared WAL-fallback helper so memory_store.db degrades
-        # gracefully on NFS/SMB/FUSE-mounted HERMES_HOME.
-        from hermes_state import apply_wal_with_fallback
+        # gracefully on NFS/SMB/FUSE-mounted MARLOW_HOME.
+        from marlow_state import apply_wal_with_fallback
         apply_wal_with_fallback(self._conn, db_label="memory_store.db (holographic)")
         self._conn.executescript(_SCHEMA)
         # Migrate: add hrr_vector column if missing (safe for existing databases)

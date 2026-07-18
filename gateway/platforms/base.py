@@ -24,7 +24,7 @@ from utils import normalize_proxy_url
 
 logger = logging.getLogger(__name__)
 
-# Audio file extensions Hermes recognizes for native audio delivery.
+# Audio file extensions Marlow recognizes for native audio delivery.
 # Kept in sync with tools/send_message_tool.py and cron/scheduler.py via
 # should_send_media_as_audio() below.
 _AUDIO_EXTS = frozenset({'.ogg', '.opus', '.mp3', '.wav', '.m4a', '.flac'})
@@ -55,7 +55,7 @@ def _thread_metadata_for_source(source, reply_to_message_id: str | None = None) 
     """Build platform-aware thread metadata for adapter sends.
 
     Most platforms route threaded sends with a generic ``thread_id`` metadata
-    value. Telegram private-chat topics created through Hermes' DM-topic helper
+    value. Telegram private-chat topics created through Marlow' DM-topic helper
     are exposed in updates as ``message_thread_id`` plus a reply anchor. Live
     user-message replies route with ``message_thread_id`` + ``reply_to_message_id``;
     synthetic/resumed sends that have no reply anchor fall back to Telegram's
@@ -80,7 +80,7 @@ def _reply_anchor_for_event(event) -> str | None:
     """Return reply_to id for platforms that need reply semantics.
 
     Telegram forum/supergroup topics should be routed by topic metadata, not by
-    replying to the triggering message. Hermes-created Telegram private-chat
+    replying to the triggering message. Marlow-created Telegram private-chat
     topic lanes prefer replying to the triggering user message so the answer
     stays attached to the active lane; synthetic/resumed sends fall back to
     ``direct_messages_topic_id`` metadata when no message id is available.
@@ -484,12 +484,12 @@ sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 from gateway.config import Platform, PlatformConfig
 from gateway.session import SessionSource, build_session_key
-from hermes_constants import get_default_hermes_root, get_hermes_dir, get_hermes_home
+from marlow_constants import get_default_marlow_root, get_marlow_dir, get_marlow_home
 
 
 GATEWAY_SECRET_CAPTURE_UNSUPPORTED_MESSAGE = (
     "Secure secret entry is not supported over messaging. "
-    "Load this skill in the local CLI to be prompted, or add the key to ~/.hermes/.env manually."
+    "Load this skill in the local CLI to be prompted, or add the key to ~/.marlow/.env manually."
 )
 
 
@@ -556,8 +556,8 @@ async def _ssrf_redirect_guard(response):
 # (e.g. Telegram file URLs expire after ~1 hour).
 # ---------------------------------------------------------------------------
 
-# Default location: {HERMES_HOME}/cache/images/ (legacy: image_cache/)
-IMAGE_CACHE_DIR = get_hermes_dir("cache/images", "image_cache")
+# Default location: {MARLOW_HOME}/cache/images/ (legacy: image_cache/)
+IMAGE_CACHE_DIR = get_marlow_dir("cache/images", "image_cache")
 
 
 def get_image_cache_dir() -> Path:
@@ -646,7 +646,7 @@ async def cache_image_from_url(url: str, ext: str = ".jpg", retries: int = 2) ->
                 response = await client.get(
                     url,
                     headers={
-                        "User-Agent": "Mozilla/5.0 (compatible; HermesAgent/1.0)",
+                        "User-Agent": "Mozilla/5.0 (compatible; MarlowAgent/1.0)",
                         "Accept": "image/*,*/*;q=0.8",
                     },
                 )
@@ -698,7 +698,7 @@ def cleanup_image_cache(max_age_hours: int = 24) -> int:
 # here so the STT tool (OpenAI Whisper) can transcribe them from local files.
 # ---------------------------------------------------------------------------
 
-AUDIO_CACHE_DIR = get_hermes_dir("cache/audio", "audio_cache")
+AUDIO_CACHE_DIR = get_marlow_dir("cache/audio", "audio_cache")
 
 
 def get_audio_cache_dir() -> Path:
@@ -760,7 +760,7 @@ async def cache_audio_from_url(url: str, ext: str = ".ogg", retries: int = 2) ->
                 response = await client.get(
                     url,
                     headers={
-                        "User-Agent": "Mozilla/5.0 (compatible; HermesAgent/1.0)",
+                        "User-Agent": "Mozilla/5.0 (compatible; MarlowAgent/1.0)",
                         "Accept": "audio/*,*/*;q=0.8",
                     },
                 )
@@ -791,7 +791,7 @@ async def cache_audio_from_url(url: str, ext: str = ".ogg", retries: int = 2) ->
 # here so the agent can reference them by local file path.
 # ---------------------------------------------------------------------------
 
-VIDEO_CACHE_DIR = get_hermes_dir("cache/videos", "video_cache")
+VIDEO_CACHE_DIR = get_marlow_dir("cache/videos", "video_cache")
 
 SUPPORTED_VIDEO_TYPES = {
     ".mp4": "video/mp4",
@@ -824,38 +824,38 @@ def cache_video_from_bytes(data: bytes, ext: str = ".mp4") -> str:
 # here so the agent can reference them by local file path.
 # ---------------------------------------------------------------------------
 
-DOCUMENT_CACHE_DIR = get_hermes_dir("cache/documents", "document_cache")
-SCREENSHOT_CACHE_DIR = get_hermes_dir("cache/screenshots", "browser_screenshots")
-_HERMES_HOME = get_hermes_home()
-_HERMES_ROOT = get_default_hermes_root()
-MEDIA_DELIVERY_ALLOW_DIRS_ENV = "HERMES_MEDIA_ALLOW_DIRS"
-MEDIA_DELIVERY_TRUST_RECENT_ENV = "HERMES_MEDIA_TRUST_RECENT_FILES"
-MEDIA_DELIVERY_TRUST_RECENT_SECONDS_ENV = "HERMES_MEDIA_TRUST_RECENT_SECONDS"
+DOCUMENT_CACHE_DIR = get_marlow_dir("cache/documents", "document_cache")
+SCREENSHOT_CACHE_DIR = get_marlow_dir("cache/screenshots", "browser_screenshots")
+_MARLOW_HOME = get_marlow_home()
+_MARLOW_ROOT = get_default_marlow_root()
+MEDIA_DELIVERY_ALLOW_DIRS_ENV = "MARLOW_MEDIA_ALLOW_DIRS"
+MEDIA_DELIVERY_TRUST_RECENT_ENV = "MARLOW_MEDIA_TRUST_RECENT_FILES"
+MEDIA_DELIVERY_TRUST_RECENT_SECONDS_ENV = "MARLOW_MEDIA_TRUST_RECENT_SECONDS"
 # Strict mode toggles the original allowlist+recency path-validation behavior.
 # Off by default — symmetric with inbound (we accept any document type the
 # user uploads), and with the denylist still blocking obvious credential /
 # system paths. Operators running public-facing gateways where prompt
 # injection from one user could exfiltrate the host's secrets to that same
 # user should set this to true.
-MEDIA_DELIVERY_STRICT_ENV = "HERMES_MEDIA_DELIVERY_STRICT"
+MEDIA_DELIVERY_STRICT_ENV = "MARLOW_MEDIA_DELIVERY_STRICT"
 MEDIA_DELIVERY_SAFE_ROOTS = (
     IMAGE_CACHE_DIR,
     AUDIO_CACHE_DIR,
     VIDEO_CACHE_DIR,
     DOCUMENT_CACHE_DIR,
     SCREENSHOT_CACHE_DIR,
-    _HERMES_HOME / "image_cache",
-    _HERMES_HOME / "audio_cache",
-    _HERMES_HOME / "video_cache",
-    _HERMES_HOME / "document_cache",
-    _HERMES_HOME / "browser_screenshots",
+    _MARLOW_HOME / "image_cache",
+    _MARLOW_HOME / "audio_cache",
+    _MARLOW_HOME / "video_cache",
+    _MARLOW_HOME / "document_cache",
+    _MARLOW_HOME / "browser_screenshots",
     # Canonical cache layout — listed alongside the legacy *_cache dirs so
     # generated artifacts deliver on installs that have both (#31733).
-    _HERMES_HOME / "cache" / "images",
-    _HERMES_HOME / "cache" / "audio",
-    _HERMES_HOME / "cache" / "videos",
-    _HERMES_HOME / "cache" / "documents",
-    _HERMES_HOME / "cache" / "screenshots",
+    _MARLOW_HOME / "cache" / "images",
+    _MARLOW_HOME / "cache" / "audio",
+    _MARLOW_HOME / "cache" / "videos",
+    _MARLOW_HOME / "cache" / "documents",
+    _MARLOW_HOME / "cache" / "screenshots",
 )
 
 # Default recency window for trusting freshly-produced files (seconds).
@@ -955,14 +955,14 @@ def _media_delivery_denied_paths() -> List[Path]:
     home = Path(os.path.expanduser("~"))
     for sub in _MEDIA_DELIVERY_DENIED_HOME_SUBPATHS:
         denied.append(home / sub)
-    # The active Hermes profile and shared Hermes root both contain control
+    # The active Marlow profile and shared Marlow root both contain control
     # files and credentials. Only cache subdirectories under them are
     # explicitly allowlisted above.
-    for hermes_root in (_HERMES_HOME, _HERMES_ROOT):
-        denied.append(hermes_root / ".env")
-        denied.append(hermes_root / "auth.json")
-        denied.append(hermes_root / "credentials")
-        denied.append(hermes_root / "config.yaml")
+    for marlow_root in (_MARLOW_HOME, _MARLOW_ROOT):
+        denied.append(marlow_root / ".env")
+        denied.append(marlow_root / "auth.json")
+        denied.append(marlow_root / "credentials")
+        denied.append(marlow_root / "config.yaml")
     return denied
 
 
@@ -1014,9 +1014,9 @@ def validate_media_delivery_path(path: str) -> Optional[str]:
     back any file that isn't a credential.
 
     Strict mode (opt-in via ``gateway.strict`` in ``config.yaml`` or
-    ``HERMES_MEDIA_DELIVERY_STRICT=1``): the file MUST live under a
-    Hermes-managed cache, under an operator-allowlisted root
-    (``HERMES_MEDIA_ALLOW_DIRS``), or be freshly produced inside the
+    ``MARLOW_MEDIA_DELIVERY_STRICT=1``): the file MUST live under a
+    Marlow-managed cache, under an operator-allowlisted root
+    (``MARLOW_MEDIA_ALLOW_DIRS``), or be freshly produced inside the
     configured recency window. Suitable for public-facing bots where
     prompt injection from one user shouldn't be able to exfiltrate the
     host's secrets to that same user.
@@ -1060,8 +1060,8 @@ def validate_media_delivery_path(path: str) -> Optional[str]:
             return str(resolved)
 
     # Non-strict mode (default): accept anything not on the denylist.
-    # The denylist still blocks /etc, /proc, ~/.ssh, ~/.aws, ~/.hermes/.env,
-    # ~/.hermes/auth.json, etc. — so the obvious prompt-injection sites
+    # The denylist still blocks /etc, /proc, ~/.ssh, ~/.aws, ~/.marlow/.env,
+    # ~/.marlow/auth.json, etc. — so the obvious prompt-injection sites
     # (``MEDIA:/etc/passwd``, ``MEDIA:~/.ssh/id_rsa``) remain rejected.
     if not _media_delivery_strict_mode():
         if _path_under_denied_prefix(resolved):
@@ -1479,8 +1479,8 @@ class TextDebounceState:
 
 _PLAINTEXT_GATEWAY_RESTART_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^(?:please\s+)?restart\s+(?:the\s+)?gateway[.!?\s]*$", re.IGNORECASE),
-    re.compile(r"^(?:please\s+)?restart\s+(?:the\s+)?hermes\s+gateway[.!?\s]*$", re.IGNORECASE),
-    re.compile(r"^(?:please\s+)?restart\s+hermes[.!?\s]*$", re.IGNORECASE),
+    re.compile(r"^(?:please\s+)?restart\s+(?:the\s+)?marlow\s+gateway[.!?\s]*$", re.IGNORECASE),
+    re.compile(r"^(?:please\s+)?restart\s+marlow[.!?\s]*$", re.IGNORECASE),
 )
 
 
@@ -1740,14 +1740,14 @@ class BasePlatformAdapter(ABC):
         self._pending_messages: Dict[str, MessageEvent] = {}
         self._session_tasks: Dict[str, asyncio.Task] = {}
         self._busy_text_mode: str = (
-            os.environ.get("HERMES_GATEWAY_BUSY_TEXT_MODE", "queue").strip().lower()
+            os.environ.get("MARLOW_GATEWAY_BUSY_TEXT_MODE", "queue").strip().lower()
             or "queue"
         )
         self._busy_text_debounce_seconds: float = _float_env(
-            "HERMES_GATEWAY_BUSY_TEXT_DEBOUNCE_SECONDS", 0.35
+            "MARLOW_GATEWAY_BUSY_TEXT_DEBOUNCE_SECONDS", 0.35
         )
         self._busy_text_hard_cap_seconds: float = _float_env(
-            "HERMES_GATEWAY_BUSY_TEXT_HARD_CAP_SECONDS", 1.0
+            "MARLOW_GATEWAY_BUSY_TEXT_HARD_CAP_SECONDS", 1.0
         )
         self._text_debounce: dict[str, TextDebounceState] = {}
         # Background message-processing tasks spawned by handle_message().
@@ -2256,7 +2256,7 @@ class BasePlatformAdapter(ABC):
         auto-deletion.  Non-fatal if config is unreadable.
         """
         try:
-            from hermes_cli.config import load_config as _load_config
+            from marlow_cli.config import load_config as _load_config
         except Exception:
             return 0
         try:
@@ -2765,7 +2765,7 @@ class BasePlatformAdapter(ABC):
 
         Serialized tool results frequently embed a previous reply's text, e.g.::
 
-            {"result": "MEDIA:/Users/x/.hermes/media/generated/stale.png"}
+            {"result": "MEDIA:/Users/x/.marlow/media/generated/stale.png"}
 
         Here the ``MEDIA:`` is part of stored text, not an outbound directive,
         but the bare-path branch of ``MEDIA_TAG_CLEANUP_RE`` would still match it
@@ -3756,7 +3756,7 @@ class BasePlatformAdapter(ABC):
             # session lifecycle and its cleanup races with the running task
             # (see PR #4926).
             cmd = event.get_command()
-            from hermes_cli.commands import should_bypass_active_session
+            from marlow_cli.commands import should_bypass_active_session
 
             if should_bypass_active_session(cmd):
                 # /stop, /new, /reset must cancel the in-flight adapter task
@@ -3909,11 +3909,11 @@ class BasePlatformAdapter(ABC):
         Return a random delay in seconds for human-like response pacing.
 
         Reads from env vars:
-          HERMES_HUMAN_DELAY_MODE: "off" (default) | "natural" | "custom"
-          HERMES_HUMAN_DELAY_MIN_MS: minimum delay in ms (default 800, custom mode)
-          HERMES_HUMAN_DELAY_MAX_MS: maximum delay in ms (default 2500, custom mode)
+          MARLOW_HUMAN_DELAY_MODE: "off" (default) | "natural" | "custom"
+          MARLOW_HUMAN_DELAY_MIN_MS: minimum delay in ms (default 800, custom mode)
+          MARLOW_HUMAN_DELAY_MAX_MS: maximum delay in ms (default 2500, custom mode)
         """
-        mode = os.getenv("HERMES_HUMAN_DELAY_MODE", "off").lower()
+        mode = os.getenv("MARLOW_HUMAN_DELAY_MODE", "off").lower()
         if mode == "off":
             return 0.0
         if mode == "natural":
@@ -3921,11 +3921,11 @@ class BasePlatformAdapter(ABC):
             return random.uniform(min_ms / 1000.0, max_ms / 1000.0)
         # custom mode — tolerate malformed env vars instead of crashing.
         try:
-            min_ms = int(os.getenv("HERMES_HUMAN_DELAY_MIN_MS", "800"))
+            min_ms = int(os.getenv("MARLOW_HUMAN_DELAY_MIN_MS", "800"))
         except (TypeError, ValueError):
             min_ms = 800
         try:
-            max_ms = int(os.getenv("HERMES_HUMAN_DELAY_MAX_MS", "2500"))
+            max_ms = int(os.getenv("MARLOW_HUMAN_DELAY_MAX_MS", "2500"))
         except (TypeError, ValueError):
             max_ms = 2500
         return random.uniform(min_ms / 1000.0, max_ms / 1000.0)
@@ -4361,7 +4361,7 @@ class BasePlatformAdapter(ABC):
             # session (e.g. deferred background-review notifications).
             #
             # Snapshot the callback generation HERE (after the agent has run),
-            # not at the top of this task.  _hermes_run_generation is set on
+            # not at the top of this task.  _marlow_run_generation is set on
             # the interrupt event by GatewayRunner._bind_adapter_run_generation
             # during _handle_message_with_agent — which happens DURING the
             # self._message_handler(event) await above.  Snapshotting earlier
@@ -4370,7 +4370,7 @@ class BasePlatformAdapter(ABC):
             # fresher run's callbacks.
             _callback_generation = getattr(
                 interrupt_event,
-                "_hermes_run_generation",
+                "_marlow_run_generation",
                 None,
             )
             if hasattr(self, "pop_post_delivery_callback"):

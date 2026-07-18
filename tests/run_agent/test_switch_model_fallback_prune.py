@@ -27,7 +27,7 @@ def _make_agent(chain):
 
 
 def _switch_to_custom(agent):
-    with patch("hermes_cli.timeouts.get_provider_request_timeout", return_value=None):
+    with patch("marlow_cli.timeouts.get_provider_request_timeout", return_value=None):
         agent.switch_model(
             new_model="local-model",
             new_provider="custom",
@@ -66,7 +66,7 @@ def test_switch_within_same_provider_preserves_chain():
     chain = [{"provider": "openai-codex", "model": "gpt-5.3-codex"}]
     agent = _make_agent(chain)
 
-    with patch("hermes_cli.timeouts.get_provider_request_timeout", return_value=None):
+    with patch("marlow_cli.timeouts.get_provider_request_timeout", return_value=None):
         agent.switch_model(
             new_model="gpt-5.3-codex",
             new_provider="openai-codex",

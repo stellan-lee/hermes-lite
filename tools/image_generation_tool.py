@@ -49,7 +49,7 @@ IMAGE_GENERATE_SCHEMA = {
 
 
 def _discover_providers() -> None:
-    from hermes_cli.plugins import _ensure_plugins_discovered
+    from marlow_cli.plugins import _ensure_plugins_discovered
 
     _ensure_plugins_discovered()
 

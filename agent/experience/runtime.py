@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
-_EXPERIENCE_TARGET_KEY = "_hermes_work_experience_target"
+_EXPERIENCE_TARGET_KEY = "_marlow_work_experience_target"
 
 
 class TurnOrigin(StrEnum):
@@ -239,7 +239,7 @@ def prepare_experience_turn(
         return None
 
     try:
-        from hermes_cli.config import load_config
+        from marlow_cli.config import load_config
 
         raw_config = load_config().get("experience", {})
         if not isinstance(raw_config, Mapping):
@@ -264,9 +264,9 @@ def prepare_experience_turn(
             ExperienceStore,
         )
         from agent.runtime_cwd import resolve_agent_cwd
-        from hermes_constants import get_hermes_home
+        from marlow_constants import get_marlow_home
 
-        home = Path(get_hermes_home()).expanduser().resolve()
+        home = Path(get_marlow_home()).expanduser().resolve()
         safe_query = sanitize_for_storage(
             raw_user_message,
             field_name="raw_user_message",

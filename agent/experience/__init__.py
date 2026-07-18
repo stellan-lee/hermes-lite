@@ -1,4 +1,4 @@
-"""Public core API for Hermes Work Experience validation.
+"""Public core API for Marlow Work Experience validation.
 
 The package is intentionally integration-neutral: callers explicitly resolve
 profile storage and scope, then opt into retrieval.  Nothing here captures a

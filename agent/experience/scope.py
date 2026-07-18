@@ -73,7 +73,7 @@ def _profile_key(profile_namespace: str | bytes) -> bytes:
     value = profile_namespace if isinstance(profile_namespace, bytes) else profile_namespace.encode()
     if not value:
         raise ValueError("profile_namespace must be explicit and non-empty")
-    return hashlib.sha256(b"hermes-experience-profile\0" + value).digest()
+    return hashlib.sha256(b"marlow-experience-profile\0" + value).digest()
 
 
 def _path_identity(prefix: str, path: Path, profile_namespace: str | bytes) -> str:

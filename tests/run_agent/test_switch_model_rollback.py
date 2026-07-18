@@ -55,7 +55,7 @@ def test_client_rebuild_failure_rolls_back(provider, model, api_mode):
         raise RuntimeError("simulated client build failure")
 
     agent._create_openai_client = boom
-    with patch("hermes_cli.timeouts.get_provider_request_timeout", return_value=None):
+    with patch("marlow_cli.timeouts.get_provider_request_timeout", return_value=None):
         with pytest.raises(RuntimeError, match="simulated client build failure"):
             agent.switch_model(
                 new_model="local-b",
@@ -75,7 +75,7 @@ def test_successful_custom_switch_rebuilds_client():
     new_client = MagicMock(name="NewClient")
     agent._create_openai_client = lambda *_a, **_kw: new_client
 
-    with patch("hermes_cli.timeouts.get_provider_request_timeout", return_value=None):
+    with patch("marlow_cli.timeouts.get_provider_request_timeout", return_value=None):
         agent.switch_model(
             new_model="local-b",
             new_provider="custom",

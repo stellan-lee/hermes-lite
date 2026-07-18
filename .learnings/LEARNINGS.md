@@ -118,16 +118,16 @@ narrowest scoped Git restoration when that is the stated intent.
 
 ### Summary
 
-“Clean unused parts” does not authorize removing working Hermes product
+“Clean unused parts” does not authorize removing working Marlow product
 families merely because they are optional or make the repository larger.
 
 ### Details
 
 The cleanup treated gateways, messaging connectors, MCP, scheduling, memory,
 skills, plugins, and other working subsystems as removable product scope. The
-user clarified that these are basic Hermes capabilities and must remain. The
+user clarified that these are basic Marlow capabilities and must remain. The
 intended cleanup is evidence-based dead-code and stale-config removal, not a
-conversion of Hermes into a different CLI-only product.
+conversion of Marlow into a different CLI-only product.
 
 ### Suggested Action
 
@@ -139,7 +139,7 @@ test responsibility is demonstrated and recorded in the cleanup review.
 ### Metadata
 
 - Source: user_feedback
-- Related Files: gateway/, hermes_cli/, plugins/, tests/
+- Related Files: gateway/, marlow_cli/, plugins/, tests/
 - Tags: cleanup, scope, gateway, connectors, mcp, preservation
 - See Also: LRN-20260718-001
 
@@ -154,7 +154,7 @@ test responsibility is demonstrated and recorded in the cleanup review.
 
 ### Summary
 
-For the approved Hermes feature checklist, checked means remove and unchecked
+For the approved Marlow feature checklist, checked means remove and unchecked
 means keep.
 
 ### Details

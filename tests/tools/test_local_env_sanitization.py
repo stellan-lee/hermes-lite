@@ -4,8 +4,8 @@ import os
 from unittest.mock import patch
 
 from tools.environments.local import (
-    _HERMES_PROVIDER_ENV_BLOCKLIST,
-    _HERMES_PROVIDER_ENV_FORCE_PREFIX,
+    _MARLOW_PROVIDER_ENV_BLOCKLIST,
+    _MARLOW_PROVIDER_ENV_FORCE_PREFIX,
     _sanitize_subprocess_env,
 )
 
@@ -22,12 +22,12 @@ RETAINED_SECRETS = {
     "EMAIL_PASSWORD",
     "WEBHOOK_SECRET",
     "HONCHO_API_KEY",
-    "HERMES_LANGFUSE_SECRET_KEY",
+    "MARLOW_LANGFUSE_SECRET_KEY",
 }
 
 
 def test_retained_secrets_are_blocklisted():
-    assert RETAINED_SECRETS.issubset(_HERMES_PROVIDER_ENV_BLOCKLIST)
+    assert RETAINED_SECRETS.issubset(_MARLOW_PROVIDER_ENV_BLOCKLIST)
 
 
 def test_retained_secrets_are_stripped_from_children():
@@ -41,7 +41,7 @@ def test_retained_secrets_are_stripped_from_children():
 
 
 def test_force_prefix_explicitly_passes_blocked_value():
-    forced = f"{_HERMES_PROVIDER_ENV_FORCE_PREFIX}OPENAI_API_KEY"
+    forced = f"{_MARLOW_PROVIDER_ENV_FORCE_PREFIX}OPENAI_API_KEY"
     result = _sanitize_subprocess_env({}, {forced: "explicit"})
     assert result["OPENAI_API_KEY"] == "explicit"
     assert forced not in result

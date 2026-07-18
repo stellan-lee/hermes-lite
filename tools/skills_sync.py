@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import Dict
 
 from agent.skill_utils import is_excluded_skill_path
-from hermes_constants import get_bundled_skills_dir, get_hermes_home
+from marlow_constants import get_bundled_skills_dir, get_marlow_home
 from utils import atomic_replace
 
 logger = logging.getLogger(__name__)
 
-HERMES_HOME = get_hermes_home()
-SKILLS_DIR = HERMES_HOME / "skills"
+MARLOW_HOME = get_marlow_home()
+SKILLS_DIR = MARLOW_HOME / "skills"
 MANIFEST_FILE = SKILLS_DIR / ".bundled_manifest"
 NO_BUNDLED_SKILLS_MARKER = ".no-bundled-skills"
 
@@ -124,7 +124,7 @@ def sync_skills(quiet: bool = False) -> dict:
         "suppressed": [],
         "total_bundled": 0,
     }
-    if (HERMES_HOME / NO_BUNDLED_SKILLS_MARKER).exists():
+    if (MARLOW_HOME / NO_BUNDLED_SKILLS_MARKER).exists():
         return {**empty, "skipped_opt_out": True}
 
     bundled_dir = _get_bundled_dir()

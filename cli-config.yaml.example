@@ -1,9 +1,9 @@
-# Hermes Lite configuration example
-# Copy to ~/.hermes/config.yaml. Secrets may use ${ENV_VAR} references and
-# should live in ~/.hermes/.env.
+# Marlow Lite configuration example
+# Copy to ~/.marlow/config.yaml. Secrets may use ${ENV_VAR} references and
+# should live in ~/.marlow/.env.
 
 model:
-  # Codex is the default retained hosted runtime. Run `hermes auth` first.
+  # Codex is the default retained hosted runtime. Run `marlow auth` first.
   provider: openai-codex
   default: gpt-5.4
 
@@ -25,7 +25,7 @@ providers: {}
 #     api_mode: chat_completions
 
 fallback_providers: []
-toolsets: [hermes-cli]
+toolsets: [marlow-cli]
 
 agent:
   max_turns: 90

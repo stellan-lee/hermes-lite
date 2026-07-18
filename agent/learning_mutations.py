@@ -2,15 +2,15 @@
 
 The journey graph (``agent.learning_graph``) gives every node a stable id:
 
-- **skills** → the skill name (e.g. ``"debugging-hermes-desktop"``)
+- **skills** → the skill name (e.g. ``"debugging-marlow-desktop"``)
 - **memories** → ``memory:<source>:<content-hash>`` where ``source`` is
   ``memory`` (``MEMORY.md``) or ``profile`` (``USER.md``). The hash keeps an
   id bound to its content when other cards are inserted or removed.
 
 This module maps a node id back to its on-disk home and performs the mutation,
-shared by the CLI (``hermes journey delete|edit``), the TUI ``/journey`` overlay
+shared by the CLI (``marlow journey delete|edit``), the TUI ``/journey`` overlay
 (gateway RPCs), and the desktop GUI (REST). Deleting a skill *archives* it
-(recoverable via ``hermes curator restore``); deleting a memory rewrites its
+(recoverable via ``marlow curator restore``); deleting a memory rewrites its
 file. Pure stdlib + existing skill/memory helpers.
 """
 
@@ -39,9 +39,9 @@ def parse_node_kind(node_id: str) -> str:
 
 
 def _memories_dir() -> Path:
-    from hermes_constants import get_hermes_home
+    from marlow_constants import get_marlow_home
 
-    return get_hermes_home() / "memories"
+    return get_marlow_home() / "memories"
 
 
 def _parse_memory_id(node_id: str) -> tuple[str, str]:
@@ -139,7 +139,7 @@ def _delete_skill(name: str) -> dict[str, Any]:
     from tools import skill_usage
 
     if skill_usage.get_record(name).get("pinned"):
-        return {"ok": False, "message": f"'{name}' is pinned — unpin it first (hermes curator unpin {name})"}
+        return {"ok": False, "message": f"'{name}' is pinned — unpin it first (marlow curator unpin {name})"}
 
     ok, message = skill_usage.archive_skill(name)
     if ok:
@@ -148,7 +148,7 @@ def _delete_skill(name: str) -> dict[str, Any]:
     return {
         "ok": ok,
         "message": (
-            f"archived '{name}' — restore with: hermes curator restore {name}"
+            f"archived '{name}' — restore with: marlow curator restore {name}"
             if ok
             else message
         ),

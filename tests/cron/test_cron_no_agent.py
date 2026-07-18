@@ -18,19 +18,19 @@ import pytest
 
 
 @pytest.fixture
-def hermes_env(tmp_path, monkeypatch):
-    """Isolate HERMES_HOME for each test so jobs/scripts don't leak."""
-    home = tmp_path / ".hermes"
+def marlow_env(tmp_path, monkeypatch):
+    """Isolate MARLOW_HOME for each test so jobs/scripts don't leak."""
+    home = tmp_path / ".marlow"
     home.mkdir()
     (home / "scripts").mkdir()
     (home / "cron").mkdir()
 
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("MARLOW_HOME", str(home))
 
-    # Reload modules that cache get_hermes_home() at import time.
+    # Reload modules that cache get_marlow_home() at import time.
     import importlib
-    import hermes_constants
-    importlib.reload(hermes_constants)
+    import marlow_constants
+    importlib.reload(marlow_constants)
     import cron.jobs
     importlib.reload(cron.jobs)
     import cron.scheduler
@@ -44,17 +44,17 @@ def hermes_env(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_create_job_no_agent_requires_script(hermes_env):
+def test_create_job_no_agent_requires_script(marlow_env):
     from cron.jobs import create_job
 
     with pytest.raises(ValueError, match="no_agent=True requires a script"):
         create_job(prompt=None, schedule="every 5m", no_agent=True)
 
 
-def test_create_job_no_agent_stores_field(hermes_env):
+def test_create_job_no_agent_stores_field(marlow_env):
     from cron.jobs import create_job
 
-    script_path = hermes_env / "scripts" / "watchdog.sh"
+    script_path = marlow_env / "scripts" / "watchdog.sh"
     script_path.write_text("#!/bin/bash\necho hi\n")
 
     job = create_job(
@@ -70,17 +70,17 @@ def test_create_job_no_agent_stores_field(hermes_env):
     assert job["prompt"] in {None, ""}
 
 
-def test_create_job_default_is_not_no_agent(hermes_env):
+def test_create_job_default_is_not_no_agent(marlow_env):
     from cron.jobs import create_job
 
     job = create_job(prompt="say hi", schedule="every 5m", deliver="local")
     assert job.get("no_agent") is False
 
 
-def test_update_job_roundtrips_no_agent_flag(hermes_env):
+def test_update_job_roundtrips_no_agent_flag(marlow_env):
     from cron.jobs import create_job, update_job, get_job
 
-    script_path = hermes_env / "scripts" / "w.sh"
+    script_path = marlow_env / "scripts" / "w.sh"
     script_path.write_text("echo hi\n")
     job = create_job(prompt=None, schedule="every 5m", script="w.sh", no_agent=True, deliver="local")
 
@@ -98,7 +98,7 @@ def test_update_job_roundtrips_no_agent_flag(hermes_env):
 # ---------------------------------------------------------------------------
 
 
-def test_cronjob_tool_create_no_agent_without_script_errors(hermes_env):
+def test_cronjob_tool_create_no_agent_without_script_errors(marlow_env):
     from tools.cronjob_tools import cronjob
 
     result = json.loads(
@@ -108,10 +108,10 @@ def test_cronjob_tool_create_no_agent_without_script_errors(hermes_env):
     assert "no_agent=True requires a script" in result.get("error", "")
 
 
-def test_cronjob_tool_create_no_agent_with_script_succeeds(hermes_env):
+def test_cronjob_tool_create_no_agent_with_script_succeeds(marlow_env):
     from tools.cronjob_tools import cronjob
 
-    script_path = hermes_env / "scripts" / "alert.sh"
+    script_path = marlow_env / "scripts" / "alert.sh"
     script_path.write_text("#!/bin/bash\necho alert\n")
 
     result = json.loads(
@@ -128,10 +128,10 @@ def test_cronjob_tool_create_no_agent_with_script_succeeds(hermes_env):
     assert result["job"]["script"] == "alert.sh"
 
 
-def test_cronjob_tool_update_toggles_no_agent(hermes_env):
+def test_cronjob_tool_update_toggles_no_agent(marlow_env):
     from tools.cronjob_tools import cronjob
 
-    script_path = hermes_env / "scripts" / "w.sh"
+    script_path = marlow_env / "scripts" / "w.sh"
     script_path.write_text("echo hi\n")
 
     created = json.loads(
@@ -154,7 +154,7 @@ def test_cronjob_tool_update_toggles_no_agent(hermes_env):
     assert on["job"]["no_agent"] is True
 
 
-def test_cronjob_tool_update_no_agent_without_script_errors(hermes_env):
+def test_cronjob_tool_update_no_agent_without_script_errors(marlow_env):
     """Flipping no_agent=True on a job that has no script must fail."""
     from tools.cronjob_tools import cronjob
 
@@ -168,11 +168,11 @@ def test_cronjob_tool_update_no_agent_without_script_errors(hermes_env):
     assert "without a script" in result.get("error", "")
 
 
-def test_cronjob_tool_create_does_not_require_prompt_when_no_agent(hermes_env):
+def test_cronjob_tool_create_does_not_require_prompt_when_no_agent(marlow_env):
     """The 'prompt or skill required' rule is relaxed for no_agent jobs."""
     from tools.cronjob_tools import cronjob
 
-    script_path = hermes_env / "scripts" / "w.sh"
+    script_path = marlow_env / "scripts" / "w.sh"
     script_path.write_text("echo hi\n")
 
     result = json.loads(
@@ -192,12 +192,12 @@ def test_cronjob_tool_create_does_not_require_prompt_when_no_agent(hermes_env):
 # ---------------------------------------------------------------------------
 
 
-def test_run_job_no_agent_success_returns_script_stdout(hermes_env):
+def test_run_job_no_agent_success_returns_script_stdout(marlow_env):
     """Happy path: script exits 0 with output, delivered verbatim."""
     from cron.jobs import create_job
     from cron.scheduler import run_job
 
-    script_path = hermes_env / "scripts" / "alert.sh"
+    script_path = marlow_env / "scripts" / "alert.sh"
     script_path.write_text("#!/bin/bash\necho 'RAM 92% on host'\n")
 
     job = create_job(
@@ -210,12 +210,12 @@ def test_run_job_no_agent_success_returns_script_stdout(hermes_env):
     assert "RAM 92% on host" in doc
 
 
-def test_run_job_no_agent_empty_output_is_silent(hermes_env):
+def test_run_job_no_agent_empty_output_is_silent(marlow_env):
     """Empty stdout → SILENT_MARKER, which suppresses delivery downstream."""
     from cron.jobs import create_job
     from cron.scheduler import run_job, SILENT_MARKER
 
-    script_path = hermes_env / "scripts" / "quiet.sh"
+    script_path = marlow_env / "scripts" / "quiet.sh"
     script_path.write_text("#!/bin/bash\n# nothing to say\n")
 
     job = create_job(
@@ -227,12 +227,12 @@ def test_run_job_no_agent_empty_output_is_silent(hermes_env):
     assert final_response == SILENT_MARKER
 
 
-def test_run_job_no_agent_wake_gate_is_silent(hermes_env):
+def test_run_job_no_agent_wake_gate_is_silent(marlow_env):
     """wakeAgent=false gate in stdout triggers a silent run."""
     from cron.jobs import create_job
     from cron.scheduler import run_job, SILENT_MARKER
 
-    script_path = hermes_env / "scripts" / "gated.sh"
+    script_path = marlow_env / "scripts" / "gated.sh"
     script_path.write_text('#!/bin/bash\necho \'{"wakeAgent": false}\'\n')
 
     job = create_job(
@@ -243,12 +243,12 @@ def test_run_job_no_agent_wake_gate_is_silent(hermes_env):
     assert final_response == SILENT_MARKER
 
 
-def test_run_job_no_agent_script_failure_delivers_error(hermes_env):
+def test_run_job_no_agent_script_failure_delivers_error(marlow_env):
     """Non-zero exit → success=False, error alert is the delivered message."""
     from cron.jobs import create_job
     from cron.scheduler import run_job
 
-    script_path = hermes_env / "scripts" / "broken.sh"
+    script_path = marlow_env / "scripts" / "broken.sh"
     script_path.write_text("#!/bin/bash\necho oops >&2\nexit 3\n")
 
     job = create_job(
@@ -261,15 +261,15 @@ def test_run_job_no_agent_script_failure_delivers_error(hermes_env):
     assert "Cron watchdog" in final_response  # alert header
 
 
-def test_tick_no_agent_delivery_resolves_home_channel_from_dotenv(hermes_env, monkeypatch):
+def test_tick_no_agent_delivery_resolves_home_channel_from_dotenv(marlow_env, monkeypatch):
     """Script-only alerts must load .env before resolving bare home-channel targets."""
     from cron.jobs import create_job
     import cron.scheduler as sched
     from gateway.config import Platform
 
-    script_path = hermes_env / "scripts" / "alert.sh"
+    script_path = marlow_env / "scripts" / "alert.sh"
     script_path.write_text("#!/bin/bash\necho 'RAM 92% on host'\n")
-    (hermes_env / ".env").write_text("TELEGRAM_HOME_CHANNEL=-2002\n")
+    (marlow_env / ".env").write_text("TELEGRAM_HOME_CHANNEL=-2002\n")
     monkeypatch.delenv("TELEGRAM_HOME_CHANNEL", raising=False)
 
     job = create_job(
@@ -301,11 +301,11 @@ def test_tick_no_agent_delivery_resolves_home_channel_from_dotenv(hermes_env, mo
     assert mark_mock.call_args.kwargs["delivery_error"] is None
 
 
-def test_run_job_no_agent_never_invokes_aiagent(hermes_env):
+def test_run_job_no_agent_never_invokes_aiagent(marlow_env):
     """no_agent jobs must NOT import/construct the AIAgent."""
     from cron.jobs import create_job
 
-    script_path = hermes_env / "scripts" / "alert.sh"
+    script_path = marlow_env / "scripts" / "alert.sh"
     script_path.write_text("#!/bin/bash\necho alert\n")
 
     job = create_job(
@@ -325,11 +325,11 @@ def test_run_job_no_agent_never_invokes_aiagent(hermes_env):
 # ---------------------------------------------------------------------------
 
 
-def test_run_job_script_shell_script_runs_via_bash(hermes_env):
+def test_run_job_script_shell_script_runs_via_bash(marlow_env):
     """.sh files should execute under /bin/bash even without a shebang line."""
     from cron.scheduler import _run_job_script
 
-    script_path = hermes_env / "scripts" / "shelly.sh"
+    script_path = marlow_env / "scripts" / "shelly.sh"
     # No shebang — relies on the interpreter-by-extension rule.
     script_path.write_text('echo "shell: $BASH_VERSION" | head -c 7\n')
 
@@ -338,10 +338,10 @@ def test_run_job_script_shell_script_runs_via_bash(hermes_env):
     assert output.startswith("shell:")
 
 
-def test_run_job_script_bash_extension_also_runs_via_bash(hermes_env):
+def test_run_job_script_bash_extension_also_runs_via_bash(marlow_env):
     from cron.scheduler import _run_job_script
 
-    script_path = hermes_env / "scripts" / "thing.bash"
+    script_path = marlow_env / "scripts" / "thing.bash"
     script_path.write_text('printf "via bash\\n"\n')
 
     ok, output = _run_job_script("thing.bash")
@@ -349,11 +349,11 @@ def test_run_job_script_bash_extension_also_runs_via_bash(hermes_env):
     assert output == "via bash"
 
 
-def test_run_job_script_python_still_runs_via_python(hermes_env):
+def test_run_job_script_python_still_runs_via_python(marlow_env):
     """Regression: .py files must keep running via sys.executable."""
     from cron.scheduler import _run_job_script
 
-    script_path = hermes_env / "scripts" / "py.py"
+    script_path = marlow_env / "scripts" / "py.py"
     script_path.write_text("import sys\nprint(f'python {sys.version_info.major}')\n")
 
     ok, output = _run_job_script("py.py")
@@ -361,7 +361,7 @@ def test_run_job_script_python_still_runs_via_python(hermes_env):
     assert output.startswith("python ")
 
 
-def test_run_job_script_path_traversal_still_blocked(hermes_env):
+def test_run_job_script_path_traversal_still_blocked(marlow_env):
     """Security regression: shell-script support must NOT loosen containment."""
     from cron.scheduler import _run_job_script
 

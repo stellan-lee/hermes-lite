@@ -24,7 +24,7 @@ Split provider normalizer edits from sanitizer removal and inspected exact funct
 ### Metadata
 
 - Reproducible: no
-- Related Files: hermes_cli/config.py, hermes_cli/env_loader.py
+- Related Files: marlow_cli/config.py, marlow_cli/env_loader.py
 
 ---
 
@@ -106,7 +106,7 @@ Replaced the removed native-Windows exclusion with an explicit POSIX scope match
 ### Metadata
 
 - Reproducible: no
-- Related Files: hermes_cli/doctor.py
+- Related Files: marlow_cli/doctor.py
 
 ---
 
@@ -180,7 +180,7 @@ An oversized patch for Termux startup removal failed because its copied context 
 ### Error
 
 ```
-apply_patch verification failed: Failed to find expected lines in hermes_cli/main.py
+apply_patch verification failed: Failed to find expected lines in marlow_cli/main.py
 ```
 
 ### Context
@@ -195,7 +195,7 @@ Split the edit into smaller function-level patches and applied them successfully
 ### Metadata
 
 - Reproducible: no
-- Related Files: hermes_cli/main.py
+- Related Files: marlow_cli/main.py
 
 ---
 
@@ -290,7 +290,7 @@ references from the external project instructions.
 
 ### Summary
 
-TUI tests were launched before building `@hermes/ink` and inherited SSH markers.
+TUI tests were launched before building `@marlow/ink` and inherited SSH markers.
 
 ### Error
 
@@ -306,12 +306,12 @@ Cursor terminal setup must be run on the local machine, not inside an SSH sessio
 
 ### Suggested Fix
 
-Build `@hermes/ink` first and remove ambient SSH markers only for the test process.
+Build `@marlow/ink` first and remove ambient SSH markers only for the test process.
 
 ### Metadata
 
 - Reproducible: yes
-- Related Files: ui-tui/package.json, ui-tui/packages/hermes-ink/package.json
+- Related Files: ui-tui/package.json, ui-tui/packages/marlow-ink/package.json
 
 ### Resolution
 
@@ -319,7 +319,7 @@ Built the local Ink workspace and ran the suite with SSH marker variables unset.
 
 ---
 
-## [ERR-20260718-011] hermes-ink-node26-child-process-types
+## [ERR-20260718-011] marlow-ink-node26-child-process-types
 
 **Logged**: 2026-07-18T00:00:00+08:00
 **Priority**: low
@@ -348,7 +348,7 @@ Type the conditional as mutable `StdioOptions` and the result as `ChildProcess`.
 ### Metadata
 
 - Reproducible: yes
-- Related Files: ui-tui/packages/hermes-ink/src/utils/execFileNoThrow.ts
+- Related Files: ui-tui/packages/marlow-ink/src/utils/execFileNoThrow.ts
 
 ### Resolution
 
@@ -729,7 +729,7 @@ output.
 ### Metadata
 
 - Reproducible: yes
-- Related Files: cli.py, hermes_constants.py, hermes_state.py, tests/, tools/
+- Related Files: cli.py, marlow_constants.py, marlow_state.py, tests/, tools/
 
 ### Resolution
 
@@ -797,7 +797,7 @@ apply_patch verification failed: Failed to find expected lines
 ### Context
 
 - The patch combined unrelated documentation and code cleanup hunks.
-- Earlier reductions shifted one comment block in `hermes_cli/auth.py`.
+- Earlier reductions shifted one comment block in `marlow_cli/auth.py`.
 
 ### Suggested Fix
 
@@ -806,7 +806,7 @@ Split broad cleanup patches into small hunks anchored to current file content.
 ### Metadata
 
 - Reproducible: no
-- Related Files: hermes_cli/auth.py
+- Related Files: marlow_cli/auth.py
 
 ### Resolution
 
@@ -992,7 +992,7 @@ after mechanical pruning.
 
 - **Date:** 2026-07-18
 - **Context:** First focused validation after canonical provider cleanup.
-- **Error:** Pytest exited with code 4 because `tests/hermes_cli/test_runtime_provider.py` does not exist.
+- **Error:** Pytest exited with code 4 because `tests/marlow_cli/test_runtime_provider.py` does not exist.
 - **Resolution:** Located matching test files with `rg --files` and reran the valid targeted set.
 - **Status:** Resolved
 ## ERR-025: Canonical config save refactor left a stale local variable
@@ -1063,7 +1063,7 @@ after mechanical pruning.
 - **Date:** 2026-07-18
 - **Context:** Final TypeScript TUI validation.
 - **Error:** The first Vitest run inherited an SSH marker, so local terminal-setup tests exited through the remote-session guard; its Python parity subprocess also used a Python without the project dependencies. One expensive cursor regression timed out at the default five seconds.
-- **Resolution:** Kept the successful TypeScript type-check result and reran tests with SSH markers removed, `HERMES_PYTHON` pointed at `.venv/bin/python`, and a larger test timeout.
+- **Resolution:** Kept the successful TypeScript type-check result and reran tests with SSH markers removed, `MARLOW_PYTHON` pointed at `.venv/bin/python`, and a larger test timeout.
 - **Status:** Resolved
 
 ## ERR-034: EOF cleanup initially parsed line numbers as filenames
@@ -1157,7 +1157,7 @@ after mechanical pruning.
 
 - **Date:** 2026-07-18
 - **Context:** Final retained TUI validation from the `ui-tui` working directory.
-- **Error:** The command-registry parity test reads `PYTHON`, not the gateway client's `HERMES_PYTHON`, so it used a system Python without PyYAML even though Vitest passed.
+- **Error:** The command-registry parity test reads `PYTHON`, not the gateway client's `MARLOW_PYTHON`, so it used a system Python without PyYAML even though Vitest passed.
 - **Resolution:** Reran with `PYTHON` set to the repository venv's absolute interpreter path.
 - **Status:** Resolved
 
@@ -1204,8 +1204,8 @@ after mechanical pruning.
 ## ERR-047: Update stream assertion held a stale class after reload
 
 - **Date:** 2026-07-18
-- **Context:** Fresh-process `hermes_cli` test-area validation.
-- **Error:** Earlier tests reloaded `hermes_cli.main`; the imported `_UpdateOutputStream` class no longer matched the current class used by `_install_hangup_protection`.
+- **Context:** Fresh-process `marlow_cli` test-area validation.
+- **Error:** Earlier tests reloaded `marlow_cli.main`; the imported `_UpdateOutputStream` class no longer matched the current class used by `_install_hangup_protection`.
 - **Resolution:** The integration assertion now checks against the installer function's live module-global class.
 - **Status:** Resolved
 
@@ -1260,8 +1260,8 @@ after mechanical pruning.
 ## ERR-054: Combined suite leaked gateway session context into a skills test
 
 - **Date:** 2026-07-18
-- **Context:** Full combined Cron, Hermes CLI, and TUI-gateway validation.
-- **Error:** A prior gateway test left `HERMES_SESSION_PLATFORM` explicitly cleared in its ContextVar, which correctly suppresses the process-environment fallback and made one skills-config test order-dependent.
+- **Context:** Full combined Cron, Marlow CLI, and TUI-gateway validation.
+- **Error:** A prior gateway test left `MARLOW_SESSION_PLATFORM` explicitly cleared in its ContextVar, which correctly suppresses the process-environment fallback and made one skills-config test order-dependent.
 - **Resolution:** Ran the environment-fallback assertion in a fresh `contextvars.Context`, matching a normal non-gateway caller without mutating production behavior.
 - **Status:** Resolved
 

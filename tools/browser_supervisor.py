@@ -1,6 +1,6 @@
 """Persistent CDP supervisor for browser dialog + frame detection.
 
-One ``CDPSupervisor`` runs per Hermes ``task_id`` that has a reachable CDP
+One ``CDPSupervisor`` runs per Marlow ``task_id`` that has a reachable CDP
 endpoint. It holds a single persistent WebSocket to the backend, subscribes
 to ``Page`` / ``Runtime`` / ``Target`` events on every attached session
 (top-level page and every OOPIF / worker target that auto-attaches), and
@@ -61,7 +61,7 @@ RECENT_DIALOGS_MAX = 20
 # Magic host the injected dialog bridge XHRs to.  Intercepted via the CDP
 # Fetch domain before any network resolution happens, so the hostname never
 # has to exist.  Keep this ASCII + URL-safe; we also gate Fetch patterns on it.
-DIALOG_BRIDGE_HOST = "hermes-dialog-bridge.invalid"
+DIALOG_BRIDGE_HOST = "marlow-dialog-bridge.invalid"
 DIALOG_BRIDGE_URL_PATTERN = f"http://{DIALOG_BRIDGE_HOST}/*"
 
 # Script injected into every frame via Page.addScriptToEvaluateOnNewDocument.
@@ -70,9 +70,9 @@ DIALOG_BRIDGE_URL_PATTERN = f"http://{DIALOG_BRIDGE_HOST}/*"
 # dialogs and give the agent a stable response path.
 _DIALOG_BRIDGE_SCRIPT = r"""
 (() => {
-  if (window.__hermesDialogBridgeInstalled) return;
-  window.__hermesDialogBridgeInstalled = true;
-  const ENDPOINT = "http://hermes-dialog-bridge.invalid/";
+  if (window.__marlowDialogBridgeInstalled) return;
+  window.__marlowDialogBridgeInstalled = true;
+  const ENDPOINT = "http://marlow-dialog-bridge.invalid/";
   function ask(kind, message, defaultPrompt) {
     try {
       const xhr = new XMLHttpRequest();

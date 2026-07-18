@@ -174,7 +174,7 @@ class TestHonchoUserIdScoping:
         mock_cfg.dialectic_depth = 1
         mock_cfg.dialectic_depth_levels = None
         mock_cfg.init_on_session_start = False
-        mock_cfg.ai_peer = "hermes"
+        mock_cfg.ai_peer = "marlow"
         mock_cfg.resolve_session_name.return_value = "test-sess"
         mock_cfg.session_strategy = "shared"
 
@@ -205,7 +205,7 @@ class TestHonchoUserIdScoping:
 
         mock_cfg = MagicMock()
         mock_cfg.peer_name = "static-user"
-        mock_cfg.ai_peer = "hermes"
+        mock_cfg.ai_peer = "marlow"
         mock_cfg.write_frequency = "sync"
         mock_cfg.dialectic_reasoning_level = "low"
         mock_cfg.dialectic_dynamic = True
@@ -267,7 +267,7 @@ class TestAIAgentUserIdPropagation:
 
     def test_user_id_stored_on_agent(self):
         """AIAgent should store user_id as instance attribute."""
-        with patch.dict(os.environ, {"HERMES_HOME": "/tmp/test_hermes"}):
+        with patch.dict(os.environ, {"MARLOW_HOME": "/tmp/test_marlow"}):
             from run_agent import AIAgent
             agent = object.__new__(AIAgent)
             # Manually set the attribute as __init__ does
@@ -276,7 +276,7 @@ class TestAIAgentUserIdPropagation:
 
     def test_user_id_none_by_default(self):
         """AIAgent should have None user_id when not provided (CLI mode)."""
-        with patch.dict(os.environ, {"HERMES_HOME": "/tmp/test_hermes"}):
+        with patch.dict(os.environ, {"MARLOW_HOME": "/tmp/test_marlow"}):
             from run_agent import AIAgent
             agent = object.__new__(AIAgent)
             agent._user_id = None

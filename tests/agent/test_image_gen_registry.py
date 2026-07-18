@@ -69,13 +69,13 @@ class TestRegisterProvider:
 
 class TestGetActiveProvider:
     def test_single_provider_autoresolves(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
         image_gen_registry.register_provider(_FakeProvider("solo"))
         active = image_gen_registry.get_active_provider()
         assert active is not None and active.name == "solo"
 
     def test_none_on_multi_without_config(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
         image_gen_registry.register_provider(_FakeProvider("first"))
         image_gen_registry.register_provider(_FakeProvider("second"))
         assert image_gen_registry.get_active_provider() is None
@@ -83,7 +83,7 @@ class TestGetActiveProvider:
     def test_explicit_config_wins(self, tmp_path, monkeypatch):
         import yaml
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
         (tmp_path / "config.yaml").write_text(
             yaml.safe_dump({"image_gen": {"provider": "second"}})
         )
@@ -95,7 +95,7 @@ class TestGetActiveProvider:
     def test_missing_configured_provider_falls_back(self, tmp_path, monkeypatch):
         import yaml
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
         (tmp_path / "config.yaml").write_text(
             yaml.safe_dump({"image_gen": {"provider": "missing"}})
         )
@@ -104,5 +104,5 @@ class TestGetActiveProvider:
         assert active is not None and active.name == "only"
 
     def test_none_when_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
         assert image_gen_registry.get_active_provider() is None

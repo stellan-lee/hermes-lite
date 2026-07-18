@@ -9,7 +9,7 @@ Covers the canonical fix for issues #4146, #27303, #30882, #33057:
   3. tools.approval.check_execute_code_guard — the entry-point guard decision
      matrix (isolated backends, yolo/off, cron-deny, headless-local,
      gateway approve/deny/timeout/missing-notify, smart mode).
-  4. tools.code_execution_tool._scrub_child_env — broad HERMES_ prefix dropped,
+  4. tools.code_execution_tool._scrub_child_env — broad MARLOW_ prefix dropped,
      operational allowlist kept, DSN/WEBHOOK blocked, passthrough precedence.
 """
 
@@ -105,12 +105,12 @@ def test_both_rpc_threads_use_propagation_helper():
 
 @pytest.fixture
 def gw_session(monkeypatch):
-    """A clean gateway session: HERMES_GATEWAY_SESSION set, a bound session
+    """A clean gateway session: MARLOW_GATEWAY_SESSION set, a bound session
     key, and isolated gateway queues/callbacks. Yields the session_key."""
-    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
-    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
-    monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
-    monkeypatch.delenv("HERMES_EXEC_ASK", raising=False)
+    monkeypatch.setenv("MARLOW_GATEWAY_SESSION", "1")
+    monkeypatch.delenv("MARLOW_INTERACTIVE", raising=False)
+    monkeypatch.delenv("MARLOW_CRON_SESSION", raising=False)
+    monkeypatch.delenv("MARLOW_EXEC_ASK", raising=False)
     # Force the legacy non-admin path regardless of host config. Admin routing
     # intentionally takes precedence over smart mode and session YOLO.
     monkeypatch.setattr(
@@ -154,17 +154,17 @@ def test_guard_isolated_backend_approved():
 
 def test_guard_headless_local_approved(monkeypatch):
     # Documented #30882 limitation: no approval surface → preserve auto-run.
-    monkeypatch.delenv("HERMES_GATEWAY_SESSION", raising=False)
-    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
-    monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
-    monkeypatch.delenv("HERMES_EXEC_ASK", raising=False)
+    monkeypatch.delenv("MARLOW_GATEWAY_SESSION", raising=False)
+    monkeypatch.delenv("MARLOW_INTERACTIVE", raising=False)
+    monkeypatch.delenv("MARLOW_CRON_SESSION", raising=False)
+    monkeypatch.delenv("MARLOW_EXEC_ASK", raising=False)
     monkeypatch.setattr(A, "_get_approval_mode", lambda: "manual")
     assert A.check_execute_code_guard("import os", "local")["approved"] is True
 
 
 def test_guard_cron_deny_blocks(monkeypatch):
-    monkeypatch.setenv("HERMES_CRON_SESSION", "1")
-    monkeypatch.delenv("HERMES_GATEWAY_SESSION", raising=False)
+    monkeypatch.setenv("MARLOW_CRON_SESSION", "1")
+    monkeypatch.delenv("MARLOW_GATEWAY_SESSION", raising=False)
     monkeypatch.setattr(A, "_get_approval_mode", lambda: "manual")
     monkeypatch.setattr(A, "_get_cron_approval_mode", lambda: "deny")
     res = A.check_execute_code_guard("import os", "local")
@@ -242,15 +242,15 @@ def test_guard_session_yolo_bypasses(gw_session):
 # 4. Env scrubbing (#27303)
 # ---------------------------------------------------------------------------
 
-def test_env_scrub_hermes_allowlist_and_secret_blocks():
+def test_env_scrub_marlow_allowlist_and_secret_blocks():
     from tools.code_execution_tool import _scrub_child_env
 
     env = {
         # operational allowlist → kept
-        "HERMES_HOME": "/h", "HERMES_PROFILE": "p",
-        "HERMES_CONFIG": "/c.yaml", "HERMES_ENV": "/e",
-        # other HERMES_* → dropped (broad prefix removed)
-        "HERMES_UNUSED_FLAG": "x", "HERMES_INTERACTIVE": "1",
+        "MARLOW_HOME": "/h", "MARLOW_PROFILE": "p",
+        "MARLOW_CONFIG": "/c.yaml", "MARLOW_ENV": "/e",
+        # other MARLOW_* → dropped (broad prefix removed)
+        "MARLOW_UNUSED_FLAG": "x", "MARLOW_INTERACTIVE": "1",
         # secret substrings (incl. new DSN/WEBHOOK) → dropped
         "SENTRY_DSN": "https://a@s.io/1", "SLACK_WEBHOOK": "https://h/x",
         "OPENAI_API_KEY": "sk", "GITHUB_TOKEN": "ghp",
@@ -259,10 +259,10 @@ def test_env_scrub_hermes_allowlist_and_secret_blocks():
     }
     out = _scrub_child_env(env, is_passthrough=lambda _: False)
 
-    for kept in ("HERMES_HOME", "HERMES_PROFILE", "HERMES_CONFIG", "HERMES_ENV", "PATH"):
+    for kept in ("MARLOW_HOME", "MARLOW_PROFILE", "MARLOW_CONFIG", "MARLOW_ENV", "PATH"):
         assert kept in out, f"{kept} should be kept"
     for dropped in (
-        "HERMES_UNUSED_FLAG", "HERMES_INTERACTIVE",
+        "MARLOW_UNUSED_FLAG", "MARLOW_INTERACTIVE",
         "SENTRY_DSN", "SLACK_WEBHOOK", "OPENAI_API_KEY", "GITHUB_TOKEN",
         "RANDOM_X",
     ):
@@ -293,9 +293,9 @@ def test_execute_code_entry_blocks_before_spawn_when_guard_denies(monkeypatch, t
     from tools import terminal_tool as TT
 
     marker = tmp_path / "child-ran.marker"
-    monkeypatch.setenv("HERMES_CRON_SESSION", "1")
-    monkeypatch.delenv("HERMES_GATEWAY_SESSION", raising=False)
-    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+    monkeypatch.setenv("MARLOW_CRON_SESSION", "1")
+    monkeypatch.delenv("MARLOW_GATEWAY_SESSION", raising=False)
+    monkeypatch.delenv("MARLOW_INTERACTIVE", raising=False)
     monkeypatch.setattr(A, "_get_approval_mode", lambda: "manual")
     monkeypatch.setattr(A, "_get_cron_approval_mode", lambda: "deny")
     monkeypatch.setattr(TT, "_get_env_config", lambda: {"env_type": "local"})
@@ -312,43 +312,43 @@ def test_execute_code_entry_blocks_before_spawn_when_guard_denies(monkeypatch, t
 # 6. Env-scrub diagnosability mitigation (#27303 follow-up)
 # ---------------------------------------------------------------------------
 
-def test_env_scrub_logs_dropped_hermes_vars(caplog):
-    """Dropping a non-allowlisted, non-secret HERMES_* var must be diagnosable:
+def test_env_scrub_logs_dropped_marlow_vars(caplog):
+    """Dropping a non-allowlisted, non-secret MARLOW_* var must be diagnosable:
     the scrub emits a one-shot debug log naming the dropped vars and pointing at
     the env_passthrough opt-in, so the silent behavior change (#27303) doesn't
-    leave users guessing why a sandbox script sees an unset HERMES_* var."""
+    leave users guessing why a sandbox script sees an unset MARLOW_* var."""
     import logging
 
     from tools.code_execution_tool import _scrub_child_env
 
     env = {
-        "HERMES_HOME": "/h",          # allowlisted → kept, not logged
-        "HERMES_UNUSED_FLAG": "x",   # dropped → logged
-        "HERMES_API_KEY": "sk",       # secret → dropped silently (not logged)
+        "MARLOW_HOME": "/h",          # allowlisted → kept, not logged
+        "MARLOW_UNUSED_FLAG": "x",   # dropped → logged
+        "MARLOW_API_KEY": "sk",       # secret → dropped silently (not logged)
         "PATH": "/usr/bin",           # safe prefix → kept
     }
     with caplog.at_level(logging.DEBUG, logger="tools.code_execution_tool"):
         out = _scrub_child_env(env, is_passthrough=lambda _: False)
 
-    assert "HERMES_HOME" in out and "PATH" in out
-    assert "HERMES_UNUSED_FLAG" not in out
+    assert "MARLOW_HOME" in out and "PATH" in out
+    assert "MARLOW_UNUSED_FLAG" not in out
 
     msgs = "\n".join(r.getMessage() for r in caplog.records)
-    assert "HERMES_UNUSED_FLAG" in msgs
+    assert "MARLOW_UNUSED_FLAG" in msgs
     assert "env_passthrough" in msgs
     # Secret vars are dropped but must NOT be named in the diagnostic log.
-    assert "HERMES_API_KEY" not in msgs
+    assert "MARLOW_API_KEY" not in msgs
 
 
 def test_env_scrub_no_log_when_nothing_dropped(caplog):
-    """No diagnostic noise when there are no dropped HERMES_* vars."""
+    """No diagnostic noise when there are no dropped MARLOW_* vars."""
     import logging
 
     from tools.code_execution_tool import _scrub_child_env
 
     with caplog.at_level(logging.DEBUG, logger="tools.code_execution_tool"):
         _scrub_child_env(
-            {"HERMES_HOME": "/h", "PATH": "/usr/bin"},
+            {"MARLOW_HOME": "/h", "PATH": "/usr/bin"},
             is_passthrough=lambda _: False,
         )
     assert "dropped" not in "\n".join(r.getMessage() for r in caplog.records)

@@ -1,4 +1,4 @@
-# Approved Selective Hermes Cleanup
+# Approved Selective Marlow Cleanup
 
 Status: approved by the user's checked feature inventory on 2026-07-18.
 
@@ -9,10 +9,10 @@ unchecked items remain supported.
 
 ### WHY — motivation and problem
 
-Hermes contains many complete optional products and integrations. The earlier
+Marlow contains many complete optional products and integrations. The earlier
 cleanup incorrectly treated all optional systems as disposable and removed
 foundational gateway, messaging, and MCP behavior. The user instead wants a
-purpose-built Hermes distribution: keep the working core and the integrations
+purpose-built Marlow distribution: keep the working core and the integrations
 they use, while removing specifically selected providers, connectors, hosted
 services, UIs, deployment targets, backends, and maintenance material.
 
@@ -52,7 +52,7 @@ Docker execution, core browser automation, computer use, image generation via
 Codex, voice, Holographic and Honcho memory, and retained administration and
 deployment surfaces remain supported.
 
-Expected outcome: a smaller Hermes tailored to the approved feature boundary,
+Expected outcome: a smaller Marlow tailored to the approved feature boundary,
 without the accidental CLI-only product rewrite.
 
 ### HOW — approach and constraints
@@ -100,7 +100,7 @@ selective Codex restoration. The pull-request base has advanced to
 routing. The current branch therefore cannot be used as the implementation
 baseline; it must first be restored and brought up to the current base.
 
-Hermes relies on dynamic provider, platform, plugin, skill, and MCP discovery.
+Marlow relies on dynamic provider, platform, plugin, skill, and MCP discovery.
 Static imports alone do not define ownership. The approved checklist defines
 the product boundary, and registry/manifest/config consumers define the
 implementation boundary for each removal.

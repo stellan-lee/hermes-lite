@@ -82,14 +82,14 @@ class TestReasoningCommand:
     async def test_reasoning_command_reloads_current_state_from_config(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "agent:\n  reasoning_effort: none\ndisplay:\n  show_reasoning: true\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
         runner = _make_runner()
         runner._reasoning_config = {"enabled": True, "effort": "xhigh"}
         runner._show_reasoning = False
@@ -103,11 +103,11 @@ class TestReasoningCommand:
     async def test_handle_reasoning_command_updates_config_and_cache(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("agent:\n  reasoning_effort: medium\n", encoding="utf-8")
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
         runner = _make_runner()
         runner._reasoning_config = {"enabled": True, "effort": "medium"}
         result = await runner._handle_reasoning_command(
@@ -122,11 +122,11 @@ class TestReasoningCommand:
     async def test_handle_reasoning_command_defaults_to_session_only(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("agent:\n  reasoning_effort: medium\n", encoding="utf-8")
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
         runner = _make_runner()
         event = _make_event("/reasoning high")
         session_key = runner._session_key_for_source(event.source)
@@ -144,11 +144,11 @@ class TestReasoningCommand:
     async def test_reasoning_global_clears_existing_session_override(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("agent:\n  reasoning_effort: medium\n", encoding="utf-8")
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
         runner = _make_runner()
         event = _make_event("/reasoning low --global")
         session_key = runner._session_key_for_source(event.source)
@@ -166,11 +166,11 @@ class TestReasoningCommand:
     async def test_reasoning_reset_clears_session_override_without_config_write(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("agent:\n  reasoning_effort: medium\n", encoding="utf-8")
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
         runner = _make_runner()
         event = _make_event("/reasoning reset")
         session_key = runner._session_key_for_source(event.source)
@@ -187,12 +187,12 @@ class TestReasoningCommand:
     def test_resolve_session_reasoning_prefers_session_override(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        (marlow_home / "config.yaml").write_text(
             "agent:\n  reasoning_effort: low\n", encoding="utf-8"
         )
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
         runner = _make_runner()
         source = _make_event("/reasoning").source
         session_key = runner._session_key_for_source(source)
@@ -208,13 +208,13 @@ class TestReasoningCommand:
     def test_run_agent_reloads_reasoning_config_per_message(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        (marlow_home / "config.yaml").write_text(
             "agent:\n  reasoning_effort: low\n", encoding="utf-8"
         )
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
-        monkeypatch.setattr(gateway_run, "_env_path", hermes_home / ".env")
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
+        monkeypatch.setattr(gateway_run, "_env_path", marlow_home / ".env")
         monkeypatch.setattr(gateway_run, "load_dotenv", lambda *args, **kwargs: None)
         monkeypatch.setattr(
             gateway_run,
@@ -257,13 +257,13 @@ class TestReasoningCommand:
         }
 
     def test_run_agent_prefers_session_reasoning_override(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        (marlow_home / "config.yaml").write_text(
             "agent:\n  reasoning_effort: low\n", encoding="utf-8"
         )
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
-        monkeypatch.setattr(gateway_run, "_env_path", hermes_home / ".env")
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
+        monkeypatch.setattr(gateway_run, "_env_path", marlow_home / ".env")
         monkeypatch.setattr(gateway_run, "load_dotenv", lambda *args, **kwargs: None)
         monkeypatch.setattr(
             gateway_run,
@@ -312,14 +312,14 @@ class TestReasoningCommand:
     def test_run_agent_includes_enabled_mcp_servers_in_gateway_toolsets(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        (marlow_home / "config.yaml").write_text(
             "platform_toolsets:\n  cli: [web, memory]\nmcp_servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n  web-search-prime:\n    url: https://api.z.ai/api/mcp/web_search_prime/mcp\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
-        monkeypatch.setattr(gateway_run, "_env_path", hermes_home / ".env")
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
+        monkeypatch.setattr(gateway_run, "_env_path", marlow_home / ".env")
         monkeypatch.setattr(gateway_run, "load_dotenv", lambda *args, **kwargs: None)
         monkeypatch.setattr(
             gateway_run,
@@ -366,10 +366,10 @@ class TestLoadShowReasoningCoercion:
     """Regression: display.show_reasoning must be coerced, not bool()'d."""
 
     def _load_with_config(self, tmp_path, monkeypatch, yaml_body: str) -> bool:
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir()
-        (hermes_home / "config.yaml").write_text(yaml_body, encoding="utf-8")
-        monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
+        marlow_home = tmp_path / "marlow"
+        marlow_home.mkdir()
+        (marlow_home / "config.yaml").write_text(yaml_body, encoding="utf-8")
+        monkeypatch.setattr(gateway_run, "_marlow_home", marlow_home)
         return gateway_run.GatewayRunner._load_show_reasoning()
 
     def test_quoted_false_is_false(self, tmp_path, monkeypatch):

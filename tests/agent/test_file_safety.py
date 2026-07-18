@@ -66,13 +66,13 @@ class TestEnvFileReadBlocking:
             error = get_read_block_error(path)
             assert error is None, f"{path} should be allowed"
 
-    def test_allowed_hermes_env(self):
-        """Hermes' own .env inside HERMES_HOME is NOT blocked by this rule
+    def test_allowed_marlow_env(self):
+        """Marlow' own .env inside MARLOW_HOME is NOT blocked by this rule
         (it's handled by other mechanisms). Only project-local .env is blocked."""
-        # Note: hermes internal .env is in ~/.hermes/.env which is NOT a project-local
+        # Note: marlow internal .env is in ~/.marlow/.env which is NOT a project-local
         # path, but the basename check applies to ANY .env. This is intentional —
-        # even ~/.hermes/.env should not be readable via read_file.
-        error = get_read_block_error(os.path.expanduser("~/.hermes/.env"))
+        # even ~/.marlow/.env should not be readable via read_file.
+        error = get_read_block_error(os.path.expanduser("~/.marlow/.env"))
         assert error is not None
 
     def test_blocked_set_is_lowercase(self):
@@ -94,12 +94,12 @@ class TestEnvFileReadBlocking:
 class TestCombinedGuards:
     """Both guards should work independently without interference."""
 
-    def test_env_guard_works_regardless_of_hermes_home(self, tmp_path):
-        """The env basename guard does not depend on HERMES_HOME resolution."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
+    def test_env_guard_works_regardless_of_marlow_home(self, tmp_path):
+        """The env basename guard does not depend on MARLOW_HOME resolution."""
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
 
-        with patch("agent.file_safety._hermes_home_path", return_value=hermes_home):
+        with patch("agent.file_safety._marlow_home_path", return_value=marlow_home):
             # Regular project .env should still be blocked
             error = get_read_block_error("/workspace/.env")
             assert error is not None

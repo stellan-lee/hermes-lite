@@ -59,7 +59,7 @@ def test_pure_local_linux_does_not_preserve():
 def test_install_ctrl_enter_alias_maps_csi_u_sequences():
     """Kitty / xterm modifyOtherKeys / mintty Ctrl+Enter sequences alias to
     Alt+Enter (Escape, ControlM) so the existing newline handler fires."""
-    from hermes_cli.pt_input_extras import install_ctrl_enter_alias
+    from marlow_cli.pt_input_extras import install_ctrl_enter_alias
     from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
     from prompt_toolkit.keys import Keys
 
@@ -73,7 +73,7 @@ def test_install_ctrl_enter_alias_maps_csi_u_sequences():
 
 def test_install_ctrl_enter_alias_idempotent():
     """Running it twice doesn't double-count or break."""
-    from hermes_cli.pt_input_extras import install_ctrl_enter_alias
+    from marlow_cli.pt_input_extras import install_ctrl_enter_alias
     install_ctrl_enter_alias()
     second = install_ctrl_enter_alias()
     assert second == 0  # no further changes after first install

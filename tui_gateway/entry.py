@@ -2,9 +2,9 @@ import os
 import sys
 
 # Guard against a local utils/ (or other package) in CWD shadowing installed
-# hermes modules.  hermes_cli sets HERMES_PYTHON_SRC_ROOT before spawning this
+# marlow modules.  marlow_cli sets MARLOW_PYTHON_SRC_ROOT before spawning this
 # subprocess; inserting it first ensures the installed packages win.
-_src_root = os.environ.get("HERMES_PYTHON_SRC_ROOT", "")
+_src_root = os.environ.get("MARLOW_PYTHON_SRC_ROOT", "")
 if _src_root and _src_root not in sys.path:
     sys.path.insert(0, _src_root)
 # Strip '' and '.' — both resolve to CWD at import time and can let a local
@@ -32,7 +32,7 @@ _mcp_discovery_thread = None
 # falling back to ``os._exit(0)`` so a wedged worker mid-flush can't
 # strand the process.  1s covers the gateway's own shutdown work
 # (thread-pool drain + session finalize) on every machine we've
-# tested; override via ``HERMES_TUI_GATEWAY_SHUTDOWN_GRACE_S`` if a
+# tested; override via ``MARLOW_TUI_GATEWAY_SHUTDOWN_GRACE_S`` if a
 # slower environment needs more headroom (e.g. encrypted disks
 # flushing checkpoints) and accept that a longer grace also means a
 # longer wait when shutdown actually deadlocks.
@@ -40,7 +40,7 @@ _DEFAULT_SHUTDOWN_GRACE_S = 1.0
 
 
 def _shutdown_grace_seconds() -> float:
-    raw = (os.environ.get("HERMES_TUI_GATEWAY_SHUTDOWN_GRACE_S") or "").strip()
+    raw = (os.environ.get("MARLOW_TUI_GATEWAY_SHUTDOWN_GRACE_S") or "").strip()
     if not raw:
         return _DEFAULT_SHUTDOWN_GRACE_S
     try:
@@ -64,7 +64,7 @@ def _log_signal(signum: int, frame) -> None:
     pool — a thread holding ``_stdout_lock`` mid-flush would block the
     interpreter shutdown indefinitely.  We now log the stack, give the
     process the configured shutdown grace
-    (``HERMES_TUI_GATEWAY_SHUTDOWN_GRACE_S``, default
+    (``MARLOW_TUI_GATEWAY_SHUTDOWN_GRACE_S``, default
     ``_DEFAULT_SHUTDOWN_GRACE_S``) to drain naturally on a background
     thread, and fall back to ``os._exit(0)`` so a wedged write/flush
     can never strand the process.
@@ -182,7 +182,7 @@ def main():
     # MCP tool discovery — runs in a background daemon thread so a slow or
     # unreachable MCP server can't freeze TUI startup.  Previously this ran
     # inline before ``gateway.ready``, which meant any configured-but-down
-    # server stalled the whole shell on "summoning hermes…" for the full
+    # server stalled the whole shell on "summoning marlow…" for the full
     # connect-retry backoff (e.g. a dead stdio/http server burns 1+2+4s of
     # retries → ~7s of dead air before the composer appears).  Discovery is
     # idempotent and registers tools into the shared registry as servers
@@ -200,7 +200,7 @@ def main():
     # thread when there's actually MCP work to do, so the import cost stays
     # off the path entirely for the common case.
     try:
-        from hermes_cli.config import read_raw_config
+        from marlow_cli.config import read_raw_config
         _mcp_servers = (read_raw_config() or {}).get("mcp_servers")
         _has_mcp_servers = isinstance(_mcp_servers, dict) and len(_mcp_servers) > 0
     except Exception:

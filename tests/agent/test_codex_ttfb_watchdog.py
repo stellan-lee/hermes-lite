@@ -28,7 +28,7 @@ sys.modules.setdefault("fire", types.SimpleNamespace(Fire=lambda *a, **k: None))
 
 
 def _make_codex_agent(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
     (tmp_path / ".env").write_text("", encoding="utf-8")
     (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     from run_agent import AIAgent
@@ -62,7 +62,7 @@ def test_ttfb_kills_when_no_stream_event(tmp_path, monkeypatch):
     from agent import chat_completion_helpers as h
 
     agent = _make_codex_agent(tmp_path, monkeypatch)
-    monkeypatch.setenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_TIMEOUT_SECONDS", "1")
 
     closes: list = []
     dummy_client = SimpleNamespace()
@@ -109,8 +109,8 @@ def test_ttfb_default_tolerates_slow_first_event(tmp_path, monkeypatch):
 
     agent = _make_codex_agent(tmp_path, monkeypatch)
     # Default behavior: no explicit TTFB override.
-    monkeypatch.delenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("HERMES_CODEX_TTFB_MAX_SECONDS", raising=False)
+    monkeypatch.delenv("MARLOW_CODEX_TTFB_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("MARLOW_CODEX_TTFB_MAX_SECONDS", raising=False)
 
     closes: list = []
     dummy_client = SimpleNamespace()
@@ -147,7 +147,7 @@ def test_ttfb_includes_silent_hang_hint_for_gpt_5_5(tmp_path, monkeypatch):
     from agent import chat_completion_helpers as h
 
     agent = _make_codex_agent(tmp_path, monkeypatch)
-    monkeypatch.setenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_TIMEOUT_SECONDS", "1")
 
     closes: list = []
     statuses: list[str] = []
@@ -194,8 +194,8 @@ def test_ttfb_high_env_is_capped_for_openai_codex(tmp_path, monkeypatch):
     from agent import chat_completion_helpers as h
 
     agent = _make_codex_agent(tmp_path, monkeypatch)
-    monkeypatch.setenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", "90")
-    monkeypatch.setenv("HERMES_CODEX_TTFB_MAX_SECONDS", "1")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_MAX_SECONDS", "1")
 
     closes: list = []
     dummy_client = SimpleNamespace()
@@ -237,7 +237,7 @@ def test_ttfb_does_not_kill_when_events_flow(tmp_path, monkeypatch):
     from agent import chat_completion_helpers as h
 
     agent = _make_codex_agent(tmp_path, monkeypatch)
-    monkeypatch.setenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_TIMEOUT_SECONDS", "1")
 
     closes: list = []
     dummy_client = SimpleNamespace()
@@ -276,8 +276,8 @@ def test_event_idle_kills_after_first_event_then_silence(tmp_path, monkeypatch):
     from agent import chat_completion_helpers as h
 
     agent = _make_codex_agent(tmp_path, monkeypatch)
-    monkeypatch.setenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", "10")
-    monkeypatch.setenv("HERMES_CODEX_EVENT_STALE_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("MARLOW_CODEX_EVENT_STALE_TIMEOUT_SECONDS", "1")
 
     closes: list = []
     dummy_client = SimpleNamespace()
@@ -315,13 +315,13 @@ def test_event_idle_kills_after_first_event_then_silence(tmp_path, monkeypatch):
 
 
 def test_ttfb_disabled_via_env_zero(tmp_path, monkeypatch):
-    """Setting HERMES_CODEX_TTFB_TIMEOUT_SECONDS=0 disables the TTFB watchdog;
+    """Setting MARLOW_CODEX_TTFB_TIMEOUT_SECONDS=0 disables the TTFB watchdog;
     a no-event stall then falls through to the (here, 60s) stale timeout, so a
     short hang is NOT killed by TTFB."""
     from agent import chat_completion_helpers as h
 
     agent = _make_codex_agent(tmp_path, monkeypatch)
-    monkeypatch.setenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_TIMEOUT_SECONDS", "0")
 
     closes: list = []
     dummy_client = SimpleNamespace()
@@ -356,7 +356,7 @@ def test_large_codex_request_waits_instead_of_ttfb_reconnect(tmp_path, monkeypat
     from agent import chat_completion_helpers as h
 
     agent = _make_codex_agent(tmp_path, monkeypatch)
-    monkeypatch.setenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_TIMEOUT_SECONDS", "1")
 
     closes: list = []
     dummy_client = SimpleNamespace()
@@ -386,12 +386,12 @@ def test_large_codex_request_waits_instead_of_ttfb_reconnect(tmp_path, monkeypat
 
 def test_large_codex_request_strict_ttfb_env_still_reconnects(tmp_path, monkeypatch):
     """Operators can force the old early-reconnect behavior for large inputs
-    with HERMES_CODEX_TTFB_STRICT=1."""
+    with MARLOW_CODEX_TTFB_STRICT=1."""
     from agent import chat_completion_helpers as h
 
     agent = _make_codex_agent(tmp_path, monkeypatch)
-    monkeypatch.setenv("HERMES_CODEX_TTFB_TIMEOUT_SECONDS", "1")
-    monkeypatch.setenv("HERMES_CODEX_TTFB_STRICT", "1")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("MARLOW_CODEX_TTFB_STRICT", "1")
 
     closes: list = []
     dummy_client = SimpleNamespace()

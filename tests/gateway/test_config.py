@@ -200,14 +200,14 @@ class TestGatewayConfigRoundtrip:
 
 class TestLoadGatewayConfig:
     def test_bridges_quick_commands_from_config_yaml(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "quick_commands:\n  limits:\n    type: exec\n    command: echo ok\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.quick_commands == {
             "limits": {"type": "exec", "command": "echo ok"}
@@ -216,31 +216,31 @@ class TestLoadGatewayConfig:
     def test_bridges_group_sessions_per_user_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("group_sessions_per_user: false\n", encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.group_sessions_per_user is False
 
     def test_bridges_thread_sessions_per_user_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("thread_sessions_per_user: true\n", encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.thread_sessions_per_user is True
 
     def test_thread_sessions_per_user_defaults_to_false(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("{}\n", encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.thread_sessions_per_user is False
 
@@ -248,13 +248,13 @@ class TestLoadGatewayConfig:
         self, tmp_path, monkeypatch
     ):
         """discord.thread_require_mention in config.yaml should reach the runtime env var."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "discord:\n  thread_require_mention: true\n", encoding="utf-8"
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("DISCORD_THREAD_REQUIRE_MENTION", raising=False)
         load_gateway_config()
         assert os.environ.get("DISCORD_THREAD_REQUIRE_MENTION") == "true"
@@ -263,27 +263,27 @@ class TestLoadGatewayConfig:
         self, tmp_path, monkeypatch
     ):
         """Explicit env var should win over config.yaml (env > yaml precedence)."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "discord:\n  thread_require_mention: false\n", encoding="utf-8"
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "true")
         load_gateway_config()
         assert os.environ.get("DISCORD_THREAD_REQUIRE_MENTION") == "true"
 
     def test_bridges_discord_allow_from_from_config_yaml(self, tmp_path, monkeypatch):
         """discord.allow_from should populate DISCORD_ALLOWED_USERS for auth."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             'discord:\n  allow_from:\n    - "123456789012345678"\n    - "999888777666555444"\n',
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("DISCORD_ALLOWED_USERS", raising=False)
         config = load_gateway_config()
         assert config.platforms[Platform.DISCORD].extra["allow_from"] == [
@@ -299,14 +299,14 @@ class TestLoadGatewayConfig:
         self, tmp_path, monkeypatch
     ):
         """platforms.discord.extra.allow_from should reach DISCORD_ALLOWED_USERS too."""
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             'platforms:\n  discord:\n    extra:\n      allow_from:\n        - "123456789012345678"\n',
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("DISCORD_ALLOWED_USERS", raising=False)
         config = load_gateway_config()
         assert config.platforms[Platform.DISCORD].extra["allow_from"] == [
@@ -317,13 +317,13 @@ class TestLoadGatewayConfig:
     def test_bridges_quoted_false_platform_enabled_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             'platforms:\n  webhook:\n    enabled: "false"\n', encoding="utf-8"
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.platforms[Platform.WEBHOOK].enabled is False
         assert Platform.WEBHOOK not in config.get_connected_platforms()
@@ -331,14 +331,14 @@ class TestLoadGatewayConfig:
     def test_bridges_nested_gateway_platforms_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             'gateway:\n  platforms:\n    telegram:\n      enabled: true\n      token: nested-token\n      home_channel:\n        platform: telegram\n        chat_id: "123"\n        name: Nested Home\n      extra:\n        reply_prefix: nested\n',
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         telegram = config.platforms[Platform.TELEGRAM]
         assert telegram.enabled is True
@@ -351,14 +351,14 @@ class TestLoadGatewayConfig:
     def test_top_level_platforms_override_nested_gateway_platforms(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "gateway:\n  platforms:\n    telegram:\n      enabled: false\n      token: nested-token\n      extra:\n        reply_prefix: nested\nplatforms:\n  telegram:\n    enabled: true\n    token: top-token\n    extra:\n      reply_prefix: top\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         telegram = config.platforms[Platform.TELEGRAM]
         assert telegram.enabled is True
@@ -368,36 +368,36 @@ class TestLoadGatewayConfig:
     def test_bridges_quoted_false_session_notify_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text('session_reset:\n  notify: "false"\n', encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.default_reset_policy.notify is False
 
     def test_bridges_quoted_false_always_log_local_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text('always_log_local: "false"\n', encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.always_log_local is False
 
     def test_bridges_discord_channel_prompts_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             'discord:\n  channel_prompts:\n    "123": Research mode\n    456: Therapist mode\n',
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.platforms[Platform.DISCORD].extra["channel_prompts"] == {
             "123": "Research mode",
@@ -407,14 +407,14 @@ class TestLoadGatewayConfig:
     def test_bridges_discord_history_backfill_settings_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "discord:\n  history_backfill: true\n  history_backfill_limit: 17\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("DISCORD_HISTORY_BACKFILL", raising=False)
         monkeypatch.delenv("DISCORD_HISTORY_BACKFILL_LIMIT", raising=False)
         load_gateway_config()
@@ -424,14 +424,14 @@ class TestLoadGatewayConfig:
     def test_bridges_telegram_channel_prompts_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             'telegram:\n  channel_prompts:\n    "-1001234567": Research assistant\n    789: Creative writing\n',
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.platforms[Platform.TELEGRAM].extra["channel_prompts"] == {
             "-1001234567": "Research assistant",
@@ -441,14 +441,14 @@ class TestLoadGatewayConfig:
     def test_bridges_slack_channel_prompts_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             'slack:\n  channel_prompts:\n    "C01ABC": Code review mode\n',
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.platforms[Platform.SLACK].extra["channel_prompts"] == {
             "C01ABC": "Code review mode"
@@ -457,11 +457,11 @@ class TestLoadGatewayConfig:
     def test_bridges_feishu_allow_bots_from_config_yaml_to_env(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("feishu:\n  allow_bots: mentions\n", encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("FEISHU_ALLOW_BOTS", raising=False)
         load_gateway_config()
         assert os.environ.get("FEISHU_ALLOW_BOTS") == "mentions"
@@ -469,11 +469,11 @@ class TestLoadGatewayConfig:
     def test_feishu_allow_bots_env_takes_precedence_over_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("feishu:\n  allow_bots: all\n", encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.setenv("FEISHU_ALLOW_BOTS", "none")
         load_gateway_config()
         assert os.environ.get("FEISHU_ALLOW_BOTS") == "none"
@@ -481,25 +481,25 @@ class TestLoadGatewayConfig:
     def test_invalid_quick_commands_in_config_yaml_are_ignored(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("quick_commands: not-a-mapping\n", encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.quick_commands == {}
 
     def test_bridges_unauthorized_dm_behavior_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "unauthorized_dm_behavior: ignore\ntelegram:\n  unauthorized_dm_behavior: pair\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.unauthorized_dm_behavior == "ignore"
         assert (
@@ -510,13 +510,13 @@ class TestLoadGatewayConfig:
     def test_bridges_telegram_disable_link_previews_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "telegram:\n  disable_link_previews: true\n", encoding="utf-8"
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert (
             config.platforms[Platform.TELEGRAM].extra["disable_link_previews"] is True
@@ -525,14 +525,14 @@ class TestLoadGatewayConfig:
     def test_bridges_telegram_extra_base_url_from_config_yaml(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "telegram:\n  extra:\n    base_url: https://custom-proxy.example.com/bot\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert (
             config.platforms[Platform.TELEGRAM].extra["base_url"]
@@ -540,22 +540,22 @@ class TestLoadGatewayConfig:
         )
 
     def test_bridges_notice_delivery_from_config_yaml(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text("slack:\n  notice_delivery: private\n", encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         config = load_gateway_config()
         assert config.get_notice_delivery(Platform.SLACK) == "private"
 
     def test_bridges_telegram_proxy_url_from_config_yaml(self, tmp_path, monkeypatch):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "telegram:\n  proxy_url: socks5://127.0.0.1:1080\n", encoding="utf-8"
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("TELEGRAM_PROXY", raising=False)
         load_gateway_config()
         import os
@@ -565,13 +565,13 @@ class TestLoadGatewayConfig:
     def test_telegram_proxy_env_takes_precedence_over_config(
         self, tmp_path, monkeypatch
     ):
-        hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
-        config_path = hermes_home / "config.yaml"
+        marlow_home = tmp_path / ".marlow"
+        marlow_home.mkdir()
+        config_path = marlow_home / "config.yaml"
         config_path.write_text(
             "telegram:\n  proxy_url: http://from-config:8080\n", encoding="utf-8"
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.setenv("TELEGRAM_PROXY", "socks5://from-env:1080")
         load_gateway_config()
         import os
@@ -614,7 +614,7 @@ class TestHomeChannelEnvOverrides:
                 PlatformConfig(
                     enabled=True,
                     extra={
-                        "address": "hermes@test.com",
+                        "address": "marlow@test.com",
                         "imap_host": "imap.test.com",
                         "smtp_host": "smtp.test.com",
                     },

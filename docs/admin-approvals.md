@@ -1,6 +1,6 @@
 # Administrator-routed approvals
 
-Hermes can pause a gateway session and route privileged-action decisions to
+Marlow can pause a gateway session and route privileged-action decisions to
 one configured administrator, including an administrator on another connected
 messaging platform. The originating agent resumes only after that specific
 request is approved or declined.

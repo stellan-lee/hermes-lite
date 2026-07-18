@@ -46,7 +46,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
-from hermes_constants import get_hermes_home
+from marlow_constants import get_marlow_home
 from tools.daemon_pool import DaemonThreadPoolExecutor
 from tools.thread_context import propagate_context_to_thread
 
@@ -81,7 +81,7 @@ _DB_LOCK = threading.Lock()
 
 
 def _db_path():
-    return get_hermes_home() / "delegations.db"
+    return get_marlow_home() / "delegations.db"
 
 
 def _connect() -> sqlite3.Connection:
@@ -361,7 +361,7 @@ def dispatch_async_delegation(
 
     try:
         # Propagate the dispatching profile so the detached child resolves
-        # get_hermes_home() under the right profile.
+        # get_marlow_home() under the right profile.
         executor.submit(propagate_context_to_thread(_worker))
     except Exception as exc:  # pragma: no cover — pool submit failure is rare
         with _records_lock:

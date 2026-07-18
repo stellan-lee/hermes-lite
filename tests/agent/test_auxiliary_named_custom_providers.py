@@ -7,18 +7,18 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
-    """Redirect HERMES_HOME and clear module caches."""
-    hermes_home = tmp_path / ".hermes"
-    hermes_home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    """Redirect MARLOW_HOME and clear module caches."""
+    marlow_home = tmp_path / ".marlow"
+    marlow_home.mkdir()
+    monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
     # Write a minimal config so load_config doesn't fail
-    (hermes_home / "config.yaml").write_text("model:\n  default: test-model\n")
+    (marlow_home / "config.yaml").write_text("model:\n  default: test-model\n")
 
 
 def _write_config(tmp_path, config_dict):
-    """Write a config.yaml to the test HERMES_HOME."""
+    """Write a config.yaml to the test MARLOW_HOME."""
     import yaml
-    config_path = tmp_path / ".hermes" / "config.yaml"
+    config_path = tmp_path / ".marlow" / "config.yaml"
     config_path.write_text(yaml.dump(config_dict))
 
 
@@ -71,7 +71,7 @@ class TestProvidersDictApiMode:
                 },
             },
         })
-        from hermes_cli.runtime_provider import _get_named_custom_provider
+        from marlow_cli.runtime_provider import _get_named_custom_provider
         entry = _get_named_custom_provider("weird")
         assert entry is not None
         assert "api_mode" not in entry
@@ -87,7 +87,7 @@ class TestProvidersDictApiMode:
                 },
             },
         })
-        from hermes_cli.runtime_provider import _get_named_custom_provider
+        from marlow_cli.runtime_provider import _get_named_custom_provider
         entry = _get_named_custom_provider("localchat")
         assert entry is not None
         assert "api_mode" not in entry

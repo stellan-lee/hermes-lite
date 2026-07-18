@@ -1,7 +1,7 @@
 """SQLite persistence for the Work Experience validation MVP.
 
 ``ExperienceStore`` deliberately accepts an explicit, already-resolved
-``state.db`` path.  It does not consult Hermes profile configuration or expose
+``state.db`` path.  It does not consult Marlow profile configuration or expose
 session-message APIs.  The facade owns only additive ``experience_*`` tables,
 immutable lesson revisions, lifecycle transitions, scoped retrieval, and the
 small diagnostic ledger used by MVP0.
@@ -744,9 +744,9 @@ class ExperienceStore:
         self.close()
 
     def _configure_connection(self) -> None:
-        # Import lazily: importing hermes_state at this module's import time
+        # Import lazily: importing marlow_state at this module's import time
         # would resolve a default profile path, which this store must never do.
-        from hermes_state import apply_wal_with_fallback
+        from marlow_state import apply_wal_with_fallback
 
         apply_wal_with_fallback(self._conn, db_label=str(self.db_path))
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -968,7 +968,7 @@ class ExperienceStore:
             conn.execute(
                 "SELECT rowid FROM experience_search "
                 "WHERE experience_search MATCH ? LIMIT 1",
-                ("hermes_fts_usability_probe",),
+                ("marlow_fts_usability_probe",),
             ).fetchone()
         except sqlite3.OperationalError as exc:
             if self._fts_unavailable(exc):

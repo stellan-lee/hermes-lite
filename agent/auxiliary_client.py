@@ -79,7 +79,7 @@ def _compression_threshold_for_model(model: Optional[str]) -> Optional[float]:
 
 def _codex_cloudflare_headers(access_token: str) -> Dict[str, str]:
     headers = {
-        "User-Agent": "codex_cli_rs/0.0.0 (Hermes Agent)",
+        "User-Agent": "codex_cli_rs/0.0.0 (Marlow Agent)",
         "originator": "codex_cli_rs",
     }
     try:
@@ -99,7 +99,7 @@ def _to_openai_base_url(base_url: str) -> str:
 
 def _read_codex_access_token() -> Optional[str]:
     try:
-        from hermes_cli.auth import resolve_codex_runtime_credentials
+        from marlow_cli.auth import resolve_codex_runtime_credentials
 
         return str(resolve_codex_runtime_credentials().get("api_key") or "").strip() or None
     except Exception:
@@ -208,7 +208,7 @@ def _read_main_model() -> str:
     if _RUNTIME_MAIN_MODEL:
         return _RUNTIME_MAIN_MODEL
     try:
-        from hermes_cli.config import load_config
+        from marlow_cli.config import load_config
 
         cfg = load_config().get("model", {})
         if isinstance(cfg, str):
@@ -224,7 +224,7 @@ def _read_main_provider() -> str:
     if _RUNTIME_MAIN_PROVIDER:
         return _RUNTIME_MAIN_PROVIDER
     try:
-        from hermes_cli.config import load_config
+        from marlow_cli.config import load_config
 
         cfg = load_config().get("model", {})
         if isinstance(cfg, dict):
@@ -290,7 +290,7 @@ def _get_auxiliary_task_config(task: str) -> Dict[str, Any]:
     if not task:
         return {}
     try:
-        from hermes_cli.config import load_config
+        from marlow_cli.config import load_config
 
         auxiliary = load_config().get("auxiliary", {})
         result = auxiliary.get(task, {}) if isinstance(auxiliary, dict) else {}
@@ -298,7 +298,7 @@ def _get_auxiliary_task_config(task: str) -> Dict[str, Any]:
     except Exception:
         result = {}
     try:
-        from hermes_cli.plugins import get_plugin_auxiliary_tasks
+        from marlow_cli.plugins import get_plugin_auxiliary_tasks
 
         for entry in get_plugin_auxiliary_tasks():
             if entry.get("key") == task and isinstance(entry.get("defaults"), dict):
@@ -338,14 +338,14 @@ def _runtime_for_auxiliary(
             "api_mode": _RUNTIME_MAIN_API_MODE,
         }
         if runtime["provider"] != "openai-codex" and not runtime["base_url"]:
-            from hermes_cli.runtime_provider import resolve_runtime_provider
+            from marlow_cli.runtime_provider import resolve_runtime_provider
 
             resolved = resolve_runtime_provider(requested=runtime["provider"])
             if resolved:
                 resolved.setdefault("model", runtime["model"])
                 return resolved
         return runtime
-    from hermes_cli.runtime_provider import resolve_runtime_provider
+    from marlow_cli.runtime_provider import resolve_runtime_provider
 
     return resolve_runtime_provider(
         requested=None if normalized == "auto" else normalized,

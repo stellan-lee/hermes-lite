@@ -88,7 +88,7 @@ def test_check_website_access_supports_wildcard_subdomains_only(tmp_path):
 
 
 def test_default_config_exposes_website_blocklist_shape():
-    from hermes_cli.config import DEFAULT_CONFIG
+    from marlow_cli.config import DEFAULT_CONFIG
 
     website_blocklist = DEFAULT_CONFIG["security"]["website_blocklist"]
     assert website_blocklist["enabled"] is False
@@ -241,10 +241,10 @@ def test_load_website_blocklist_wraps_shared_file_read_errors(tmp_path, monkeypa
     assert result["rules"] == []  # shared file rules skipped
 
 
-def test_check_website_access_uses_dynamic_hermes_home(monkeypatch, tmp_path):
-    hermes_home = tmp_path / "hermes-home"
-    hermes_home.mkdir()
-    (hermes_home / "config.yaml").write_text(
+def test_check_website_access_uses_dynamic_marlow_home(monkeypatch, tmp_path):
+    marlow_home = tmp_path / "marlow-home"
+    marlow_home.mkdir()
+    (marlow_home / "config.yaml").write_text(
         yaml.safe_dump(
             {
                 "security": {
@@ -259,11 +259,11 @@ def test_check_website_access_uses_dynamic_hermes_home(monkeypatch, tmp_path):
         encoding="utf-8",
     )
 
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
 
-    # Invalidate the module-level cache so the new HERMES_HOME is picked up.
+    # Invalidate the module-level cache so the new MARLOW_HOME is picked up.
     # A prior test may have cached a default policy (enabled=False) under the
-    # old HERMES_HOME set by the autouse _isolate_hermes_home fixture.
+    # old MARLOW_HOME set by the autouse _isolate_marlow_home fixture.
     from tools.website_policy import invalidate_cache
     invalidate_cache()
 

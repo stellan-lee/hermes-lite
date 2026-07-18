@@ -61,7 +61,7 @@ import sys
 logger = logging.getLogger(__name__)
 
 # Configuration for MoA processing
-# ``active`` means the runtime selected for the current Hermes session. Repeating
+# ``active`` means the runtime selected for the current Marlow session. Repeating
 # it is intentional: independent calls still yield diverse candidate answers.
 REFERENCE_MODELS = ["active"] * 4
 AGGREGATOR_MODEL = "active"

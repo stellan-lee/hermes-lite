@@ -238,7 +238,7 @@ class TestTodoSkinIntegration:
     """
 
     def test_default_skin_prefix(self):
-        from hermes_cli.skin_engine import get_active_skin_name, set_active_skin
+        from marlow_cli.skin_engine import get_active_skin_name, set_active_skin
 
         previous = get_active_skin_name()
         try:

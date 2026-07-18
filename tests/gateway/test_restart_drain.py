@@ -92,8 +92,8 @@ async def test_draining_rejects_new_session_messages():
 def test_load_busy_input_mode_prefers_env_then_config_then_default(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
-    monkeypatch.delenv("HERMES_GATEWAY_BUSY_INPUT_MODE", raising=False)
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
+    monkeypatch.delenv("MARLOW_GATEWAY_BUSY_INPUT_MODE", raising=False)
 
     assert gateway_run.GatewayRunner._load_busy_input_mode() == "interrupt"
 
@@ -107,22 +107,22 @@ def test_load_busy_input_mode_prefers_env_then_config_then_default(
     )
     assert gateway_run.GatewayRunner._load_busy_input_mode() == "steer"
 
-    monkeypatch.setenv("HERMES_GATEWAY_BUSY_INPUT_MODE", "interrupt")
+    monkeypatch.setenv("MARLOW_GATEWAY_BUSY_INPUT_MODE", "interrupt")
     assert gateway_run.GatewayRunner._load_busy_input_mode() == "interrupt"
 
-    monkeypatch.setenv("HERMES_GATEWAY_BUSY_INPUT_MODE", "steer")
+    monkeypatch.setenv("MARLOW_GATEWAY_BUSY_INPUT_MODE", "steer")
     assert gateway_run.GatewayRunner._load_busy_input_mode() == "steer"
 
     # Unknown values fall through to the safe default
-    monkeypatch.setenv("HERMES_GATEWAY_BUSY_INPUT_MODE", "bogus")
+    monkeypatch.setenv("MARLOW_GATEWAY_BUSY_INPUT_MODE", "bogus")
     assert gateway_run.GatewayRunner._load_busy_input_mode() == "interrupt"
 
 
 def test_load_busy_text_mode_defaults_to_queue_and_allows_interrupt(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
-    monkeypatch.delenv("HERMES_GATEWAY_BUSY_TEXT_MODE", raising=False)
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
+    monkeypatch.delenv("MARLOW_GATEWAY_BUSY_TEXT_MODE", raising=False)
 
     assert gateway_run.GatewayRunner._load_busy_text_mode() == "queue"
 
@@ -131,18 +131,18 @@ def test_load_busy_text_mode_defaults_to_queue_and_allows_interrupt(
     )
     assert gateway_run.GatewayRunner._load_busy_text_mode() == "interrupt"
 
-    monkeypatch.setenv("HERMES_GATEWAY_BUSY_TEXT_MODE", "queue")
+    monkeypatch.setenv("MARLOW_GATEWAY_BUSY_TEXT_MODE", "queue")
     assert gateway_run.GatewayRunner._load_busy_text_mode() == "queue"
 
-    monkeypatch.setenv("HERMES_GATEWAY_BUSY_TEXT_MODE", "bogus")
+    monkeypatch.setenv("MARLOW_GATEWAY_BUSY_TEXT_MODE", "bogus")
     assert gateway_run.GatewayRunner._load_busy_text_mode() == "queue"
 
 
 def test_load_restart_drain_timeout_prefers_env_then_config_then_default(
     tmp_path, monkeypatch, caplog
 ):
-    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
-    monkeypatch.delenv("HERMES_RESTART_DRAIN_TIMEOUT", raising=False)
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
+    monkeypatch.delenv("MARLOW_RESTART_DRAIN_TIMEOUT", raising=False)
 
     assert (
         gateway_run.GatewayRunner._load_restart_drain_timeout()
@@ -154,10 +154,10 @@ def test_load_restart_drain_timeout_prefers_env_then_config_then_default(
     )
     assert gateway_run.GatewayRunner._load_restart_drain_timeout() == 12.0
 
-    monkeypatch.setenv("HERMES_RESTART_DRAIN_TIMEOUT", "7")
+    monkeypatch.setenv("MARLOW_RESTART_DRAIN_TIMEOUT", "7")
     assert gateway_run.GatewayRunner._load_restart_drain_timeout() == 7.0
 
-    monkeypatch.setenv("HERMES_RESTART_DRAIN_TIMEOUT", "invalid")
+    monkeypatch.setenv("MARLOW_RESTART_DRAIN_TIMEOUT", "invalid")
     assert (
         gateway_run.GatewayRunner._load_restart_drain_timeout()
         == DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT
@@ -186,7 +186,7 @@ async def test_launch_detached_restart_command_uses_setsid(monkeypatch):
     runner, _adapter = make_restart_runner()
     popen_calls = []
 
-    monkeypatch.setattr(gateway_run, "_resolve_hermes_bin", lambda: ["/usr/bin/hermes"])
+    monkeypatch.setattr(gateway_run, "_resolve_marlow_bin", lambda: ["/usr/bin/marlow"])
     monkeypatch.setattr(gateway_run.os, "getpid", lambda: 321)
     monkeypatch.setattr(
         shutil, "which", lambda cmd: "/usr/bin/setsid" if cmd == "setsid" else None

@@ -1,6 +1,6 @@
-# Contributing to Hermes Agent
+# Contributing to Marlow Agent
 
-Thank you for contributing to Hermes Agent! This guide covers everything you need: setting up your dev environment, understanding the architecture, deciding what to build, and getting your PR merged.
+Thank you for contributing to Marlow Agent! This guide covers everything you need: setting up your dev environment, understanding the architecture, deciding what to build, and getting your PR merged.
 
 ---
 
@@ -38,26 +38,26 @@ This is the most common question for new contributors. The answer is almost alwa
 
 ### Should the Skill be bundled?
 
-Bundled skills (in `skills/`) ship with every Hermes install. They should be **broadly useful to most users**:
+Bundled skills (in `skills/`) ship with every Marlow install. They should be **broadly useful to most users**:
 
 - Document handling, web research, common dev workflows, system administration
 - Used regularly by a wide range of people
 
 If your skill is official and useful but not universally needed (e.g., a paid service integration or a heavyweight dependency), put it in **`optional-skills/`**. It ships with the repository but is not copied into the active profile by default.
 
-Specialized community skills should ship independently and can be copied into `~/.hermes/skills/` or a project-local skills directory.
+Specialized community skills should ship independently and can be copied into `~/.marlow/skills/` or a project-local skills directory.
 
 ---
 
 ## Memory Providers: Ship as a Standalone Plugin
 
-**We are no longer accepting new memory providers into this repo.** The retained built-in providers under `plugins/memory/` are Honcho and Holographic. If you want to add a new memory backend, publish it as a **standalone plugin repo** that users install into `~/.hermes/plugins/` (or via a pip entry point).
+**We are no longer accepting new memory providers into this repo.** The retained built-in providers under `plugins/memory/` are Honcho and Holographic. If you want to add a new memory backend, publish it as a **standalone plugin repo** that users install into `~/.marlow/plugins/` (or via a pip entry point).
 
 Standalone memory plugins:
 
-- Implement the same `MemoryProvider` ABC (`agent/memory_provider.py`) — `sync_turn`, `prefetch`, `shutdown`, and optionally `post_setup(hermes_home, config)` for setup-wizard integration
+- Implement the same `MemoryProvider` ABC (`agent/memory_provider.py`) — `sync_turn`, `prefetch`, `shutdown`, and optionally `post_setup(marlow_home, config)` for setup-wizard integration
 - Use the same discovery system — `discover_memory_providers()` picks them up from user/project plugin directories and pip entry points
-- Integrate with `hermes memory setup` via `post_setup()` — no need to touch core code
+- Integrate with `marlow memory setup` via `post_setup()` — no need to touch core code
 - Can register their own CLI subcommands via `register_cli(subparser)` in a `cli.py` file
 - Get all the same lifecycle hooks and config plumbing as in-tree providers
 
@@ -81,8 +81,8 @@ This isn't a quality bar — it's a coupling-and-maintenance decision. Memory pr
 ### Clone and install
 
 ```bash
-git clone --recurse-submodules https://github.com/NousResearch/hermes-agent.git
-cd hermes-agent
+git clone --recurse-submodules https://github.com/NousResearch/marlow-agent.git
+cd marlow-agent
 
 # Create venv with Python 3.11
 uv venv venv --python 3.11
@@ -98,12 +98,12 @@ npm install
 ### Configure for development
 
 ```bash
-mkdir -p ~/.hermes/{cron,sessions,logs,memories,skills}
-cp cli-config.yaml.example ~/.hermes/config.yaml
-touch ~/.hermes/.env
+mkdir -p ~/.marlow/{cron,sessions,logs,memories,skills}
+cp cli-config.yaml.example ~/.marlow/config.yaml
+touch ~/.marlow/.env
 
 # Add at minimum an LLM provider key:
-echo "OPENROUTER_API_KEY=***" >> ~/.hermes/.env
+echo "OPENROUTER_API_KEY=***" >> ~/.marlow/.env
 ```
 
 ### Run
@@ -111,11 +111,11 @@ echo "OPENROUTER_API_KEY=***" >> ~/.hermes/.env
 ```bash
 # Symlink for global access
 mkdir -p ~/.local/bin
-ln -sf "$(pwd)/venv/bin/hermes" ~/.local/bin/hermes
+ln -sf "$(pwd)/venv/bin/marlow" ~/.local/bin/marlow
 
 # Verify
-hermes doctor
-hermes chat -q "Hello"
+marlow doctor
+marlow chat -q "Hello"
 ```
 
 ### Run tests
@@ -134,12 +134,12 @@ pytest tests/ -v
 ## Project Structure
 
 ```
-hermes-agent/
+marlow-agent/
 ├── run_agent.py              # AIAgent class — core conversation loop, tool dispatch, session persistence
-├── cli.py                    # HermesCLI class — interactive TUI, prompt_toolkit integration
+├── cli.py                    # MarlowCLI class — interactive TUI, prompt_toolkit integration
 ├── model_tools.py            # Tool orchestration (thin layer over tools/registry.py)
-├── toolsets.py               # Tool groupings and presets (hermes-cli, hermes-telegram, etc.)
-├── hermes_state.py           # SQLite session database with FTS5 full-text search, session titles
+├── toolsets.py               # Tool groupings and presets (marlow-cli, marlow-telegram, etc.)
+├── marlow_state.py           # SQLite session database with FTS5 full-text search, session titles
 ├── batch_runner.py           # Parallel batch processing for trajectory generation
 │
 ├── agent/                    # Agent internals (extracted modules)
@@ -150,7 +150,7 @@ hermes-agent/
 │   ├── model_metadata.py         # Model context lengths, token estimation
 │   └── trajectory.py             # Trajectory saving helpers
 │
-├── hermes_cli/               # CLI command implementations
+├── marlow_cli/               # CLI command implementations
 │   ├── main.py                   # Entry point, argument parsing, command dispatch
 │   ├── config.py                 # Config management, migration, env var definitions
 │   ├── setup.py                  # Interactive setup wizard
@@ -189,26 +189,26 @@ hermes-agent/
 ├── scripts/                  # Install, release, and test helpers
 │   └── install.sh                # Linux/macOS installer
 │
-├── skills/                   # Bundled skills (copied to ~/.hermes/skills/ on install)
+├── skills/                   # Bundled skills (copied to ~/.marlow/skills/ on install)
 ├── optional-skills/          # Shipped optional skills (not activated by default)
 ├── tests/                    # Test suite
 │
-├── cli-config.yaml.example   # Example configuration (copied to ~/.hermes/config.yaml)
+├── cli-config.yaml.example   # Example configuration (copied to ~/.marlow/config.yaml)
 └── AGENTS.md                 # Development guide for AI coding assistants
 ```
 
-### User configuration (stored in `~/.hermes/`)
+### User configuration (stored in `~/.marlow/`)
 
 | Path | Purpose |
 |------|---------|
-| `~/.hermes/config.yaml` | Settings (model, terminal, toolsets, compression, etc.) |
-| `~/.hermes/.env` | API keys and secrets |
-| `~/.hermes/auth.json` | Codex OAuth credentials |
-| `~/.hermes/skills/` | Active bundled, local, and agent-created skills |
-| `~/.hermes/memories/` | Persistent memory (MEMORY.md, USER.md) |
-| `~/.hermes/state.db` | SQLite session database |
-| `~/.hermes/sessions/` | Gateway routing index (`sessions.json`), request-dump breadcrumbs, gateway `*.jsonl` transcripts, and (optionally) per-session JSON snapshots when `sessions.write_json_snapshots: true` is set. The per-session snapshots are off by default; state.db is canonical. |
-| `~/.hermes/cron/` | Scheduled job data |
+| `~/.marlow/config.yaml` | Settings (model, terminal, toolsets, compression, etc.) |
+| `~/.marlow/.env` | API keys and secrets |
+| `~/.marlow/auth.json` | Codex OAuth credentials |
+| `~/.marlow/skills/` | Active bundled, local, and agent-created skills |
+| `~/.marlow/memories/` | Persistent memory (MEMORY.md, USER.md) |
+| `~/.marlow/state.db` | SQLite session database |
+| `~/.marlow/sessions/` | Gateway routing index (`sessions.json`), request-dump breadcrumbs, gateway `*.jsonl` transcripts, and (optionally) per-session JSON snapshots when `sessions.write_json_snapshots: true` is set. The per-session snapshots are off by default; state.db is canonical. |
+| `~/.marlow/cron/` | Scheduled job data |
 
 ---
 
@@ -235,7 +235,7 @@ User message → AIAgent._run_agent_loop()
 
 - **Self-registering tools**: Each tool file calls `registry.register()` at import time. `model_tools.py` triggers discovery by importing all tool modules.
 - **Toolset grouping**: Tools are grouped into toolsets (`web`, `terminal`, `file`, `browser`, etc.) that can be enabled/disabled per platform.
-- **Session persistence**: All conversations are stored in SQLite (`hermes_state.py`) with full-text search and unique session titles. Per-session JSON snapshots in `~/.hermes/sessions/` were superseded by the SQLite store and are off by default; opt back in with `sessions.write_json_snapshots: true` if you have external tooling that consumes the JSON files directly.
+- **Session persistence**: All conversations are stored in SQLite (`marlow_state.py`) with full-text search and unique session titles. Per-session JSON snapshots in `~/.marlow/sessions/` were superseded by the SQLite store and are off by default; opt back in with `sessions.write_json_snapshots: true` if you have external tooling that consumes the JSON files directly.
 - **Ephemeral injection**: System prompts and prefill messages are injected at API call time, never persisted to the database or logs.
 - **Provider abstraction**: The agent supports Codex OAuth and custom/local OpenAI-compatible endpoints.
 
@@ -306,7 +306,7 @@ imported by `discover_builtin_tools()` in `tools/registry.py` when `model_tools`
 loads. There is **no** manual import list in `model_tools.py` to maintain.
 
 You must still add the tool name to the appropriate list in `toolsets.py`
-(for example `_HERMES_CORE_TOOLS` or a dedicated toolset); otherwise the tool
+(for example `_MARLOW_CORE_TOOLS` or a dedicated toolset); otherwise the tool
 registers but is never exposed to the agent. If you introduce a new toolset,
 add it in `toolsets.py` and wire it into the relevant platform presets.
 
@@ -355,7 +355,7 @@ prerequisites:                     # Optional legacy runtime requirements
   env_vars: [MY_API_KEY]           #   Backward-compatible alias for required env vars
   commands: [curl, jq]             #   Advisory only; does not hide the skill
 metadata:
-  hermes:
+  marlow:
     tags: [Category, Subcategory, Keywords]
     related_skills: [other-skill-name]
     fallback_for_toolsets: [web]       # Optional — show only when toolset is unavailable
@@ -398,11 +398,11 @@ If the field is omitted or empty, the skill loads on all platforms (backward com
 
 Skills can declare conditions that control when they appear in the system prompt, based on which tools and toolsets are available in the current session. This is primarily used for **fallback skills** — alternatives that should only be shown when a primary tool is unavailable.
 
-Four fields are supported under `metadata.hermes`:
+Four fields are supported under `metadata.marlow`:
 
 ```yaml
 metadata:
-  hermes:
+  marlow:
     fallback_for_toolsets: [web]      # Show ONLY when these toolsets are unavailable
     requires_toolsets: [terminal]     # Show ONLY when these toolsets are available
     fallback_for_tools: [web_search]  # Show ONLY when these specific tools are unavailable
@@ -420,17 +420,17 @@ metadata:
 ```yaml
 # DuckDuckGo search — shown when the web toolset is unavailable
 metadata:
-  hermes:
+  marlow:
     fallback_for_toolsets: [web]
 
 # Smart home skill — only useful when terminal is available
 metadata:
-  hermes:
+  marlow:
     requires_toolsets: [terminal]
 
 # Browser helper — shown when the browser toolset is unavailable
 metadata:
-  hermes:
+  marlow:
     fallback_for_toolsets: [browser]
 ```
 
@@ -448,7 +448,7 @@ required_environment_variables:
     required_for: full functionality
 ```
 
-The user may skip setup and keep loading the skill. Hermes only exposes metadata (`stored_as`, `skipped`, `validated`) to the model — never the secret value.
+The user may skip setup and keep loading the skill. Marlow only exposes metadata (`stored_as`, `skipped`, `validated`) to the model — never the secret value.
 
 Legacy `prerequisites.env_vars` remains supported and is normalized into the new representation.
 
@@ -458,7 +458,7 @@ prerequisites:
   commands: [curl, jq]            # Advisory CLI checks
 ```
 
-Gateway and messaging sessions never collect secrets in-band; they instruct the user to run `hermes setup` or update `~/.hermes/.env` locally.
+Gateway and messaging sessions never collect secrets in-band; they instruct the user to run `marlow setup` or update `~/.marlow/.env` locally.
 
 **When to declare required environment variables:**
 - The skill uses an API key or token that should be collected securely at load time
@@ -486,7 +486,7 @@ Every new or modernized skill — bundled, optional, or contributed — must mee
    Good: `Search arXiv papers by keyword, author, category, or ID.`
    Bad: `A powerful and comprehensive skill that allows the agent to search arXiv for relevant academic papers using various criteria including keywords, authors, and categories.`
 
-2. **Tools referenced in SKILL.md prose must be native Hermes tools or MCP servers the skill explicitly expects.** When the skill needs a capability, point at the proper tool by name in backticks: `` `terminal` ``, `` `web_extract` ``, `` `web_search` ``, `` `read_file` ``, `` `write_file` ``, `` `patch` ``, `` `search_files` ``, `` `vision_analyze` ``, `` `browser_navigate` ``, `` `delegate_task` ``, `` `image_generate` ``, `` `text_to_speech` ``, `` `cronjob` ``, `` `memory` ``, `` `skill_view` ``, `` `todo` ``, `` `execute_code` ``.
+2. **Tools referenced in SKILL.md prose must be native Marlow tools or MCP servers the skill explicitly expects.** When the skill needs a capability, point at the proper tool by name in backticks: `` `terminal` ``, `` `web_extract` ``, `` `web_search` ``, `` `read_file` ``, `` `write_file` ``, `` `patch` ``, `` `search_files` ``, `` `vision_analyze` ``, `` `browser_navigate` ``, `` `delegate_task` ``, `` `image_generate` ``, `` `text_to_speech` ``, `` `cronjob` ``, `` `memory` ``, `` `skill_view` ``, `` `todo` ``, `` `execute_code` ``.
 
    Do NOT name shell utilities the agent already has wrapped:
 
@@ -503,7 +503,7 @@ Every new or modernized skill — bundled, optional, or contributed — must mee
 
 3. **`platforms:` gating audited against actual script imports.** Skills that use POSIX-only primitives (`fcntl`, `termios`, `os.setsid`, `os.kill(pid, 0)` for liveness, `/proc`, hardcoded `/tmp` paths, `signal.SIGKILL`, bash heredocs, `osascript`, `apt`, `systemctl`) must declare their supported platforms via the `platforms:` frontmatter. Default posture is to fix it cross-platform first — `tempfile.gettempdir()`, `pathlib.Path`, `psutil.pid_exists()`, Python-level filtering instead of `grep`. Gate to a narrower set only when the dependency is genuinely platform-bound (e.g. `osascript` is macOS-only, `/proc` is Linux-only).
 
-4. **`author` credits the human contributor first.** For external contributions, the contributor's real name + GitHub handle goes first (`Jane Doe (jane-doe)`); "Hermes Agent" is the secondary collaborator. If the contributor's commit shows "Hermes Agent" as author because they used Hermes to draft the skill, replace it with their actual name — credit the human, not the tool.
+4. **`author` credits the human contributor first.** For external contributions, the contributor's real name + GitHub handle goes first (`Jane Doe (jane-doe)`); "Marlow Agent" is the secondary collaborator. If the contributor's commit shows "Marlow Agent" as author because they used Marlow to draft the skill, replace it with their actual name — credit the human, not the tool.
 
 5. **SKILL.md body uses the modern section order.** `# <Skill> Skill` title, 2-3 sentence intro stating what it does and what it doesn't do, then:
    - `## When to Use` — trigger conditions
@@ -524,20 +524,20 @@ Every new or modernized skill — bundled, optional, or contributed — must mee
 
 ### Skill guidelines
 
-- **No external dependencies unless absolutely necessary.** Prefer stdlib Python, curl, and existing Hermes tools (`web_extract`, `terminal`, `read_file`).
+- **No external dependencies unless absolutely necessary.** Prefer stdlib Python, curl, and existing Marlow tools (`web_extract`, `terminal`, `read_file`).
 - **Progressive disclosure.** Put the most common workflow first. Edge cases and advanced usage go at the bottom.
 - **Include helper scripts** for XML/JSON parsing or complex logic — don't expect the LLM to write parsers inline every time.
-- **Test it.** Run `hermes --toolsets skills -q "Use the X skill to do Y"` and verify the agent follows the instructions correctly.
+- **Test it.** Run `marlow --toolsets skills -q "Use the X skill to do Y"` and verify the agent follows the instructions correctly.
 
 ---
 
 ## Adding a Skin / Theme
 
-Hermes uses a data-driven skin system — no code changes needed to add a new skin.
+Marlow uses a data-driven skin system — no code changes needed to add a new skin.
 
 **Option A: User skin (YAML file)**
 
-Create `~/.hermes/skins/<name>.yaml`:
+Create `~/.marlow/skins/<name>.yaml`:
 
 ```yaml
 name: mytheme
@@ -571,19 +571,19 @@ All fields are optional — missing values inherit from the default skin.
 
 **Option B: Built-in skin**
 
-Add to `_BUILTIN_SKINS` dict in `hermes_cli/skin_engine.py`. Use the same schema as above but as a Python dict. Built-in skins ship with the package and are always available.
+Add to `_BUILTIN_SKINS` dict in `marlow_cli/skin_engine.py`. Use the same schema as above but as a Python dict. Built-in skins ship with the package and are always available.
 
 **Activating:**
 - CLI: `/skin mytheme` or set `display.skin: mytheme` in config.yaml
 - Config: `display: { skin: mytheme }`
 
-See `hermes_cli/skin_engine.py` for the full schema and existing skins as examples.
+See `marlow_cli/skin_engine.py` for the full schema and existing skins as examples.
 
 ---
 
 ## Security Considerations
 
-Hermes has terminal access. Security matters.
+Marlow has terminal access. Security matters.
 
 ### Existing protections
 
@@ -664,7 +664,7 @@ refactor/description   # Code restructuring
 ### Before submitting
 
 1. **Run tests**: `scripts/run_tests.sh` (recommended; same as CI) or `pytest tests/ -v` with the project venv activated
-2. **Test manually**: Run `hermes` and exercise the code path you changed
+2. **Test manually**: Run `marlow` and exercise the code path you changed
 3. **Check platform impact**: If you touch file I/O, process management, or terminal handling, consider macOS and Linux
 4. **Keep PRs focused**: One logical change per PR. Don't mix a bug fix with a refactor with a new feature.
 
@@ -707,8 +707,8 @@ test(tools): add unit tests for file_operations
 
 ## Reporting Issues
 
-- Use [GitHub Issues](https://github.com/NousResearch/hermes-agent/issues)
-- Include: OS, Python version, Hermes version (`hermes version`), full error traceback
+- Use [GitHub Issues](https://github.com/NousResearch/marlow-agent/issues)
+- Include: OS, Python version, Marlow version (`marlow version`), full error traceback
 - Include steps to reproduce
 - Check existing issues before creating duplicates
 - For security vulnerabilities, please report privately

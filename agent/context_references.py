@@ -339,12 +339,12 @@ def _resolve_path(cwd: Path, target: str, *, allowed_root: Path | None = None) -
 
 
 def _ensure_reference_path_allowed(path: Path) -> None:
-    from hermes_constants import get_hermes_home
+    from marlow_constants import get_marlow_home
     home = Path(os.path.expanduser("~")).resolve()
-    hermes_home = get_hermes_home().resolve()
+    marlow_home = get_marlow_home().resolve()
 
     blocked_exact = {home / rel for rel in _SENSITIVE_HOME_FILES}
-    blocked_exact.add(hermes_home / ".env")
+    blocked_exact.add(marlow_home / ".env")
     blocked_dirs = [home / rel for rel in _SENSITIVE_HOME_DIRS]
 
     if path in blocked_exact:
@@ -355,7 +355,7 @@ def _ensure_reference_path_allowed(path: Path) -> None:
             path.relative_to(blocked_dir)
         except ValueError:
             continue
-        raise ValueError("path is a sensitive credential or internal Hermes path and cannot be attached")
+        raise ValueError("path is a sensitive credential or internal Marlow path and cannot be attached")
 
 
 def _strip_trailing_punctuation(value: str) -> str:

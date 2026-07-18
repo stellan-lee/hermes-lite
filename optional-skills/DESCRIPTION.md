@@ -2,14 +2,14 @@
 
 Official skills maintained by Nous Research that are **not activated by default**.
 
-These skills ship with the hermes-agent repository but are not copied to
-`~/.hermes/skills/` during setup. To activate one, copy its directory into
-`~/.hermes/skills/` or a project-local skills directory, then configure it
-with the local `hermes skills` command.
+These skills ship with the marlow-agent repository but are not copied to
+`~/.marlow/skills/` during setup. To activate one, copy its directory into
+`~/.marlow/skills/` or a project-local skills directory, then configure it
+with the local `marlow skills` command.
 
 ```bash
-cp -R optional-skills/devops/cli ~/.hermes/skills/
-hermes skills
+cp -R optional-skills/devops/cli ~/.marlow/skills/
+marlow skills
 ```
 
 ## Why optional?

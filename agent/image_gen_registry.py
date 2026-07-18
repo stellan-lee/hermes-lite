@@ -13,7 +13,7 @@ If unset, :func:`get_active_provider` applies minimal fallback logic:
 
 1. If exactly one provider is registered, use it.
 2. Otherwise return ``None`` (the tool surfaces a helpful error pointing
-   the user at ``hermes tools``).
+   the user at ``marlow tools``).
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def get_active_provider() -> Optional[ImageGenProvider]:
     """
     configured: Optional[str] = None
     try:
-        from hermes_cli.config import load_config
+        from marlow_cli.config import load_config
 
         cfg = load_config()
         section = cfg.get("image_gen") if isinstance(cfg, dict) else None

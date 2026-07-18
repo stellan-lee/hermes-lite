@@ -11,7 +11,7 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 
-from hermes_constants import get_hermes_home, get_skills_dir
+from marlow_constants import get_marlow_home, get_skills_dir
 from typing import Optional
 
 from agent.runtime_cwd import resolve_agent_cwd
@@ -73,11 +73,11 @@ def _find_git_root(start: Path) -> Optional[Path]:
     return None
 
 
-_HERMES_MD_NAMES = (".hermes.md", "HERMES.md")
+_MARLOW_MD_NAMES = (".marlow.md", "MARLOW.md")
 
 
-def _find_hermes_md(cwd: Path) -> Optional[Path]:
-    """Discover the nearest ``.hermes.md`` or ``HERMES.md``.
+def _find_marlow_md(cwd: Path) -> Optional[Path]:
+    """Discover the nearest ``.marlow.md`` or ``MARLOW.md``.
 
     Search order: *cwd* first, then each parent directory up to (and
     including) the git repository root.  Returns the first match, or
@@ -87,7 +87,7 @@ def _find_hermes_md(cwd: Path) -> Optional[Path]:
     current = cwd.resolve()
 
     for directory in [current, *current.parents]:
-        for name in _HERMES_MD_NAMES:
+        for name in _MARLOW_MD_NAMES:
             candidate = directory / name
             if candidate.is_file():
                 return candidate
@@ -119,7 +119,7 @@ def _strip_yaml_frontmatter(content: str) -> str:
 # =========================================================================
 
 DEFAULT_AGENT_IDENTITY = (
-    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
+    "You are Marlow Agent, an intelligent AI assistant created by Nous Research. "
     "You are helpful, knowledgeable, and direct. You assist users with a wide "
     "range of tasks including answering questions, writing and editing code, "
     "analyzing information, creative work, and executing actions via your tools. "
@@ -128,10 +128,10 @@ DEFAULT_AGENT_IDENTITY = (
     "Be targeted and efficient in your exploration and investigations."
 )
 
-HERMES_AGENT_HELP_GUIDANCE = (
-    "If the user asks about configuring, setting up, or using Hermes Agent "
-    "itself, load the `hermes-agent` skill with skill_view(name='hermes-agent') "
-    "before answering. Docs: https://hermes-agent.nousresearch.com/docs"
+MARLOW_AGENT_HELP_GUIDANCE = (
+    "If the user asks about configuring, setting up, or using Marlow Agent "
+    "itself, load the `marlow-agent` skill with skill_view(name='marlow-agent') "
+    "before answering. Docs: https://marlow-agent.nousresearch.com/docs"
 )
 
 MEMORY_GUIDANCE = (
@@ -434,7 +434,7 @@ PLATFORM_HINTS = {
 
 # Non-local terminal backends that run commands (and therefore every file
 # tool: read_file, write_file, patch, search_files) inside a separate
-# container / remote host rather than on the machine where Hermes itself
+# container / remote host rather than on the machine where Marlow itself
 # runs. For these backends, host info (Windows/Linux/macOS, $HOME, cwd) is
 # misleading — the agent should only see the machine it can actually touch.
 _REMOTE_TERMINAL_BACKENDS = frozenset({"docker", "ssh"})
@@ -454,7 +454,7 @@ _BACKEND_FALLBACK_DESCRIPTIONS: dict[str, str] = {
 # on the first prompt build of a session. Keyed by (env_type, cwd_hint) so
 # a mid-process backend switch rebuilds the string. Kept in-module (not on
 # disk) because the probe captures live backend state that may change
-# across Hermes restarts.
+# across Marlow restarts.
 _BACKEND_PROBE_CACHE: dict[tuple[str, str], str] = {}
 
 
@@ -464,7 +464,7 @@ def _probe_remote_backend(env_type: str) -> str | None:
     Returns a pre-formatted multi-line string describing the backend's OS,
     $HOME, cwd, and user — or None if the probe failed. Result is cached
     per process. Used only for non-local backends where the agent's tools
-    operate on a different machine than the host Hermes runs on.
+    operate on a different machine than the host Marlow runs on.
     """
     cwd_hint = os.getenv("TERMINAL_CWD", "")
     cache_key = (env_type, cwd_hint)
@@ -583,8 +583,8 @@ def build_environment_hints() -> str:
                 f"Terminal backend: {backend}. Your `terminal`, `read_file`, "
                 f"`write_file`, `patch`, and `search_files` tools all operate "
                 f"inside this {backend} environment — NOT on the machine "
-                f"where Hermes itself is running. The host OS, home, and cwd "
-                f"of the Hermes process are irrelevant; only the following "
+                f"where Marlow itself is running. The host OS, home, and cwd "
+                f"of the Marlow process are irrelevant; only the following "
                 f"backend state matters:\n{probe}"
             )
         else:
@@ -594,7 +594,7 @@ def build_environment_hints() -> str:
             hints.append(
                 f"Terminal backend: {backend}. Your `terminal`, `read_file`, "
                 f"`write_file`, `patch`, and `search_files` tools all operate "
-                f"inside {description} — NOT on the machine where Hermes "
+                f"inside {description} — NOT on the machine where Marlow "
                 f"itself runs. The backend probe didn't respond at "
                 f"prompt-build time, so the sandbox's current user, $HOME, "
                 f"and working directory are unknown from here. If you need "
@@ -602,24 +602,24 @@ def build_environment_hints() -> str:
                 f"`uname -a && whoami && pwd`."
             )
 
-    # Embedder-supplied environment description. Lets a host that wraps Hermes
+    # Embedder-supplied environment description. Lets a host that wraps Marlow
     # (e.g. a sandbox runner / managed platform) explain the environment the
     # agent is running in — proxy, credential handling, mount layout — without
     # forking the identity slot (SOUL.md). Read once at prompt-build time, so
     # it's part of the stable, cache-safe system prompt.
     #
     # Precedence (first non-empty wins):
-    #   1. HERMES_ENVIRONMENT_HINT env var — build-time/embedder mechanism.
+    #   1. MARLOW_ENVIRONMENT_HINT env var — build-time/embedder mechanism.
     #   2. ``agent.environment_hint_file`` — path to an external markdown file
     #      (e.g. SYSTEM_PROMPT.md) so long prompt text can live outside
     #      config.yaml and be edited frequently. Relative paths resolve under
-    #      HERMES_HOME. If set but unreadable, a warning is logged and we fall
+    #      MARLOW_HOME. If set but unreadable, a warning is logged and we fall
     #      back to the inline value below.
     #   3. ``agent.environment_hint`` — inline string in config.yaml.
-    extra = (os.getenv("HERMES_ENVIRONMENT_HINT") or "").strip()
+    extra = (os.getenv("MARLOW_ENVIRONMENT_HINT") or "").strip()
     if not extra:
         try:
-            from hermes_cli.config import load_config
+            from marlow_cli.config import load_config
 
             agent_cfg = load_config().get("agent", {}) or {}
             hint_file = str(agent_cfg.get("environment_hint_file", "") or "").strip()
@@ -640,8 +640,8 @@ def build_environment_hints() -> str:
 def _load_environment_hint_file(path_str: str) -> Optional[str]:
     """Load the system-prompt markdown file named by ``agent.environment_hint_file``.
 
-    Relative paths resolve under :func:`get_hermes_home` so they follow the
-    active Hermes home/profile rather than the process cwd; absolute paths are
+    Relative paths resolve under :func:`get_marlow_home` so they follow the
+    active Marlow home/profile rather than the process cwd; absolute paths are
     used as-is.  Returns the stripped file content, or ``None`` when the file
     is missing/empty/unreadable.  An unreadable configured path is surfaced as
     a warning (not silently ignored) so the caller can fall back to the inline
@@ -650,7 +650,7 @@ def _load_environment_hint_file(path_str: str) -> Optional[str]:
     try:
         path = Path(path_str).expanduser()
         if not path.is_absolute():
-            path = get_hermes_home() / path
+            path = get_marlow_home() / path
         if not path.exists():
             logger.warning(
                 "agent.environment_hint_file points to a missing file: %s "
@@ -689,7 +689,7 @@ _SKILLS_SNAPSHOT_VERSION = 1
 
 
 def _skills_prompt_snapshot_path() -> Path:
-    return get_hermes_home() / ".skills_prompt_snapshot.json"
+    return get_marlow_home() / ".skills_prompt_snapshot.json"
 
 
 def clear_skills_system_prompt_cache(*, clear_snapshot: bool = False) -> None:
@@ -851,7 +851,7 @@ def build_skills_system_prompt(
     Falls back to a full filesystem scan when both layers miss.
 
     External skill directories (``skills.external_dirs`` in config.yaml) are
-    scanned alongside the local ``~/.hermes/skills/`` directory.  External dirs
+    scanned alongside the local ``~/.marlow/skills/`` directory.  External dirs
     are read-only — they appear in the index but new skills are always created
     in the local dir.  Local skills take precedence when names collide.
     """
@@ -866,8 +866,8 @@ def build_skills_system_prompt(
     # produce distinct cache entries (gateway serves multiple platforms).
     from gateway.session_context import get_session_env
     _platform_hint = (
-        os.environ.get("HERMES_PLATFORM")
-        or get_session_env("HERMES_SESSION_PLATFORM")
+        os.environ.get("MARLOW_PLATFORM")
+        or get_session_env("MARLOW_SESSION_PLATFORM")
         or ""
     )
     disabled = get_disabled_skill_names()
@@ -1045,10 +1045,10 @@ def build_skills_system_prompt(
             "for tasks like code review, planning, and testing — load them even for tasks you "
             "already know how to do, because the skill defines how it should be done here.\n"
             "Whenever the user asks you to configure, set up, install, enable, disable, modify, "
-            "or troubleshoot Hermes Agent itself — its CLI, config, models, providers, tools, "
-            "skills, voice, gateway, plugins, or any feature — load the `hermes-agent` skill "
-            "first. It has the actual commands (e.g. `hermes config set …`, `hermes tools`, "
-            "`hermes setup`) so you don't have to guess or invent workarounds.\n"
+            "or troubleshoot Marlow Agent itself — its CLI, config, models, providers, tools, "
+            "skills, voice, gateway, plugins, or any feature — load the `marlow-agent` skill "
+            "first. It has the actual commands (e.g. `marlow config set …`, `marlow tools`, "
+            "`marlow setup`) so you don't have to guess or invent workarounds.\n"
             "If a skill has issues, fix it with skill_manage(action='patch').\n"
             "After difficult/iterative tasks, offer to save as a skill. "
             "If a skill you loaded was missing steps, had wrong commands, or needed "
@@ -1088,19 +1088,19 @@ def _truncate_content(content: str, filename: str, max_chars: int = CONTEXT_FILE
 
 
 def load_soul_md() -> Optional[str]:
-    """Load SOUL.md from HERMES_HOME and return its content, or None.
+    """Load SOUL.md from MARLOW_HOME and return its content, or None.
 
     Used as the agent identity (slot #1 in the system prompt).  When this
     returns content, ``build_context_files_prompt`` should be called with
     ``skip_soul=True`` so SOUL.md isn't injected twice.
     """
     try:
-        from hermes_cli.config import ensure_hermes_home
-        ensure_hermes_home()
+        from marlow_cli.config import ensure_marlow_home
+        ensure_marlow_home()
     except Exception as e:
-        logger.debug("Could not ensure HERMES_HOME before loading SOUL.md: %s", e)
+        logger.debug("Could not ensure MARLOW_HOME before loading SOUL.md: %s", e)
 
-    soul_path = get_hermes_home() / "SOUL.md"
+    soul_path = get_marlow_home() / "SOUL.md"
     if not soul_path.exists():
         return None
     try:
@@ -1115,26 +1115,26 @@ def load_soul_md() -> Optional[str]:
         return None
 
 
-def _load_hermes_md(cwd_path: Path) -> str:
-    """.hermes.md / HERMES.md — walk to git root."""
-    hermes_md_path = _find_hermes_md(cwd_path)
-    if not hermes_md_path:
+def _load_marlow_md(cwd_path: Path) -> str:
+    """.marlow.md / MARLOW.md — walk to git root."""
+    marlow_md_path = _find_marlow_md(cwd_path)
+    if not marlow_md_path:
         return ""
     try:
-        content = hermes_md_path.read_text(encoding="utf-8").strip()
+        content = marlow_md_path.read_text(encoding="utf-8").strip()
         if not content:
             return ""
         content = _strip_yaml_frontmatter(content)
-        rel = hermes_md_path.name
+        rel = marlow_md_path.name
         try:
-            rel = str(hermes_md_path.relative_to(cwd_path))
+            rel = str(marlow_md_path.relative_to(cwd_path))
         except ValueError:
             pass
         content = _scan_context_content(content, rel)
         result = f"## {rel}\n\n{content}"
-        return _truncate_content(result, ".hermes.md")
+        return _truncate_content(result, ".marlow.md")
     except Exception as e:
-        logger.debug("Could not read %s: %s", hermes_md_path, e)
+        logger.debug("Could not read %s: %s", marlow_md_path, e)
         return ""
 
 
@@ -1204,12 +1204,12 @@ def build_context_files_prompt(cwd: Optional[str] = None, skip_soul: bool = Fals
     """Discover and load context files for the system prompt.
 
     Priority (first found wins — only ONE project context type is loaded):
-      1. .hermes.md / HERMES.md  (walk to git root)
+      1. .marlow.md / MARLOW.md  (walk to git root)
       2. AGENTS.md / agents.md   (cwd only)
       3. CLAUDE.md / claude.md   (cwd only)
       4. .cursorrules / .cursor/rules/*.mdc  (cwd only)
 
-    SOUL.md from HERMES_HOME is independent and always included when present.
+    SOUL.md from MARLOW_HOME is independent and always included when present.
     Each context source is capped at 20,000 chars.
 
     When *skip_soul* is True, SOUL.md is not included here (it was already
@@ -1223,7 +1223,7 @@ def build_context_files_prompt(cwd: Optional[str] = None, skip_soul: bool = Fals
 
     # Priority-based project context: first match wins
     project_context = (
-        _load_hermes_md(cwd_path)
+        _load_marlow_md(cwd_path)
         or _load_agents_md(cwd_path)
         or _load_claude_md(cwd_path)
         or _load_cursorrules(cwd_path)
@@ -1231,7 +1231,7 @@ def build_context_files_prompt(cwd: Optional[str] = None, skip_soul: bool = Fals
     if project_context:
         sections.append(project_context)
 
-    # SOUL.md from HERMES_HOME only — skip when already loaded as identity
+    # SOUL.md from MARLOW_HOME only — skip when already loaded as identity
     if not skip_soul:
         soul_content = load_soul_md()
         if soul_content:

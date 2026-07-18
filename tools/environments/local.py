@@ -39,15 +39,15 @@ def _resolve_safe_cwd(cwd: str) -> str:
     return tempfile.gettempdir()
 
 
-# Hermes-internal env vars that should NOT leak into terminal subprocesses.
-_HERMES_PROVIDER_ENV_FORCE_PREFIX = "_HERMES_FORCE_"
+# Marlow-internal env vars that should NOT leak into terminal subprocesses.
+_MARLOW_PROVIDER_ENV_FORCE_PREFIX = "_MARLOW_FORCE_"
 
 def _build_provider_env_blocklist() -> frozenset:
     """Derive the blocklist from provider, tool, and gateway config."""
     blocked: set[str] = set()
 
     try:
-        from hermes_cli.auth import PROVIDER_REGISTRY
+        from marlow_cli.auth import PROVIDER_REGISTRY
         for pconfig in PROVIDER_REGISTRY.values():
             blocked.update(pconfig.api_key_env_vars)
             if pconfig.base_url_env_var:
@@ -56,7 +56,7 @@ def _build_provider_env_blocklist() -> frozenset:
         pass
 
     try:
-        from hermes_cli.config import OPTIONAL_ENV_VARS
+        from marlow_cli.config import OPTIONAL_ENV_VARS
         for name, metadata in OPTIONAL_ENV_VARS.items():
             category = metadata.get("category")
             if category in {"tool", "messaging"}:
@@ -98,23 +98,23 @@ def _build_provider_env_blocklist() -> frozenset:
     return frozenset(blocked)
 
 
-_HERMES_PROVIDER_ENV_BLOCKLIST = _build_provider_env_blocklist()
+_MARLOW_PROVIDER_ENV_BLOCKLIST = _build_provider_env_blocklist()
 
 
-def _inject_context_hermes_home(env: dict) -> None:
-    """Bridge the context-local Hermes home override into subprocess env."""
+def _inject_context_marlow_home(env: dict) -> None:
+    """Bridge the context-local Marlow home override into subprocess env."""
     try:
-        from hermes_constants import get_hermes_home_override
+        from marlow_constants import get_marlow_home_override
 
-        value = get_hermes_home_override()
+        value = get_marlow_home_override()
         if value:
-            env["HERMES_HOME"] = value
+            env["MARLOW_HOME"] = value
     except Exception:
         pass
 
 
 def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = None) -> dict:
-    """Filter Hermes-managed secrets from a subprocess environment."""
+    """Filter Marlow-managed secrets from a subprocess environment."""
     try:
         from tools.env_passthrough import is_env_passthrough as _is_passthrough
     except Exception:
@@ -123,22 +123,22 @@ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = Non
     sanitized: dict[str, str] = {}
 
     for key, value in (base_env or {}).items():
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
+        if key.startswith(_MARLOW_PROVIDER_ENV_FORCE_PREFIX):
             continue
-        if key not in _HERMES_PROVIDER_ENV_BLOCKLIST or _is_passthrough(key):
+        if key not in _MARLOW_PROVIDER_ENV_BLOCKLIST or _is_passthrough(key):
             sanitized[key] = value
 
     for key, value in (extra_env or {}).items():
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            real_key = key[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
+        if key.startswith(_MARLOW_PROVIDER_ENV_FORCE_PREFIX):
+            real_key = key[len(_MARLOW_PROVIDER_ENV_FORCE_PREFIX):]
             sanitized[real_key] = value
-        elif key not in _HERMES_PROVIDER_ENV_BLOCKLIST or _is_passthrough(key):
+        elif key not in _MARLOW_PROVIDER_ENV_BLOCKLIST or _is_passthrough(key):
             sanitized[key] = value
 
-    _inject_context_hermes_home(sanitized)
+    _inject_context_marlow_home(sanitized)
 
     # Per-profile HOME isolation for background processes (same as _make_run_env).
-    from hermes_constants import get_subprocess_home
+    from marlow_constants import get_subprocess_home
     _profile_home = get_subprocess_home()
     if _profile_home:
         sanitized["HOME"] = _profile_home
@@ -178,21 +178,21 @@ def _make_run_env(env: dict) -> dict:
     merged = dict(os.environ | env)
     run_env = {}
     for k, v in merged.items():
-        if k.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            real_key = k[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
+        if k.startswith(_MARLOW_PROVIDER_ENV_FORCE_PREFIX):
+            real_key = k[len(_MARLOW_PROVIDER_ENV_FORCE_PREFIX):]
             run_env[real_key] = v
-        elif k not in _HERMES_PROVIDER_ENV_BLOCKLIST or _is_passthrough(k):
+        elif k not in _MARLOW_PROVIDER_ENV_BLOCKLIST or _is_passthrough(k):
             run_env[k] = v
     existing_path = run_env.get("PATH", "")
     if "/usr/bin" not in existing_path.split(":"):
         run_env["PATH"] = f"{existing_path}:{_SANE_PATH}" if existing_path else _SANE_PATH
 
-    _inject_context_hermes_home(run_env)
+    _inject_context_marlow_home(run_env)
 
     # Per-profile HOME isolation: redirect system tool configs (git, ssh, gh,
-    # npm …) into {HERMES_HOME}/home/ when that directory exists.  Only the
+    # npm …) into {MARLOW_HOME}/home/ when that directory exists.  Only the
     # subprocess sees the override — the Python process keeps the real HOME.
-    from hermes_constants import get_subprocess_home
+    from marlow_constants import get_subprocess_home
     _profile_home = get_subprocess_home()
     if _profile_home:
         run_env["HOME"] = _profile_home
@@ -218,7 +218,7 @@ def _read_terminal_shell_init_config() -> tuple[list[str], bool]:
     execution never breaks because the config file is unreadable.
     """
     try:
-        from hermes_cli.config import load_config
+        from marlow_cli.config import load_config
 
         cfg = load_config() or {}
         terminal_cfg = cfg.get("terminal") or {}
@@ -237,7 +237,7 @@ def _resolve_shell_init_files() -> list[str]:
     Expands ``~`` and ``${VAR}`` references and drops anything that doesn't
     exist on disk, so a missing ``~/.bashrc`` never breaks the snapshot.
     The ``auto_source_bashrc`` path runs only when the user hasn't supplied
-    an explicit list — once they have, Hermes trusts them.
+    an explicit list — once they have, Marlow trusts them.
     """
     explicit, auto_bashrc = _read_terminal_shell_init_config()
 
@@ -379,7 +379,7 @@ class LocalEnvironment(BaseEnvironment):
             cwd=self.cwd,
         )
         try:
-            proc._hermes_pgid = os.getpgid(proc.pid)
+            proc._marlow_pgid = os.getpgid(proc.pid)
         except ProcessLookupError:
             pass
 
@@ -423,7 +423,7 @@ class LocalEnvironment(BaseEnvironment):
             try:
                 pgid = os.getpgid(proc.pid)
             except ProcessLookupError:
-                pgid = getattr(proc, "_hermes_pgid", None)
+                pgid = getattr(proc, "_marlow_pgid", None)
                 if pgid is None:
                     raise
 

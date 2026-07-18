@@ -33,7 +33,7 @@ def test_custom_call_omits_default_output_cap():
 
 def test_read_codex_token_from_auth_store():
     with patch(
-        "hermes_cli.auth._read_codex_tokens",
+        "marlow_cli.auth._read_codex_tokens",
         return_value={"tokens": {"access_token": "token"}},
     ):
         assert _read_codex_access_token() == "token"
@@ -42,14 +42,14 @@ def test_read_codex_token_from_auth_store():
 def test_expired_codex_token_is_rejected():
     token=_jwt({"exp":int(time.time())-60})
     with patch(
-        "hermes_cli.auth._read_codex_tokens",
+        "marlow_cli.auth._read_codex_tokens",
         return_value={"tokens": {"access_token": token}},
     ):
         assert _read_codex_access_token() is None
 
 
 def test_missing_auth_store_returns_none():
-    with patch("hermes_cli.auth._read_codex_tokens", side_effect=OSError):
+    with patch("marlow_cli.auth._read_codex_tokens", side_effect=OSError):
         assert _read_codex_access_token() is None
 
 

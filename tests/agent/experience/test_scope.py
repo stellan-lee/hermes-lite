@@ -90,7 +90,7 @@ def test_git_common_directory_identity_is_shared_by_sibling_worktrees(
 ) -> None:
     repo = _init_repo(tmp_path / "repo")
     _git(repo, "config", "user.email", "test@example.invalid")
-    _git(repo, "config", "user.name", "Hermes Test")
+    _git(repo, "config", "user.name", "Marlow Test")
     _git(repo, "commit", "--allow-empty", "-m", "initial")
     sibling = tmp_path / "sibling"
     _git(repo, "worktree", "add", "-b", "sibling", str(sibling))
