@@ -572,18 +572,15 @@ NOT import them (would double-instantiate `ProviderProfile`). Plugins
 without an explicit `kind:` get auto-coerced via a source-text heuristic
 (`register_provider` + `ProviderProfile` in `__init__.py`).
 
-Full authoring guide: https://marlow-agent.nousresearch.com/docs/developer-guide/model-provider-plugin
+Model-provider authoring conventions live in this guide and the bundled examples.
 
 ### Context-engine and image-gen plugin directories
 
 `plugins/context_engine/`, `plugins/image_gen/`, etc. follow the same
 pattern (ABC + orchestrator + per-plugin directory). Context engines
 plug into `agent/context_engine.py`; image-gen providers into
-`agent/image_gen_provider.py`. Reference / docs-companion plugins
-(`example-dashboard`, `strike-freedom-cockpit`, `plugin-llm-example`,
-`plugin-llm-async-example`) live in the
-[`marlow-example-plugins`](https://github.com/NousResearch/marlow-example-plugins)
-companion repo, not in this tree.
+`agent/image_gen_provider.py`. Reference or docs-companion plugins are
+maintained outside this tree and are not part of the bundled plugin surface.
 
 ---
 
@@ -779,7 +776,7 @@ Config section (`curator:` in `config.yaml`):
 `enabled`, `interval_hours`, `min_idle_hours`, `stale_after_days`,
 `archive_after_days`, `backup.*`.
 
-Full user-facing docs: https://marlow-agent.nousresearch.com/docs/user-guide/features/curator
+User-facing guidance is available through `marlow curator --help` and the repository README.
 
 ---
 

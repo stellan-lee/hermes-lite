@@ -6,7 +6,7 @@ Usage (via cron with --no-agent):
     marlow cron create marlow-issues \\
       --schedule "*/5 * * * *" --no-agent \\
       --script "$MARLOW_HOME/skills/devops/watchers/scripts/watch_github.py" \\
-      --script-args "--name marlow-issues --repo NousResearch/marlow-agent --scope issues"
+      --script-args "--name marlow-issues --repo stellan-lee/Marlow --scope issues"
 
 Set GITHUB_TOKEN (or GH_TOKEN) in ~/.marlow/.env to avoid the 60 req/hr
 anonymous rate limit.

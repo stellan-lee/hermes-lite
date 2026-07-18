@@ -43,7 +43,7 @@ marlow memory setup honcho
 # select "local", enter base URL (e.g. http://localhost:8000)
 ```
 
-See: https://docs.honcho.dev/v3/guides/integrations/marlow#running-honcho-locally-with-marlow
+Honcho documentation: https://docs.honcho.dev/
 
 ### Verify
 

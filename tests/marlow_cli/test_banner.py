@@ -78,7 +78,7 @@ def test_build_welcome_banner_title_is_hyperlinked_to_release():
     import tools.mcp_tool as _mcp
 
     _banner._latest_release_cache = None
-    tag_url = ("v2026.4.23", "https://github.com/NousResearch/marlow-agent/releases/tag/v2026.4.23")
+    tag_url = ("v2026.4.23", "https://github.com/stellan-lee/Marlow/releases/tag/v2026.4.23")
 
     buf = io.StringIO()
     with (

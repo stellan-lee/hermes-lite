@@ -5,7 +5,7 @@
 # Installation script for Linux and macOS using uv.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/NousResearch/marlow-agent/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/stellan-lee/Marlow/main/scripts/install.sh | bash
 #
 # Or with options:
 #   curl -fsSL ... | bash -s -- --no-venv --skip-setup
@@ -42,9 +42,15 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/marlow-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/marlow-agent.git"
-MARLOW_HOME="${MARLOW_HOME:-$HOME/.marlow}"
+REPO_URL_SSH="git@github.com:stellan-lee/Marlow.git"
+REPO_URL_HTTPS="https://github.com/stellan-lee/Marlow.git"
+if [ -n "${MARLOW_HOME:-}" ]; then
+    MARLOW_HOME_EXPLICIT=true
+else
+    MARLOW_HOME="$HOME/.marlow"
+    MARLOW_HOME_EXPLICIT=false
+fi
+LEGACY_HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
 # explicit directory — if so we never override it.
@@ -138,6 +144,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --marlow-home)
             MARLOW_HOME="$2"
+            MARLOW_HOME_EXPLICIT=true
             shift 2
             ;;
         --ensure)
@@ -205,7 +212,7 @@ print_banner() {
     echo "┌─────────────────────────────────────────────────────────┐"
     echo "│             ⚕ Marlow Agent Installer                    │"
     echo "├─────────────────────────────────────────────────────────┤"
-    echo "│  An open source AI agent by Nous Research.              │"
+    echo "│  A self-improving open source AI agent.                 │"
     echo "└─────────────────────────────────────────────────────────┘"
     echo -e "${NC}"
 }
@@ -316,6 +323,99 @@ prompt_yes_no() {
     esac
 }
 
+# Carry a pre-rename installation's user state into Marlow without moving or
+# deleting anything. The old source checkout and helper binaries are excluded;
+# they are not user data and copying them would preserve the broken editable
+# install that this migration is intended to escape. Existing Marlow files win,
+# making the operation idempotent and safe to rerun.
+migrate_legacy_hermes_state() {
+    if [ "$MARLOW_HOME_EXPLICIT" = true ]; then
+        return 0
+    fi
+    if [ ! -d "$LEGACY_HERMES_HOME" ] || [ "$LEGACY_HERMES_HOME" = "$MARLOW_HOME" ]; then
+        return 0
+    fi
+    if [ -e "$MARLOW_HOME" ] && [ "$LEGACY_HERMES_HOME" -ef "$MARLOW_HOME" ]; then
+        return 0
+    fi
+
+    local marker="$MARLOW_HOME/.legacy-migration-complete"
+    if [ -f "$marker" ]; then
+        return 0
+    fi
+
+    log_info "Existing pre-Marlow installation detected; preserving its user data..."
+    mkdir -p "$MARLOW_HOME"
+
+    local copied=0
+    local legacy_item
+    local item_name
+    local target_item
+    while IFS= read -r -d '' legacy_item; do
+        item_name="${legacy_item##*/}"
+        case "$item_name" in
+            hermes-agent|bin|.install_method|.update_*)
+                continue
+                ;;
+        esac
+        # Also skip any differently named source checkout.
+        if [ -d "$legacy_item/.git" ]; then
+            continue
+        fi
+        # Runtime sockets and pipes are not durable user state and copying them
+        # can block or create unusable endpoints in the new home.
+        if [ -S "$legacy_item" ] || [ -p "$legacy_item" ]; then
+            continue
+        fi
+
+        target_item="$MARLOW_HOME/$item_name"
+        if [ -e "$target_item" ] || [ -L "$target_item" ]; then
+            continue
+        fi
+        cp -pR "$legacy_item" "$target_item"
+        copied=$((copied + 1))
+    done < <(find "$LEGACY_HERMES_HOME" -mindepth 1 -maxdepth 1 -print0)
+
+    {
+        echo "source=$LEGACY_HERMES_HOME"
+        echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$marker"
+    chmod 600 "$marker"
+
+    log_success "Preserved $copied legacy state item(s) in $MARLOW_HOME"
+    log_info "The old checkout remains at $LEGACY_HERMES_HOME for manual rollback."
+}
+
+retire_legacy_hermes_launcher() {
+    local command_link_dir="$1"
+    local legacy_launcher="$command_link_dir/hermes"
+    if [ ! -e "$legacy_launcher" ] && [ ! -L "$legacy_launcher" ]; then
+        return 0
+    fi
+
+    local legacy_owned=false
+    local legacy_target=""
+    if [ -L "$legacy_launcher" ]; then
+        legacy_target="$(readlink "$legacy_launcher" 2>/dev/null || true)"
+        case "$legacy_target" in
+            *"/.hermes/hermes-agent/"*) legacy_owned=true ;;
+        esac
+    elif grep -qE '(\.hermes/hermes-agent|hermes-agent/venv|from marlow_cli\.main import main)' \
+            "$legacy_launcher" 2>/dev/null; then
+        legacy_owned=true
+    fi
+
+    if [ "$legacy_owned" = true ]; then
+        local legacy_backup="$legacy_launcher.marlow-migration-backup"
+        if [ -e "$legacy_backup" ] || [ -L "$legacy_backup" ]; then
+            legacy_backup="$legacy_backup.$(date -u +%Y%m%d-%H%M%S)"
+        fi
+        mv "$legacy_launcher" "$legacy_backup"
+        log_warn "Retired the obsolete 'hermes' launcher; use 'marlow' from now on."
+        log_info "Legacy launcher backup: $legacy_backup"
+    fi
+}
+
 # Decide where the repo checkout + venv live, and where the `marlow` command
 # symlink goes.  Called after detect_os so $OS/$DISTRO are known.
 #
@@ -329,6 +429,8 @@ prompt_yes_no() {
 #
 # Always no-op when the user set --dir or $MARLOW_INSTALL_DIR.
 resolve_install_layout() {
+    migrate_legacy_hermes_state
+
     if [ "$INSTALL_DIR_EXPLICIT" = true ]; then
         log_info "Install directory: $INSTALL_DIR (explicit)"
         return 0
@@ -1268,6 +1370,10 @@ exec "$MARLOW_BIN" "\$@"
 EOF
     chmod +x "$command_link_dir/marlow"
     log_success "Installed marlow launcher → $command_link_display_dir/marlow"
+
+    # Retire only a launcher positively identified as belonging to the old
+    # project. The helper preserves it as a backup and ignores unrelated tools.
+    retire_legacy_hermes_launcher "$command_link_dir"
 
     # FHS layout: /usr/local/bin is normally on PATH for login shells (via
     # /etc/profile pathmunge), but on RHEL/CentOS/Rocky/Alma 8+ non-login

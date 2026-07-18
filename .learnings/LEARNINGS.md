@@ -1,5 +1,49 @@
 # Learnings
 
+## [LRN-20260718-004] correction
+
+**Logged**: 2026-07-18T21:30:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+A project rename must include a working upgrade bridge from legacy launchers
+and data directories, not only replacement branding and repository URLs.
+
+### Details
+
+The identity audit changed active Marlow surfaces but did not exercise an
+existing installation launched through
+`~/.hermes/hermes-agent/venv/bin/hermes`. Its `/update` flow still displayed
+Hermes branding and executed an orphaned console script whose import of
+`marlow_cli` failed. A clean installer path alone is insufficient because
+existing users reach the upgrade through the old executable and need their
+configuration and state carried into `~/.marlow`.
+
+### Suggested Action
+
+Add a non-destructive installer migration that copies legacy state while
+excluding the old source checkout, retire known legacy launchers after the new
+launcher is installed, and validate updater executables before spawning them.
+Cover the legacy launcher and data-home transition in regression tests.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: scripts/install.sh, gateway/run.py, marlow_cli/relaunch.py
+- Tags: rename, migration, updater, launcher, hermes
+
+### Resolution
+
+- **Resolved**: 2026-07-18T22:00:00+08:00
+- **Notes**: Added a non-destructive installer state migration, retired only
+  positively identified legacy launchers, made gateway updates prefer the
+  current source script, and added regression coverage for all three paths.
+
+---
+
 ## [LRN-20260717-001] best_practice
 
 **Logged**: 2026-07-17T00:00:00+08:00

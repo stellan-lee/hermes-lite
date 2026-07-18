@@ -32,6 +32,19 @@ class TestResolveMarlowBin:
         )
         assert relaunch_mod.resolve_marlow_bin() == "/usr/bin/marlow"
 
+    def test_legacy_hermes_argv0_uses_marlow_from_path(self, monkeypatch):
+        legacy = "/Users/example/.hermes/hermes-agent/venv/bin/hermes"
+        monkeypatch.setattr(sys, "argv", [legacy, "update"])
+        monkeypatch.setattr(relaunch_mod.os.path, "isfile", lambda p: p == legacy)
+        monkeypatch.setattr(relaunch_mod.os, "access", lambda p, mode: p == legacy)
+        monkeypatch.setattr(
+            relaunch_mod.shutil,
+            "which",
+            lambda name: "/Users/example/.local/bin/marlow" if name == "marlow" else None,
+        )
+
+        assert relaunch_mod.resolve_marlow_bin() == "/Users/example/.local/bin/marlow"
+
     def test_returns_none_when_unresolvable(self, monkeypatch):
         monkeypatch.setattr(sys, "argv", ["-c"])
         monkeypatch.setattr(relaunch_mod.shutil, "which", lambda _name: None)

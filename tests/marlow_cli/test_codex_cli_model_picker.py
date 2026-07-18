@@ -53,7 +53,7 @@ def marlow_auth_only_env(tmp_path, monkeypatch):
 
     for var in [
         "OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-        "NOUS_API_KEY", "DEEPSEEK_API_KEY",
+        "DEEPSEEK_API_KEY",
     ]:
         monkeypatch.delenv(var, raising=False)
 
@@ -117,7 +117,7 @@ def test_no_codex_when_no_credentials(tmp_path, monkeypatch):
 
     for var in [
         "OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-        "NOUS_API_KEY", "DEEPSEEK_API_KEY", "COPILOT_GITHUB_TOKEN",
+        "DEEPSEEK_API_KEY", "COPILOT_GITHUB_TOKEN",
         "GH_TOKEN", "GEMINI_API_KEY",
     ]:
         monkeypatch.delenv(var, raising=False)

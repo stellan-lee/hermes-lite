@@ -11,7 +11,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from marlow_constants import get_marlow_home
+from marlow_constants import MARLOW_REPOSITORY_GIT_URL, MARLOW_REPOSITORY_URL, get_marlow_home
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 # rich and prompt_toolkit are imported lazily (inside the functions that use
@@ -119,7 +119,7 @@ _UPDATE_CHECK_CACHE_SECONDS = 6 * 3600
 # Sentinel returned when we know an update exists but cannot count commits.
 UPDATE_AVAILABLE_NO_COUNT = -1
 
-_UPSTREAM_REPO_URL = "https://github.com/NousResearch/marlow-agent.git"
+_UPSTREAM_REPO_URL = MARLOW_REPOSITORY_GIT_URL
 
 
 def _check_via_rev(local_rev: str) -> Optional[int]:
@@ -354,7 +354,7 @@ def get_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]:
     return {"upstream": upstream, "local": local, "ahead": max(ahead, 0)}
 
 
-_RELEASE_URL_BASE = "https://github.com/NousResearch/marlow-agent/releases/tag"
+_RELEASE_URL_BASE = f"{MARLOW_REPOSITORY_URL}/releases/tag"
 _latest_release_cache: Optional[tuple] = None  # (tag, url) once resolved
 
 
@@ -363,7 +363,7 @@ def get_latest_release_tag(repo_dir: Optional[Path] = None) -> Optional[tuple]:
 
     Local-only — runs ``git describe --tags --abbrev=0`` against the
     Marlow checkout. Cached per-process. Release URL always points at the
-    canonical NousResearch/marlow-agent repo (forks don't get a link).
+    canonical Marlow repo (forks don't get a link).
     """
     global _latest_release_cache
     if _latest_release_cache is not None:
@@ -541,7 +541,7 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
     if len(model_short) > 28:
         model_short = model_short[:25] + "..."
     ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
-    left_lines.append(f"[{accent}]{model_short}[/]{ctx_str} [dim {dim}]·[/] [dim {dim}]Nous Research[/]")
+    left_lines.append(f"[{accent}]{model_short}[/]{ctx_str} [dim {dim}]·[/] [dim {dim}]Marlow[/]")
 
     if os.getenv("MARLOW_YOLO_MODE"):
         left_lines.append(f"[bold red]⚠ YOLO mode[/] [dim {dim}]— all approval prompts bypassed[/]")
