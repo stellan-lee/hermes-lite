@@ -22,7 +22,9 @@ from marlow_cli.auth import (
 )
 
 
-def _setup_marlow_auth(marlow_home: Path, *, access_token: str = "access", refresh_token: str = "refresh"):
+def _setup_marlow_auth(
+    marlow_home: Path, *, access_token: str = "access", refresh_token: str = "refresh"
+):
     """Write Codex tokens into the Marlow auth store."""
     marlow_home.mkdir(parents=True, exist_ok=True)
     auth_store = {
@@ -46,7 +48,12 @@ def _setup_marlow_auth(marlow_home: Path, *, access_token: str = "access", refre
 
 def _jwt_with_exp(exp_epoch: int) -> str:
     payload = {"exp": exp_epoch}
-    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).rstrip(b"=").decode("utf-8")
+    encoded = (
+        base64
+        .urlsafe_b64encode(json.dumps(payload).encode("utf-8"))
+        .rstrip(b"=")
+        .decode("utf-8")
+    )
     return f"h.{encoded}.s"
 
 
@@ -83,10 +90,14 @@ def test_resolve_codex_runtime_credentials_missing_access_token(tmp_path, monkey
     assert exc.value.relogin_required is True
 
 
-def test_resolve_codex_runtime_credentials_refreshes_expiring_token(tmp_path, monkeypatch):
+def test_resolve_codex_runtime_credentials_refreshes_expiring_token(
+    tmp_path, monkeypatch
+):
     marlow_home = tmp_path / "marlow"
     expiring_token = _jwt_with_exp(int(time.time()) - 10)
-    _setup_marlow_auth(marlow_home, access_token=expiring_token, refresh_token="refresh-old")
+    _setup_marlow_auth(
+        marlow_home, access_token=expiring_token, refresh_token="refresh-old"
+    )
     monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
 
     called = {"count": 0}
@@ -105,7 +116,9 @@ def test_resolve_codex_runtime_credentials_refreshes_expiring_token(tmp_path, mo
 
 def test_resolve_codex_runtime_credentials_force_refresh(tmp_path, monkeypatch):
     marlow_home = tmp_path / "marlow"
-    _setup_marlow_auth(marlow_home, access_token="access-current", refresh_token="refresh-old")
+    _setup_marlow_auth(
+        marlow_home, access_token="access-current", refresh_token="refresh-old"
+    )
     monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
 
     called = {"count": 0}
@@ -116,102 +129,12 @@ def test_resolve_codex_runtime_credentials_force_refresh(tmp_path, monkeypatch):
 
     monkeypatch.setattr("marlow_cli.auth._refresh_codex_auth_tokens", _fake_refresh)
 
-    resolved = resolve_codex_runtime_credentials(force_refresh=True, refresh_if_expiring=False)
+    resolved = resolve_codex_runtime_credentials(
+        force_refresh=True, refresh_if_expiring=False
+    )
 
     assert called["count"] == 1
     assert resolved["api_key"] == "access-forced"
-
-
-def test_resolve_codex_runtime_credentials_falls_back_to_pool_when_singleton_empty(tmp_path, monkeypatch):
-    """Regression for #32992 — chat path returns 401 when singleton is empty but pool has creds.
-
-    The chat path historically went through ``resolve_codex_runtime_credentials`` which
-    only consulted ``providers.openai-codex.tokens`` and raised ``AuthError`` when that
-    was empty.  The auxiliary path went through ``_read_codex_access_token`` which
-    checks the pool first.  Users with creds only in the pool (manual seed, partial
-    re-auth, restore from backup) hit a bare HTTP 401 on chat but worked fine on
-    auxiliary calls.  The fallback closes that divergence.
-    """
-    marlow_home = tmp_path / "marlow"
-    marlow_home.mkdir(parents=True, exist_ok=True)
-    # Singleton: empty tokens (would normally raise AuthError).
-    # Pool: valid access_token.
-    auth_store = {
-        "version": 1,
-        "providers": {},  # no openai-codex singleton at all
-        "credential_pool": {
-            "openai-codex": [
-                {
-                    "source": "device_code",
-                    "access_token": "pool-fallback-token",
-                    "refresh_token": "pool-refresh",
-                    "last_status": "ok",
-                    "auth_type": "oauth",
-                },
-            ],
-        },
-    }
-    (marlow_home / "auth.json").write_text(json.dumps(auth_store))
-    monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
-    resolved = resolve_codex_runtime_credentials()
-    assert resolved["api_key"] == "pool-fallback-token"
-    assert resolved["source"] == "credential_pool"
-    assert resolved["base_url"]  # default codex backend URL
-
-
-def test_resolve_codex_runtime_credentials_pool_fallback_skips_exhausted(tmp_path, monkeypatch):
-    """The pool fallback skips entries currently in an exhaustion cooldown window."""
-    import time as _time
-
-    marlow_home = tmp_path / "marlow"
-    marlow_home.mkdir(parents=True, exist_ok=True)
-    future_reset = _time.time() + 3600  # 1h cooldown remaining
-    auth_store = {
-        "version": 1,
-        "providers": {},
-        "credential_pool": {
-            "openai-codex": [
-                {
-                    "source": "device_code",
-                    "access_token": "wedged-token",
-                    "last_error_reset_at": future_reset,  # in cooldown
-                },
-                {
-                    "source": "device_code",
-                    "access_token": "usable-token",
-                    "last_status": "ok",
-                },
-            ],
-        },
-    }
-    (marlow_home / "auth.json").write_text(json.dumps(auth_store))
-    monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
-    resolved = resolve_codex_runtime_credentials()
-    assert resolved["api_key"] == "usable-token"
-    assert resolved["source"] == "credential_pool"
-
-
-def test_resolve_codex_runtime_credentials_pool_fallback_no_usable_entry(tmp_path, monkeypatch):
-    """When both singleton and pool are empty/unusable, the original AuthError propagates."""
-    marlow_home = tmp_path / "marlow"
-    marlow_home.mkdir(parents=True, exist_ok=True)
-    auth_store = {
-        "version": 1,
-        "providers": {},
-        "credential_pool": {
-            "openai-codex": [
-                {"source": "device_code", "access_token": ""},  # empty
-            ],
-        },
-    }
-    (marlow_home / "auth.json").write_text(json.dumps(auth_store))
-    monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
-    with pytest.raises(AuthError) as exc:
-        resolve_codex_runtime_credentials()
-    assert exc.value.code == "codex_auth_missing"
 
 
 def test_resolve_provider_explicit_codex_does_not_fallback(monkeypatch):
@@ -233,161 +156,14 @@ def test_save_codex_tokens_roundtrip(tmp_path, monkeypatch):
     assert data["tokens"]["refresh_token"] == "rt456"
 
 
-def test_save_codex_tokens_syncs_credential_pool(tmp_path, monkeypatch):
-    """Re-auth must update the credential_pool device_code entry, not just providers.
-
-    Regression for #33000: the runtime selects from credential_pool, so a
-    re-auth that only refreshed providers.openai-codex.tokens left the pool
-    holding a consumed refresh token and stale error markers, causing an
-    immediate 401 token_invalidated on the next request.
-    """
-    marlow_home = tmp_path / "marlow"
-    marlow_home.mkdir(parents=True, exist_ok=True)
-    (marlow_home / "auth.json").write_text(json.dumps({
-        "version": 1,
-        "providers": {
-            "openai-codex": {
-                "tokens": {"access_token": "old-at", "refresh_token": "old-rt"},
-                "last_refresh": "2026-01-01T00:00:00Z",
-                "auth_mode": "chatgpt",
-            },
-        },
-        "credential_pool": {
-            "openai-codex": [
-                {
-                    "id": "abc123",
-                    "source": "device_code",
-                    "auth_type": "oauth",
-                    "access_token": "old-at",
-                    "refresh_token": "old-rt",
-                    "last_status": "exhausted",
-                    "last_error_code": 401,
-                    "last_error_reason": "token_invalidated",
-                    "last_error_reset_at": 9999999999,
-                },
-                {
-                    "id": "manual1",
-                    "source": "manual:codex",
-                    "auth_type": "oauth",
-                    "access_token": "manual-at",
-                    "refresh_token": "manual-rt",
-                },
-            ],
-        },
-    }))
-    monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
-    _save_codex_tokens({"access_token": "new-at", "refresh_token": "new-rt"},
-                       last_refresh="2026-05-27T00:00:00Z")
-
-    auth = json.loads((marlow_home / "auth.json").read_text())
-    pool = auth["credential_pool"]["openai-codex"]
-    seeded = next(e for e in pool if e["source"] == "device_code")
-    assert seeded["access_token"] == "new-at"
-    assert seeded["refresh_token"] == "new-rt"
-    assert seeded["last_refresh"] == "2026-05-27T00:00:00Z"
-    assert seeded["last_status"] is None
-    assert seeded["last_error_code"] is None
-    assert seeded["last_error_reason"] is None
-    assert seeded["last_error_reset_at"] is None
-
-    # Manual entries are independent credentials and must not be overwritten.
-    manual = next(e for e in pool if e["source"] == "manual:codex")
-    assert manual["access_token"] == "manual-at"
-    assert manual["refresh_token"] == "manual-rt"
-
-    # Provider singleton is updated too.
-    assert auth["providers"]["openai-codex"]["tokens"]["access_token"] == "new-at"
-
-
-def test_save_codex_tokens_syncs_manual_device_code_entries(tmp_path, monkeypatch):
-    """Re-auth must also refresh ``manual:device_code`` pool entries.
-
-    Regression for #33538: a user who hit #33000 before the #33164 fix landed
-    would have run ``marlow auth add openai-codex`` as a workaround, leaving
-    a pool entry with ``source="manual:device_code"``.  On every subsequent
-    re-auth via setup/model picker, the singleton-seeded ``device_code`` entry
-    got refreshed but the ``manual:device_code`` entry stayed stale, recreating
-    the same 401 token_invalidated symptom that #33164 was supposed to fix.
-
-    An interactive Codex device-code re-auth proves the user owns the ChatGPT
-    account, so it is safe to refresh every device-code-backed entry in the
-    pool — but NOT independent ``manual:api_key`` entries (separate accounts /
-    explicit API keys).
-    """
-    marlow_home = tmp_path / "marlow"
-    marlow_home.mkdir(parents=True, exist_ok=True)
-    (marlow_home / "auth.json").write_text(json.dumps({
-        "version": 1,
-        "providers": {
-            "openai-codex": {
-                "tokens": {"access_token": "old-at", "refresh_token": "old-rt"},
-                "last_refresh": "2026-01-01T00:00:00Z",
-                "auth_mode": "chatgpt",
-            },
-        },
-        "credential_pool": {
-            "openai-codex": [
-                {
-                    "id": "seeded",
-                    "source": "device_code",
-                    "auth_type": "oauth",
-                    "access_token": "old-at",
-                    "refresh_token": "old-rt",
-                },
-                {
-                    "id": "auth-add",
-                    "source": "manual:device_code",
-                    "auth_type": "oauth",
-                    "access_token": "stale-manual-at",
-                    "refresh_token": "stale-manual-rt",
-                    "last_status": "exhausted",
-                    "last_error_code": 401,
-                    "last_error_reason": "token_invalidated",
-                },
-                {
-                    "id": "api-key",
-                    "source": "manual:api_key",
-                    "auth_type": "api_key",
-                    "access_token": "user-api-key",
-                },
-            ],
-        },
-    }))
-    monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
-    _save_codex_tokens({"access_token": "fresh-at", "refresh_token": "fresh-rt"},
-                       last_refresh="2026-05-28T00:00:00Z")
-
-    auth = json.loads((marlow_home / "auth.json").read_text())
-    pool = auth["credential_pool"]["openai-codex"]
-
-    # Singleton-seeded device_code entry: refreshed and error markers cleared.
-    seeded = next(e for e in pool if e["source"] == "device_code")
-    assert seeded["access_token"] == "fresh-at"
-    assert seeded["refresh_token"] == "fresh-rt"
-
-    # manual:device_code entry: ALSO refreshed (the new behavior).
-    manual_dc = next(e for e in pool if e["source"] == "manual:device_code")
-    assert manual_dc["access_token"] == "fresh-at"
-    assert manual_dc["refresh_token"] == "fresh-rt"
-    assert manual_dc["last_refresh"] == "2026-05-28T00:00:00Z"
-    assert manual_dc["last_status"] is None
-    assert manual_dc["last_error_code"] is None
-    assert manual_dc["last_error_reason"] is None
-
-    # manual:api_key entry: untouched — independent credential.
-    api_key = next(e for e in pool if e["source"] == "manual:api_key")
-    assert api_key["access_token"] == "user-api-key"
-    assert "refresh_token" not in api_key or api_key.get("refresh_token") is None
-
-
 def test_import_codex_cli_tokens(tmp_path, monkeypatch):
     codex_home = tmp_path / "codex-cli"
     codex_home.mkdir(parents=True, exist_ok=True)
-    (codex_home / "auth.json").write_text(json.dumps({
-        "tokens": {"access_token": "cli-at", "refresh_token": "cli-rt"},
-    }))
+    (codex_home / "auth.json").write_text(
+        json.dumps({
+            "tokens": {"access_token": "cli-at", "refresh_token": "cli-rt"},
+        })
+    )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     tokens = _import_codex_cli_tokens()
@@ -438,7 +214,9 @@ class _StubHTTPResponse:
         self.status_code = status_code
         self._payload = payload
         self.headers = headers or {}
-        self.text = json.dumps(payload) if isinstance(payload, (dict, list)) else str(payload)
+        self.text = (
+            json.dumps(payload) if isinstance(payload, (dict, list)) else str(payload)
+        )
 
     def json(self):
         if isinstance(self._payload, Exception):
@@ -569,7 +347,12 @@ def test_refresh_429_classified_as_quota_not_auth_failure(monkeypatch):
 
     response = _StubHTTPResponse(
         429,
-        {"error": {"message": "You hit your usage limit.", "code": "usage_limit_reached"}},
+        {
+            "error": {
+                "message": "You hit your usage limit.",
+                "code": "usage_limit_reached",
+            }
+        },
         headers={"retry-after": "120"},
     )
     _patch_httpx(monkeypatch, response)
@@ -609,7 +392,10 @@ def test_is_rate_limited_auth_error_distinguishes_credential_errors():
     from marlow_cli.auth import CODEX_RATE_LIMITED_CODE, is_rate_limited_auth_error
 
     rate_limited = AuthError(
-        "quota", provider="openai-codex", code=CODEX_RATE_LIMITED_CODE, relogin_required=False
+        "quota",
+        provider="openai-codex",
+        code=CODEX_RATE_LIMITED_CODE,
+        relogin_required=False,
     )
     missing_creds = AuthError(
         "No Codex credentials stored.",
@@ -648,13 +434,20 @@ def test_login_openai_codex_force_new_login_skips_existing_reuse_prompt(monkeypa
         called["last_refresh"] = last_refresh
 
     monkeypatch.setattr("marlow_cli.auth._save_codex_tokens", _fake_save)
-    monkeypatch.setattr("marlow_cli.auth._update_config_for_provider", lambda *args, **kwargs: "/tmp/config.yaml")
+    monkeypatch.setattr(
+        "marlow_cli.auth._update_config_for_provider",
+        lambda *args, **kwargs: "/tmp/config.yaml",
+    )
     monkeypatch.setattr(
         "builtins.input",
-        lambda prompt="": (_ for _ in ()).throw(AssertionError("force_new_login should not prompt for reuse/import")),
+        lambda prompt="": (_ for _ in ()).throw(
+            AssertionError("force_new_login should not prompt for reuse/import")
+        ),
     )
 
-    _login_openai_codex(SimpleNamespace(), PROVIDER_REGISTRY["openai-codex"], force_new_login=True)
+    _login_openai_codex(
+        SimpleNamespace(), PROVIDER_REGISTRY["openai-codex"], force_new_login=True
+    )
 
     assert called["device_login"] == 1
     assert called["tokens"]["access_token"] == "fresh-at"

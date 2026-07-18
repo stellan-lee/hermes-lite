@@ -2,7 +2,7 @@
 Feishu/Lark platform adapter.
 
 Supports:
-- WebSocket long connection and Webhook transport
+- WebSocket long connection
 - Direct-message and group @mention-gated text receive/send
 - Inbound image/file/audio/media caching
 - Gateway allowlist integration via FEISHU_ALLOWED_USERS
@@ -12,8 +12,6 @@ Supports:
   swapped for CrossMark on failure
 - Reaction events routed as synthetic text events (matches openclaw)
 - Interactive card button-click events routed as synthetic COMMAND events
-- Webhook anomaly tracking (matches openclaw createWebhookAnomalyTracker)
-- Verification token validation as second auth layer (matches openclaw)
 
 Feishu identity model
 ---------------------
@@ -49,8 +47,6 @@ from __future__ import annotations
 
 import asyncio
 import collections
-import hashlib
-import hmac
 import itertools
 import json
 import logging
@@ -69,15 +65,6 @@ from typing import Any, Dict, List, Literal, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-
-# aiohttp/websockets are independent optional deps — import outside lark_oapi
-# so they remain available for tests and webhook mode even if lark_oapi is missing.
-try:
-    import aiohttp
-    from aiohttp import web
-except ImportError:
-    aiohttp = None  # type: ignore[assignment]
-    web = None  # type: ignore[assignment]
 
 try:
     import websockets
@@ -125,7 +112,6 @@ except ImportError:
     LARK_DOMAIN = None  # type: ignore[assignment]
 
 FEISHU_WEBSOCKET_AVAILABLE = websockets is not None
-FEISHU_WEBHOOK_AVAILABLE = aiohttp is not None
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
@@ -197,22 +183,8 @@ _DEFAULT_TEXT_BATCH_MAX_MESSAGES = 8
 _DEFAULT_TEXT_BATCH_MAX_CHARS = 4000
 _DEFAULT_MEDIA_BATCH_DELAY_SECONDS = 0.8
 _DEFAULT_DEDUP_CACHE_SIZE = 2048
-_DEFAULT_WEBHOOK_HOST = "127.0.0.1"
-_DEFAULT_WEBHOOK_PORT = 8765
-_DEFAULT_WEBHOOK_PATH = "/feishu/webhook"
-# ---------------------------------------------------------------------------
-# TTL, rate-limit and webhook security constants
-# ---------------------------------------------------------------------------
-
 _FEISHU_DEDUP_TTL_SECONDS = 24 * 60 * 60          # 24 hours — matches openclaw
 _FEISHU_SENDER_NAME_TTL_SECONDS = 10 * 60          # 10 minutes sender-name cache
-_FEISHU_WEBHOOK_MAX_BODY_BYTES = 1 * 1024 * 1024   # 1 MB body limit
-_FEISHU_WEBHOOK_RATE_WINDOW_SECONDS = 60            # sliding window for rate limiter
-_FEISHU_WEBHOOK_RATE_LIMIT_MAX = 120               # max requests per window per IP — matches openclaw
-_FEISHU_WEBHOOK_RATE_MAX_KEYS = 4096               # max tracked keys (prevents unbounded growth)
-_FEISHU_WEBHOOK_BODY_TIMEOUT_SECONDS = 30          # max seconds to read request body
-_FEISHU_WEBHOOK_ANOMALY_THRESHOLD = 25             # consecutive error responses before WARNING log
-_FEISHU_WEBHOOK_ANOMALY_TTL_SECONDS = 6 * 60 * 60  # anomaly tracker TTL (6 hours) — matches openclaw
 _FEISHU_CARD_ACTION_DEDUP_TTL_SECONDS = 15 * 60    # card action token dedup window (15 min)
 
 _APPROVAL_CHOICE_MAP: Dict[str, str] = {
@@ -365,9 +337,6 @@ class FeishuAdapterSettings:
     app_id: str  # Canonical bot/app identifier (credential, not from event payloads)
     app_secret: str
     domain_name: str
-    connection_mode: str
-    encrypt_key: str
-    verification_token: str
     group_policy: str
     allowed_group_users: frozenset[str]
     # Bot's own open_id (app-scoped) — returned by /bot/v3/info.  Used only for
@@ -383,9 +352,6 @@ class FeishuAdapterSettings:
     text_batch_max_messages: int
     text_batch_max_chars: int
     media_batch_delay_seconds: float
-    webhook_host: str
-    webhook_port: int
-    webhook_path: str
     ws_reconnect_nonce: int = 30
     ws_reconnect_interval: int = 120
     ws_ping_interval: Optional[int] = None
@@ -1431,16 +1397,12 @@ class FeishuAdapter(BasePlatformAdapter):
         self._ws_future: Optional[asyncio.Future] = None
         self._ws_thread_loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._webhook_runner: Optional[Any] = None
-        self._webhook_site: Optional[Any] = None
         self._event_handler: Optional[Any] = None
         self._seen_message_ids: Dict[str, float] = {}  # message_id → seen_at (time.time())
         self._seen_message_order: List[str] = []
         self._dedup_state_path = get_marlow_home() / "feishu_seen_message_ids.json"
         self._dedup_lock = threading.Lock()
         self._sender_name_cache: Dict[str, tuple[str, float]] = {}  # sender_id → (name, expire_at)
-        self._webhook_rate_counts: Dict[str, tuple[int, float]] = {}  # rate_key → (count, window_start)
-        self._webhook_anomaly_counts: Dict[str, tuple[int, str, float]] = {}  # ip → (count, last_status, first_seen)
         self._card_action_tokens: Dict[str, float] = {}  # token → first_seen_time
         # Inbound events that arrived before the adapter loop was ready
         # (e.g. during startup/restart or network-flap reconnect). A single
@@ -1515,13 +1477,6 @@ class FeishuAdapter(BasePlatformAdapter):
             app_id=str(extra.get("app_id") or os.getenv("FEISHU_APP_ID", "")).strip(),
             app_secret=str(extra.get("app_secret") or os.getenv("FEISHU_APP_SECRET", "")).strip(),
             domain_name=str(extra.get("domain") or os.getenv("FEISHU_DOMAIN", "feishu")).strip().lower(),
-            connection_mode=str(
-                extra.get("connection_mode") or os.getenv("FEISHU_CONNECTION_MODE", "websocket")
-            ).strip().lower(),
-            encrypt_key=str(extra.get("encrypt_key") or os.getenv("FEISHU_ENCRYPT_KEY", "")).strip(),
-            verification_token=str(
-                extra.get("verification_token") or os.getenv("FEISHU_VERIFICATION_TOKEN", "")
-            ).strip(),
             group_policy=os.getenv("FEISHU_GROUP_POLICY", "allowlist").strip().lower(),
             allowed_group_users=frozenset(
                 item.strip()
@@ -1552,16 +1507,6 @@ class FeishuAdapter(BasePlatformAdapter):
             media_batch_delay_seconds=float(
                 os.getenv("MARLOW_FEISHU_MEDIA_BATCH_DELAY_SECONDS", str(_DEFAULT_MEDIA_BATCH_DELAY_SECONDS))
             ),
-            webhook_host=str(
-                extra.get("webhook_host") or os.getenv("FEISHU_WEBHOOK_HOST", _DEFAULT_WEBHOOK_HOST)
-            ).strip(),
-            webhook_port=int(
-                extra.get("webhook_port") or os.getenv("FEISHU_WEBHOOK_PORT", str(_DEFAULT_WEBHOOK_PORT))
-            ),
-            webhook_path=(
-                str(extra.get("webhook_path") or os.getenv("FEISHU_WEBHOOK_PATH", _DEFAULT_WEBHOOK_PATH)).strip()
-                or _DEFAULT_WEBHOOK_PATH
-            ),
             ws_reconnect_nonce=_coerce_required_int(extra.get("ws_reconnect_nonce"), default=30, min_value=0),
             ws_reconnect_interval=_coerce_required_int(extra.get("ws_reconnect_interval"), default=120, min_value=1),
             ws_ping_interval=_coerce_int(extra.get("ws_ping_interval"), default=None, min_value=1),
@@ -1579,9 +1524,6 @@ class FeishuAdapter(BasePlatformAdapter):
         self._app_id = settings.app_id
         self._app_secret = settings.app_secret
         self._domain_name = settings.domain_name
-        self._connection_mode = settings.connection_mode
-        self._encrypt_key = settings.encrypt_key
-        self._verification_token = settings.verification_token
         self._group_policy = settings.group_policy
         self._allowed_group_users = set(settings.allowed_group_users)
         self._admins = set(settings.admins)
@@ -1596,9 +1538,6 @@ class FeishuAdapter(BasePlatformAdapter):
         self._text_batch_max_messages = settings.text_batch_max_messages
         self._text_batch_max_chars = settings.text_batch_max_chars
         self._media_batch_delay_seconds = settings.media_batch_delay_seconds
-        self._webhook_host = settings.webhook_host
-        self._webhook_port = settings.webhook_port
-        self._webhook_path = settings.webhook_path
         self._ws_reconnect_nonce = settings.ws_reconnect_nonce
         self._ws_reconnect_interval = settings.ws_reconnect_interval
         self._ws_ping_interval = settings.ws_ping_interval
@@ -1611,8 +1550,8 @@ class FeishuAdapter(BasePlatformAdapter):
             return None
         return (
             EventDispatcherHandler.builder(
-                self._encrypt_key,
-                self._verification_token,
+                "",
+                "",
             )
             .register_p2_im_message_message_read_v1(self._on_message_read_event)
             .register_p2_im_message_receive_v1(self._on_message_event)
@@ -1627,10 +1566,6 @@ class FeishuAdapter(BasePlatformAdapter):
             .register_p2_im_chat_member_bot_deleted_v1(self._on_bot_removed_from_chat)
             .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(self._on_p2p_chat_entered)
             .register_p2_im_message_recalled_v1(self._on_message_recalled)
-            .register_p2_customized_event(
-                "drive.notice.comment_add_v1",
-                self._on_drive_comment_event,
-            )
             .build()
         )
 
@@ -1642,18 +1577,6 @@ class FeishuAdapter(BasePlatformAdapter):
         if not self._app_id or not self._app_secret:
             logger.error("[Feishu] FEISHU_APP_ID or FEISHU_APP_SECRET not set")
             return False
-        if self._connection_mode not in {"websocket", "webhook"}:
-            logger.error(
-                "[Feishu] Unsupported FEISHU_CONNECTION_MODE=%s. Supported modes: websocket, webhook.",
-                self._connection_mode,
-            )
-            return False
-        if self._connection_mode == "webhook" and not (self._verification_token or self._encrypt_key):
-            logger.error(
-                "[Feishu] Webhook mode requires FEISHU_VERIFICATION_TOKEN or FEISHU_ENCRYPT_KEY."
-            )
-            return False
-
         try:
             self._app_lock_identity = self._app_id
             acquired, existing = acquire_scoped_lock(
@@ -1675,7 +1598,7 @@ class FeishuAdapter(BasePlatformAdapter):
             self._loop = asyncio.get_running_loop()
             await self._connect_with_retry()
             self._mark_connected()
-            logger.info("[Feishu] Connected in %s mode (%s)", self._connection_mode, self._domain_name)
+            logger.info("[Feishu] Connected via WebSocket (%s)", self._domain_name)
             return True
         except Exception as exc:
             await self._release_app_lock()
@@ -1691,7 +1614,6 @@ class FeishuAdapter(BasePlatformAdapter):
         await self._cancel_pending_tasks(self._pending_media_batch_tasks)
         self._reset_batch_buffers()
         self._disable_websocket_auto_reconnect()
-        await self._stop_webhook_server()
 
         ws_thread_loop = self._ws_thread_loop
         if ws_thread_loop is not None and not ws_thread_loop.is_closed():
@@ -1752,14 +1674,6 @@ class FeishuAdapter(BasePlatformAdapter):
         finally:
             self._ws_client = None
 
-    async def _stop_webhook_server(self) -> None:
-        if self._webhook_runner is None:
-            return
-        try:
-            await self._webhook_runner.cleanup()
-        finally:
-            self._webhook_runner = None
-            self._webhook_site = None
 
     # =========================================================================
     # Outbound — send / edit / send_image / send_voice / …
@@ -2414,7 +2328,7 @@ class FeishuAdapter(BasePlatformAdapter):
                 self._pending_drain_scheduled = False
 
     async def _handle_message_event_data(self, data: Any) -> None:
-        """Shared inbound message handling for websocket and webhook transports."""
+        """Handle an inbound event from the Feishu WebSocket transport."""
         event = getattr(data, "event", None)
         message = getattr(event, "message", None)
         sender = getattr(event, "sender", None)
@@ -2469,23 +2383,6 @@ class FeishuAdapter(BasePlatformAdapter):
     def _on_message_recalled(self, data: Any) -> None:
         logger.debug("[Feishu] Message recalled by user")
 
-    def _on_drive_comment_event(self, data: Any) -> None:
-        """Handle drive document comment notification (drive.notice.comment_add_v1).
-
-        Delegates to :mod:`gateway.platforms.feishu_comment` for parsing,
-        logging, and reaction.  Scheduling follows the same
-        ``run_coroutine_threadsafe`` pattern used by ``_on_message_event``.
-        """
-        from gateway.platforms.feishu_comment import handle_drive_comment_event
-
-        loop = self._loop
-        if not self._loop_accepts_callbacks(loop):
-            logger.warning("[Feishu] Dropping drive comment event before adapter loop is ready")
-            return
-        self._submit_on_loop(
-            loop,
-            handle_drive_comment_event(self._client, data, self_open_id=self._bot_open_id),
-        )
 
     def _on_reaction_event(self, event_type: str, data: Any) -> None:
         """Route user reactions on bot messages as synthetic text events."""
@@ -3033,35 +2930,7 @@ class FeishuAdapter(BasePlatformAdapter):
     # Webhook server and security
     # =========================================================================
 
-    def _record_webhook_anomaly(self, remote_ip: str, status: str) -> None:
-        """Increment the anomaly counter for remote_ip and emit a WARNING every threshold hits.
 
-        Mirrors openclaw's createWebhookAnomalyTracker: TTL 6 hours, log every 25 consecutive
-        error responses from the same IP.
-        """
-        now = time.time()
-        entry = self._webhook_anomaly_counts.get(remote_ip)
-        if entry is not None:
-            count, _last_status, first_seen = entry
-            if now - first_seen < _FEISHU_WEBHOOK_ANOMALY_TTL_SECONDS:
-                count += 1
-                if count % _FEISHU_WEBHOOK_ANOMALY_THRESHOLD == 0:
-                    logger.warning(
-                        "[Feishu] Webhook anomaly: %d consecutive error responses (%s) from %s "
-                        "over the last %.0fs",
-                        count,
-                        status,
-                        remote_ip,
-                        now - first_seen,
-                    )
-                self._webhook_anomaly_counts[remote_ip] = (count, status, first_seen)
-                return
-        # Either first occurrence or TTL expired — start fresh.
-        self._webhook_anomaly_counts[remote_ip] = (1, status, now)
-
-    def _clear_webhook_anomaly(self, remote_ip: str) -> None:
-        """Reset the anomaly counter for remote_ip after a successful request."""
-        self._webhook_anomaly_counts.pop(remote_ip, None)
 
     # =========================================================================
     # Inbound processing pipeline
@@ -3297,158 +3166,8 @@ class FeishuAdapter(BasePlatformAdapter):
             return [FeishuAdapter._namespace_from_mapping(item) for item in value]
         return value
 
-    async def _handle_webhook_request(self, request: Any) -> Any:
-        remote_ip = (getattr(request, "remote", None) or "unknown")
 
-        # Rate limiting — composite key: app_id:path:remote_ip (matches openclaw key structure).
-        rate_key = f"{self._app_id}:{self._webhook_path}:{remote_ip}"
-        if not self._check_webhook_rate_limit(rate_key):
-            logger.warning("[Feishu] Webhook rate limit exceeded for %s", remote_ip)
-            self._record_webhook_anomaly(remote_ip, "429")
-            return web.Response(status=429, text="Too Many Requests")
 
-        # Content-Type guard — Feishu always sends application/json.
-        headers = getattr(request, "headers", {}) or {}
-        content_type = str(headers.get("Content-Type", "") or "").split(";")[0].strip().lower()
-        if content_type and content_type != "application/json":
-            logger.warning("[Feishu] Webhook rejected: unexpected Content-Type %r from %s", content_type, remote_ip)
-            self._record_webhook_anomaly(remote_ip, "415")
-            return web.Response(status=415, text="Unsupported Media Type")
-
-        # Body size guard — reject early via Content-Length when present.
-        content_length = getattr(request, "content_length", None)
-        if content_length is not None and content_length > _FEISHU_WEBHOOK_MAX_BODY_BYTES:
-            logger.warning("[Feishu] Webhook body too large (%d bytes) from %s", content_length, remote_ip)
-            self._record_webhook_anomaly(remote_ip, "413")
-            return web.Response(status=413, text="Request body too large")
-
-        try:
-            body_bytes: bytes = await asyncio.wait_for(
-                request.read(),
-                timeout=_FEISHU_WEBHOOK_BODY_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("[Feishu] Webhook body read timed out after %ds from %s", _FEISHU_WEBHOOK_BODY_TIMEOUT_SECONDS, remote_ip)
-            self._record_webhook_anomaly(remote_ip, "408")
-            return web.Response(status=408, text="Request Timeout")
-        except Exception:
-            self._record_webhook_anomaly(remote_ip, "400")
-            return web.json_response({"code": 400, "msg": "failed to read body"}, status=400)
-
-        if len(body_bytes) > _FEISHU_WEBHOOK_MAX_BODY_BYTES:
-            logger.warning("[Feishu] Webhook body exceeds limit (%d bytes) from %s", len(body_bytes), remote_ip)
-            self._record_webhook_anomaly(remote_ip, "413")
-            return web.Response(status=413, text="Request body too large")
-
-        try:
-            payload = json.loads(body_bytes.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            self._record_webhook_anomaly(remote_ip, "400")
-            return web.json_response({"code": 400, "msg": "invalid json"}, status=400)
-
-        # Verification token check — second layer of defence beyond signature (matches openclaw).
-        if self._verification_token:
-            header = payload.get("header") or {}
-            incoming_token = str(header.get("token") or payload.get("token") or "")
-            if not incoming_token or not hmac.compare_digest(incoming_token, self._verification_token):
-                logger.warning("[Feishu] Webhook rejected: invalid verification token from %s", remote_ip)
-                self._record_webhook_anomaly(remote_ip, "401-token")
-                return web.Response(status=401, text="Invalid verification token")
-
-        # URL verification challenge — Feishu includes the verification token in
-        # challenge requests. Validate the token (above) before reflecting the
-        # challenge so an unauthenticated remote request cannot prove endpoint
-        # control by getting attacker-supplied challenge data echoed back.
-        if payload.get("type") == "url_verification":
-            return web.json_response({"challenge": payload.get("challenge", "")})
-
-        # Timing-safe signature verification (only enforced when encrypt_key is set).
-        if self._encrypt_key and not self._is_webhook_signature_valid(request.headers, body_bytes):
-            logger.warning("[Feishu] Webhook rejected: invalid signature from %s", remote_ip)
-            self._record_webhook_anomaly(remote_ip, "401-sig")
-            return web.Response(status=401, text="Invalid signature")
-
-        if payload.get("encrypt"):
-            logger.error("[Feishu] Encrypted webhook payloads are not supported by Marlow webhook mode")
-            self._record_webhook_anomaly(remote_ip, "400-encrypted")
-            return web.json_response({"code": 400, "msg": "encrypted webhook payloads are not supported"}, status=400)
-
-        self._clear_webhook_anomaly(remote_ip)
-
-        event_type = str((payload.get("header") or {}).get("event_type") or "")
-        data = self._namespace_from_mapping(payload)
-        if event_type == "im.message.receive_v1":
-            self._on_message_event(data)
-        elif event_type == "im.message.message_read_v1":
-            self._on_message_read_event(data)
-        elif event_type == "im.chat.member.bot.added_v1":
-            self._on_bot_added_to_chat(data)
-        elif event_type == "im.chat.member.bot.deleted_v1":
-            self._on_bot_removed_from_chat(data)
-        elif event_type in {"im.message.reaction.created_v1", "im.message.reaction.deleted_v1"}:
-            self._on_reaction_event(event_type, data)
-        elif event_type == "card.action.trigger":
-            self._on_card_action_trigger(data)
-        elif event_type == "drive.notice.comment_add_v1":
-            self._on_drive_comment_event(data)
-        else:
-            logger.debug("[Feishu] Ignoring webhook event type: %s", event_type or "unknown")
-        return web.json_response({"code": 0, "msg": "ok"})
-
-    def _is_webhook_signature_valid(self, headers: Any, body_bytes: bytes) -> bool:
-        """Verify Feishu webhook signature using timing-safe comparison.
-
-        Feishu signature algorithm:
-            SHA256(timestamp + nonce + encrypt_key + body_string)
-        Headers checked: x-lark-request-timestamp, x-lark-request-nonce, x-lark-signature.
-        """
-        timestamp = str(headers.get("x-lark-request-timestamp", "") or "")
-        nonce = str(headers.get("x-lark-request-nonce", "") or "")
-        signature = str(headers.get("x-lark-signature", "") or "")
-        if not timestamp or not nonce or not signature:
-            return False
-        try:
-            body_str = body_bytes.decode("utf-8", errors="replace")
-            content = f"{timestamp}{nonce}{self._encrypt_key}{body_str}"
-            computed = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            return hmac.compare_digest(computed, signature)
-        except Exception:
-            logger.debug("[Feishu] Signature verification raised an exception", exc_info=True)
-            return False
-
-    def _check_webhook_rate_limit(self, rate_key: str) -> bool:
-        """Return False when the composite rate_key has exceeded _FEISHU_WEBHOOK_RATE_LIMIT_MAX.
-
-        The rate_key is composed as "{app_id}:{path}:{remote_ip}" — matching openclaw's key
-        structure so the limit is scoped to a specific (account, endpoint, IP) triple rather
-        than a bare IP, which causes fewer false-positive denials in multi-tenant setups.
-
-        The tracking dict is capped at _FEISHU_WEBHOOK_RATE_MAX_KEYS entries to prevent unbounded
-        memory growth. Stale (expired) entries are pruned when the cap is reached.
-        """
-        now = time.time()
-        # Fast path: existing entry within the current window.
-        entry = self._webhook_rate_counts.get(rate_key)
-        if entry is not None:
-            count, window_start = entry
-            if now - window_start < _FEISHU_WEBHOOK_RATE_WINDOW_SECONDS:
-                if count >= _FEISHU_WEBHOOK_RATE_LIMIT_MAX:
-                    return False
-                self._webhook_rate_counts[rate_key] = (count + 1, window_start)
-                return True
-        # New window for an existing key, or a brand-new key — prune stale entries first.
-        if len(self._webhook_rate_counts) >= _FEISHU_WEBHOOK_RATE_MAX_KEYS:
-            stale_keys = [
-                k for k, (_, ws) in self._webhook_rate_counts.items()
-                if now - ws >= _FEISHU_WEBHOOK_RATE_WINDOW_SECONDS
-            ]
-            for k in stale_keys:
-                del self._webhook_rate_counts[k]
-            # If still at capacity after pruning, allow through without tracking.
-            if rate_key not in self._webhook_rate_counts and len(self._webhook_rate_counts) >= _FEISHU_WEBHOOK_RATE_MAX_KEYS:
-                return True
-        self._webhook_rate_counts[rate_key] = (1, now)
-        return True
 
     # =========================================================================
     # Text batching
@@ -4503,22 +4222,18 @@ class FeishuAdapter(BasePlatformAdapter):
         )
 
     # =========================================================================
-    # Connection internals — websocket / webhook setup
+    # Connection internals — WebSocket setup
     # =========================================================================
 
     async def _connect_with_retry(self) -> None:
         for attempt in range(_FEISHU_CONNECT_ATTEMPTS):
             try:
-                if self._connection_mode == "websocket":
-                    await self._connect_websocket()
-                else:
-                    await self._connect_webhook()
+                await self._connect_websocket()
                 return
             except Exception as exc:
                 self._running = False
                 self._disable_websocket_auto_reconnect()
                 self._ws_future = None
-                await self._stop_webhook_server()
                 if attempt >= _FEISHU_CONNECT_ATTEMPTS - 1:
                     raise
                 wait_seconds = 2 ** attempt
@@ -4557,21 +4272,6 @@ class FeishuAdapter(BasePlatformAdapter):
             self,
         )
 
-    async def _connect_webhook(self) -> None:
-        if not FEISHU_WEBHOOK_AVAILABLE:
-            raise RuntimeError("aiohttp not installed; webhook mode unavailable")
-        domain = FEISHU_DOMAIN if self._domain_name != "lark" else LARK_DOMAIN
-        self._client = self._build_lark_client(domain)
-        self._event_handler = self._build_event_handler()
-        if self._event_handler is None:
-            raise RuntimeError("failed to build Feishu event handler")
-        await self._hydrate_bot_identity()
-        app = web.Application()
-        app.router.add_post(self._webhook_path, self._handle_webhook_request)
-        self._webhook_runner = web.AppRunner(app)
-        await self._webhook_runner.setup()
-        self._webhook_site = web.TCPSite(self._webhook_runner, self._webhook_host, self._webhook_port)
-        await self._webhook_site.start()
 
     def _build_lark_client(self, domain: Any) -> Any:
         return (

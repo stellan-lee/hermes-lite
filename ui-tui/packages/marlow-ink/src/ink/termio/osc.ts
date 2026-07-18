@@ -118,7 +118,7 @@ export function shouldEmitClipboardSequence(env: NodeJS.ProcessEnv = process.env
  *
  *  2. Allowlisted OSC-52-capable terminal AND we're actually going to
  *     emit an OSC 52 sequence AND we're not inside tmux/screen. On these
- *     terminals (Ghostty / kitty / WezTerm / Windows Terminal / VS Code)
+ *     terminals (Ghostty / kitty / WezTerm / VS Code)
  *     the OSC 52 write is reliable on its own, and racing it with a
  *     native tool is destructive — wl-copy on Wayland in particular
  *     wipes the clipboard during its existence-probe and forks a daemon
@@ -351,8 +351,8 @@ async function probeLinuxCopy(): Promise<'wl-copy' | 'xclip' | 'xsel' | null> {
  * Fire-and-forget: failures are silent since OSC 52 may have succeeded.
  *
  * Returns true when a native copy path was (or will be) attempted — i.e.
- * we'll spawn pbcopy on macOS, clip on Windows, or a known-working Linux
- * tool. Returns false only when we know no native tool is viable (Linux
+ * we'll spawn pbcopy on macOS or a known-working Linux tool. Returns false
+ * only when we know no native tool is viable (Linux
  * without DISPLAY/WAYLAND_DISPLAY, or previously-probed-to-null). The
  * return value is used to decide whether to tell the user the copy
  * succeeded — spawning is best-effort but good enough to claim success.
@@ -362,7 +362,7 @@ async function probeLinuxCopy(): Promise<'wl-copy' | 'xclip' | 'xsel' | null> {
  * we skip probing entirely and treat linuxCopy as permanently null.
  */
 function copyNative(text: string): boolean {
-  // resolveOnExit: pbcopy/wl-copy/xclip/xsel/clip all daemonize or hold
+  // resolveOnExit: pbcopy/wl-copy/xclip/xsel daemonize or hold
   // the system selection live in a forked process. Without resolveOnExit,
   // the inherited stdio pipes keep node from seeing 'close' → the
   // fire-and-forget await never resolves and the actual copy never runs.
@@ -409,13 +409,6 @@ function copyNative(text: string): boolean {
 
       return true
     }
-
-    case 'win32':
-      // clip.exe is always available on Windows. Unicode handling is
-      // imperfect (system locale encoding) but good enough for a fallback.
-      void execFileNoThrow('clip', [], opts)
-
-      return true
   }
 
   return false

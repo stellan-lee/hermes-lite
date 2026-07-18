@@ -4,7 +4,7 @@ description: "Generate wiki docs + Mermaid diagrams for any codebase."
 version: 0.1.0
 author: Teknium (teknium1), Marlow Agent
 license: MIT
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 metadata:
   marlow:
     tags: [Documentation, Mermaid, Architecture, Diagrams, Wiki, Code-Analysis]

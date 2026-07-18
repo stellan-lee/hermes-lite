@@ -19,16 +19,7 @@ logger = logging.getLogger(__name__)
 
 TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on"})
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows
-    fcntl = None
-    try:
-        import msvcrt
-    except ImportError:  # pragma: no cover - unusual Python platform
-        msvcrt = None
-else:
-    msvcrt = None
+import fcntl
 
 
 @dataclass
@@ -47,8 +38,8 @@ _file_lock_states: dict[str, _FileLockState] = {}
 def interprocess_file_lock(lock_path: Union[str, Path]):
     """Block on an exclusive advisory lock for a sibling state file.
 
-    Uses the same stdlib-only ``fcntl``/``msvcrt`` strategy as the existing
-    auth, memory, scheduler, and skill-usage stores.  The lock file is stable;
+    Uses the same stdlib-only ``fcntl`` strategy as the existing auth, memory,
+    scheduler, and skill-usage stores. The lock file is stable;
     callers should keep the critical section to one read/verify/write cycle.
     """
     path = Path(lock_path).expanduser().absolute()
@@ -90,32 +81,17 @@ def interprocess_file_lock(lock_path: Union[str, Path]):
 
     handle = None
     try:
-        if fcntl is not None or msvcrt is not None:
-            handle = path.open("a+b")
-            if msvcrt:
-                handle.seek(0, os.SEEK_END)
-                if handle.tell() == 0:
-                    handle.write(b" ")
-                    handle.flush()
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-            else:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            with _file_lock_condition:
-                state = _file_lock_states.get(key)
-                if state is not None:
-                    state.handle = handle
+        handle = path.open("a+b")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        with _file_lock_condition:
+            state = _file_lock_states.get(key)
+            if state is not None:
+                state.handle = handle
         yield
     finally:
-        if handle is not None and fcntl:
+        if handle is not None:
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except (OSError, IOError):
-                pass
-        elif handle is not None and msvcrt:
-            try:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             except (OSError, IOError):
                 pass
         if handle is not None:
@@ -231,10 +207,7 @@ def atomic_json_write(
         suffix=".tmp",
     )
     try:
-        if mode is not None and hasattr(os, "fchmod"):
-            # fchmod is Unix-only; Windows' os module has no fchmod. Skipping it
-            # here is safe — mkstemp already created the temp file as 0o600, and
-            # the post-replace os.chmod below applies the final mode durably.
+        if mode is not None:
             os.fchmod(fd, mode)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(
@@ -388,8 +361,7 @@ def safe_json_loads(text: str, default: Any = None) -> Any:
     """Parse JSON, returning *default* on any parse error.
 
     Replaces the ``try: json.loads(x) except (JSONDecodeError, TypeError)``
-    pattern duplicated across display.py, anthropic_adapter.py,
-    auxiliary_client.py, and others.
+    pattern duplicated across display, transport, and auxiliary helpers.
     """
     try:
         return json.loads(text)
@@ -428,7 +400,7 @@ _PROXY_ENV_KEYS = (
 def normalize_proxy_url(proxy_url: str | None) -> str | None:
     """Normalize proxy URLs for httpx/aiohttp compatibility.
 
-    WSL/Clash-style environments often export SOCKS proxies as
+    Some proxy tools export SOCKS proxies as
     ``socks://127.0.0.1:PORT``. httpx rejects that alias and expects the
     explicit ``socks5://`` scheme instead.
     """

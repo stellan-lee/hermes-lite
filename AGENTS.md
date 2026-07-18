@@ -34,28 +34,23 @@ marlow-agent/
 ├── agent/                # Agent internals (provider adapters, memory, caching, compression, etc.)
 ├── marlow_cli/           # CLI subcommands, setup wizard, plugins loader, skin engine
 ├── tools/                # Tool implementations — auto-discovered via tools/registry.py
-│   └── environments/     # Terminal backends (local, docker, ssh, modal, daytona, singularity)
+│   └── environments/     # Terminal backends (local, docker, ssh)
 ├── gateway/              # Messaging gateway — run.py + session.py + platforms/
-│   ├── platforms/        # Adapter per platform (telegram, discord, slack, whatsapp,
-│   │                     #   homeassistant, signal, matrix, mattermost, email, sms,
-│   │                     #   dingtalk, wecom, weixin, feishu, qqbot, bluebubbles,
-│   │                     #   yuanbao, webhook, api_server, ...). See ADDING_A_PLATFORM.md.
+│   ├── platforms/        # Built-in adapters: telegram, slack, feishu, email,
+│   │                     #   and signed webhook. Discord ships as a platform plugin.
 │   └── builtin_hooks/    # Extension point for always-registered gateway hooks (none shipped)
 ├── plugins/              # Plugin system (see "Plugins" section below)
-│   ├── memory/           # Memory-provider plugins (honcho, mem0, supermemory, ...)
+│   ├── memory/           # Memory-provider plugins (honcho, holographic)
 │   ├── context_engine/   # Context-engine plugins
-│   ├── model-providers/  # Inference backend plugins (openrouter, anthropic, gmi, ...)
-│   ├── marlow-achievements/  # Gamified achievement tracking
+│   ├── model-providers/  # Retained inference plugins (openai-codex, custom)
 │   ├── observability/    # Metrics / traces / logs plugin
-│   ├── image_gen/        # Image-generation providers
-│   └── <others>/         # disk-cleanup, platforms,
-│                         #   strike-freedom-cockpit, ...
+│   ├── image_gen/        # Codex OAuth image generation
+│   └── <others>/         # observability, browser/web, platforms, security
 ├── optional-skills/      # Heavier/niche skills shipped but NOT active by default
 ├── skills/               # Built-in skills bundled with the repo
 ├── ui-tui/               # Ink (React) terminal UI — `marlow --tui`
 │   └── src/              # entry.tsx, app.tsx, gatewayClient.ts + app/components/hooks/lib
 ├── tui_gateway/          # Python JSON-RPC backend for the TUI
-├── acp_adapter/          # ACP server (VS Code / Zed / JetBrains integration)
 ├── cron/                 # Scheduler — jobs.py, scheduler.py
 ├── scripts/              # run_tests.sh, release.py, auxiliary scripts
 └── tests/                # Pytest suite (~17k tests across ~900 files as of May 2026)
@@ -267,19 +262,6 @@ npm run lint      # eslint
 npm run fmt       # prettier
 npm test          # vitest
 ```
-
-### TUI in the Dashboard (`marlow dashboard` → `/chat`)
-
-The dashboard embeds the real `marlow --tui` — **not** a rewrite.  See `marlow_cli/pty_bridge.py` + the `@app.websocket("/api/pty")` endpoint in `marlow_cli/web_server.py`.
-
-- Browser loads `web/src/pages/ChatPage.tsx`, which mounts xterm.js's `Terminal` with the WebGL renderer, `@xterm/addon-fit` for container-driven resize, and `@xterm/addon-unicode11` for modern wide-character widths.
-- `/api/pty?token=…` upgrades to a WebSocket; auth uses the same ephemeral `_SESSION_TOKEN` as REST, via query param (browsers can't set `Authorization` on WS upgrade).
-- The server spawns whatever `marlow --tui` would spawn, through `ptyprocess` (POSIX PTY — WSL works, native Windows does not).
-- Frames: raw PTY bytes each direction; resize via `\x1b[RESIZE:<cols>;<rows>]` intercepted on the server and applied with `TIOCSWINSZ`.
-
-**Do not re-implement the primary chat experience in React.** The main transcript, composer/input flow (including slash-command behavior), and PTY-backed terminal belong to the embedded `marlow --tui` — anything new you add to Ink shows up in the dashboard automatically. If you find yourself rebuilding the transcript or composer for the dashboard, stop and extend Ink instead.
-
-**Structured React UI around the TUI is allowed when it is not a second chat surface.** Sidebar widgets, inspectors, summaries, status panels, and similar supporting views (e.g. `ChatSidebar`, `ModelPickerDialog`, `ToolCall`) are fine when they complement the embedded TUI rather than replacing the transcript / composer / terminal. Keep their state independent of the PTY child's session and surface their failures non-destructively so the terminal pane keeps working unimpaired.
 
 ---
 
@@ -536,8 +518,7 @@ explicitly (it's idempotent).
 ### Memory-provider plugins (`plugins/memory/<name>/`)
 
 Separate discovery system for pluggable memory backends. Current built-in
-providers include **honcho, mem0, supermemory, byterover, hindsight,
-holographic, openviking, retaindb**.
+providers are **honcho** and **holographic**.
 
 Each provider implements the `MemoryProvider` ABC (see `agent/memory_provider.py`)
 and is orchestrated by `agent/memory_manager.py`. Lifecycle hooks include
@@ -571,8 +552,8 @@ to them are welcome.
 
 ### Model-provider plugins (`plugins/model-providers/<name>/`)
 
-Every inference backend (openrouter, anthropic, gmi, deepseek, nvidia, …)
-ships as a plugin here. Each plugin's `__init__.py` calls
+The retained Codex and custom/local inference backends ship as plugins here.
+Each plugin's `__init__.py` calls
 `providers.register_provider(ProviderProfile(...))` at module load.
 `providers/__init__.py._discover_providers()` is a **lazy, separate
 discovery system** — scanned on first `get_provider_profile()` or
@@ -581,7 +562,6 @@ discovery system** — scanned on first `get_provider_profile()` or
 Scan order:
 1. Bundled: `<repo>/plugins/model-providers/<name>/`
 2. User: `$MARLOW_HOME/plugins/model-providers/<name>/`
-3. Legacy: `<repo>/providers/<name>.py` (back-compat)
 
 User plugins of the same name override bundled ones — `register_provider()`
 is last-writer-wins. This lets third parties swap out any built-in
@@ -594,7 +574,7 @@ without an explicit `kind:` get auto-coerced via a source-text heuristic
 
 Full authoring guide: https://marlow-agent.nousresearch.com/docs/developer-guide/model-provider-plugin
 
-### Dashboard / context-engine / image-gen plugin directories
+### Context-engine and image-gen plugin directories
 
 `plugins/context_engine/`, `plugins/image_gen/`, etc. follow the same
 pattern (ABC + orchestrator + per-plugin directory). Context engines
@@ -612,14 +592,13 @@ companion repo, not in this tree.
 Two parallel surfaces:
 
 - **`skills/`** — built-in skills shipped and loadable by default.
-  Organized by category directories (e.g. `skills/github/`, `skills/mlops/`).
+  Organized by category directories (e.g. `skills/apple/`, `skills/mcp/`).
 - **`optional-skills/`** — heavier or niche skills shipped with the repo but
-  NOT active by default. Installed explicitly via
-  `marlow skills install official/<category>/<skill>`. Adapter lives in
-  `tools/skills_hub.py` (`OptionalSkillSource`). Categories include
-  `autonomous-ai-agents`, `blockchain`, `communication`, `creative`,
-  `devops`, `email`, `health`, `mcp`, `migration`, `mlops`, `productivity`,
-  `research`, `security`, `web-development`.
+  NOT active by default. Users activate them by copying the desired skill
+  directory into `~/.marlow/skills/` or a project-local skills directory.
+  Retained categories include `autonomous-ai-agents`, `communication`,
+  `devops`, `email`, `mcp`, `research`, `software-development`, and
+  `web-development`.
 
 When reviewing skill PRs, check which directory they target — heavy-dep or
 niche skills belong in `optional-skills/`.
@@ -725,11 +704,11 @@ Each platform's adapter picks a base toolset (e.g. Telegram uses
 `"messaging"`); `_MARLOW_CORE_TOOLS` is the default bundle most
 platforms inherit from.
 
-Current toolset keys: `browser`, `clarify`, `code_execution`, `cronjob`,
-`debugging`, `delegation`, `discord`, `discord_admin`, `feishu_doc`,
-`feishu_drive`, `file`, `homeassistant`, `image_gen`, `memory`,
-`messaging`, `moa`, `rl`, `safe`, `search`, `session_search`, `skills`,
-`terminal`, `todo`, `tts`, `video`, `vision`, `web`, `yuanbao`.
+Current toolset keys: `admin_approval`, `browser`, `clarify`,
+`code_execution`, `computer_use`, `context_engine`, `cronjob`, `debugging`,
+`delegation`, `file`, `image_gen`, `memory`, `messaging`, `moa`, `safe`,
+`search`, `session_search`, `skills`, `terminal`, `todo`, `tts`, `vision`,
+and `web`.
 
 Enable/disable per platform via `marlow tools` (the curses UI) or the
 `tools.<platform>.enabled` / `tools.<platform>.disabled` lists in
@@ -787,8 +766,8 @@ go to `~/.marlow/skills/.archive/` and are restorable.
   archived), `pinned`.
 
 Invariants:
-- Curator only touches skills with `created_by: "agent"` provenance —
-  bundled + hub-installed skills are off-limits.
+- Curator only touches skills with `created_by: "agent"`; bundled and
+  manually installed local skills are off-limits.
 - Never deletes; max destructive action is archive.
 - Pinned skills are exempt from every auto-transition and from the
   LLM review pass.
@@ -853,8 +832,7 @@ Cache-breaking forces dramatically higher costs. The ONLY time we alter context 
 
 Slash commands that mutate system-prompt state (skills, tools, memory, etc.)
 must be **cache-aware**: default to deferred invalidation (change takes
-effect next session), with an opt-in `--now` flag for immediate
-invalidation. See `/skills install --now` for the canonical pattern.
+effect next session), with an explicit opt-in for immediate invalidation.
 
 ### Background Process Notifications (Gateway)
 
@@ -1016,8 +994,8 @@ ContextVars from one test cannot leak into the next — the historic
 
 Implementation notes:
 
-- The plugin uses `multiprocessing.get_context("spawn")`, which works on
-  Linux, macOS, and Windows alike (POSIX `fork` is not used).
+- The plugin uses `multiprocessing.get_context("spawn")` on supported Linux
+  and macOS hosts (POSIX `fork` is not used).
 - Per-test overhead is ~0.5–1.0s (Python startup + pytest collection). xdist
   parallelism amortizes this across cores; on a 20-core box the full suite
   finishes in roughly the same wall time as before, but flake-free.

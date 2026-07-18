@@ -390,26 +390,6 @@ def test_prune_builtins_restore_clears_suppression(curator_env, monkeypatch):
     assert "bundled" not in u.read_suppressed_names()
 
 
-def test_prune_builtins_never_touches_hub_skills(curator_env, monkeypatch):
-    u = curator_env["usage"]
-    skills_dir = curator_env["home"] / "skills"
-    _write_skill(skills_dir, "hubskill")
-    hub_dir = skills_dir / ".hub"
-    hub_dir.mkdir(parents=True, exist_ok=True)
-    (hub_dir / "lock.json").write_text(
-        '{"version": 1, "installed": {"hubskill": {"install_path": "hubskill"}}}',
-        encoding="utf-8",
-    )
-    _enable_prune_builtins(curator_env, monkeypatch)
-
-    # Even with prune_builtins on, hub-installed skills stay off-limits.
-    assert u.is_curation_eligible("hubskill") is False
-    ok, msg = u.archive_skill("hubskill")
-    assert ok is False
-    assert "hub-installed" in msg
-    assert (skills_dir / "hubskill").exists()
-
-
 # ---------------------------------------------------------------------------
 # run_curator_review orchestration
 # ---------------------------------------------------------------------------
@@ -784,7 +764,7 @@ def test_cli_pin_refuses_bundled_skill(curator_env, capsys):
 # curator review-model resolution (canonical auxiliary.curator slot)
 #
 # Curator was unified with the rest of the aux task system in Apr 2026 so
-# `marlow model` → auxiliary picker, the dashboard Models tab, and the full
+# `marlow model` → auxiliary picker and the full
 # per-task config (timeout, base_url, api_key, extra_body) all work for it.
 # Voscko report: curator.auxiliary.{provider,model} was advertised but never
 # read. Fix wires curator through auxiliary.curator with a legacy fallback.
@@ -957,13 +937,13 @@ def test_review_model_new_slot_wins_over_legacy(curator_env):
     cfg = {
         "model": {"provider": "openrouter", "default": "openai/gpt-5.5"},
         "auxiliary": {
-            "curator": {"provider": "nous", "model": "new-winner"},
+            "curator": {"provider": "custom", "model": "new-winner"},
         },
         "curator": {
             "auxiliary": {"provider": "openrouter", "model": "legacy-loser"},
         },
     }
-    assert curator._resolve_review_model(cfg) == ("nous", "new-winner")
+    assert curator._resolve_review_model(cfg) == ("custom", "new-winner")
 
 
 def test_review_model_handles_missing_sections(curator_env):
@@ -979,32 +959,6 @@ def test_review_model_handles_missing_sections(curator_env):
     assert curator._resolve_review_model({}) == ("auto", "")
 
 
-def test_curator_slot_is_canonical_aux_task():
-    """Curator must be a first-class slot in every aux-task registry.
-
-    Four sources of truth, all checked by the shared registry test
-    (test_aux_config.py) for the main tasks — this test pins `curator`
-    specifically so the unification doesn't silently regress.
-    """
-    from marlow_cli.config import DEFAULT_CONFIG
-    from marlow_cli.main import _AUX_TASKS
-    from marlow_cli.web_server import _AUX_TASK_SLOTS
-
-    # 1. DEFAULT_CONFIG.auxiliary — schema source
-    assert "curator" in DEFAULT_CONFIG["auxiliary"], \
-        "curator missing from DEFAULT_CONFIG['auxiliary']"
-    slot = DEFAULT_CONFIG["auxiliary"]["curator"]
-    assert slot["provider"] == "auto"
-    assert slot["model"] == ""
-    assert slot["timeout"] > 0, "curator timeout should be set (reviews run long)"
-
-    # 2. marlow_cli/main.py _AUX_TASKS — CLI picker
-    aux_keys = {k for k, _name, _desc in _AUX_TASKS}
-    assert "curator" in aux_keys, "curator missing from _AUX_TASKS (CLI picker)"
-
-    # 3. marlow_cli/web_server.py _AUX_TASK_SLOTS — REST API allowlist
-    assert "curator" in _AUX_TASK_SLOTS, \
-        "curator missing from _AUX_TASK_SLOTS (dashboard REST API)"
 
     # 4. web/src/pages/ModelsPage.tsx is checked at build time; the tsx
     #    array and this tuple share a ``Must match _AUX_TASK_SLOTS`` comment.

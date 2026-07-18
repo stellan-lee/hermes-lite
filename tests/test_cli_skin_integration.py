@@ -92,7 +92,7 @@ class TestCliSkinPromptIntegration:
 
 
 class TestCompactBannerSkinIntegration:
-    def test_default_compact_banner_keeps_nous_marlow_branding(self):
+    def test_default_compact_banner_keeps_legacy_nous_marlow_branding(self):
         set_active_skin("default")
 
         with patch("cli.shutil.get_terminal_size", return_value=SimpleNamespace(columns=90)), \

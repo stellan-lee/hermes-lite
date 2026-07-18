@@ -1441,7 +1441,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 "chat_id": 123456789,
                 "topics": [
                     {"name": "General", "icon_color": 7322096, "thread_id": 100},
-                    {"name": "Accessibility Auditor", "icon_color": 9367192, "skill": "accessibility-auditor"}
+                    {"name": "Accessibility Review", "icon_color": 9367192}
                 ]
             }
         ]
@@ -3015,21 +3015,7 @@ class TelegramAdapter(BasePlatformAdapter):
     _MODEL_PAGE_SIZE = 8
 
     def _build_provider_keyboard(self, providers: list):
-        """Build the top-level provider keyboard, folding provider groups.
-
-        Provider families (Kimi/Moonshot, MiniMax, xAI Grok, ...) collapse to
-        a single ``mpg:<gid>`` button; tapping it drills into a member
-        sub-keyboard. Single providers (and groups with only one authenticated
-        member) render as direct ``mp:<slug>`` buttons. Grouping mirrors the
-        CLI ``marlow model`` picker via the shared ``group_providers`` fold,
-        so all surfaces stay consistent.
-        """
-        try:
-            from marlow_cli.models import group_providers
-        except Exception:
-            group_providers = None
-
-        by_slug = {p.get("slug"): p for p in providers}
+        """Build the top-level provider keyboard."""
 
         def _provider_button(p):
             count = p.get("total_models", len(p.get("models", [])))
@@ -3038,27 +3024,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 label = f"✓ {label}"
             return InlineKeyboardButton(label, callback_data=f"mp:{p['slug']}")
 
-        buttons: list = []
-        if group_providers is not None:
-            for row in group_providers([p.get("slug") for p in providers]):
-                if row["kind"] == "group":
-                    members = [by_slug[m] for m in row["members"] if m in by_slug]
-                    count = sum(
-                        m.get("total_models", len(m.get("models", []))) for m in members
-                    )
-                    label = f"{row['label']} ▸ ({count})"
-                    if any(m.get("is_current") for m in members):
-                        label = f"✓ {label}"
-                    buttons.append(
-                        InlineKeyboardButton(label, callback_data=f"mpg:{row['group_id']}")
-                    )
-                else:
-                    p = by_slug.get(row["slug"])
-                    if p is not None:
-                        buttons.append(_provider_button(p))
-        else:
-            for p in providers:
-                buttons.append(_provider_button(p))
+        buttons = [_provider_button(p) for p in providers]
 
         rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
         rows.append([InlineKeyboardButton("✗ Cancel", callback_data="mx")])
@@ -3254,55 +3220,8 @@ class TelegramAdapter(BasePlatformAdapter):
             # Clean up state
             self._model_picker_state.pop(chat_id, None)
 
-        elif data.startswith("mpg:"):
-            # --- Provider group selected: show member providers ---
-            group_id = data[4:]
-            try:
-                from marlow_cli.models import PROVIDER_GROUPS
-                _label, _desc, member_slugs = PROVIDER_GROUPS.get(group_id, ("", "", []))
-            except Exception:
-                _label, member_slugs = "", []
-
-            by_slug = {p["slug"]: p for p in state["providers"]}
-            members = [by_slug[m] for m in member_slugs if m in by_slug]
-            if not members:
-                await query.answer(text="Group not found.")
-                return
-
-            buttons = []
-            for p in members:
-                count = p.get("total_models", len(p.get("models", [])))
-                label = f"{p['name']} ({count})"
-                if p.get("is_current"):
-                    label = f"✓ {label}"
-                buttons.append(
-                    InlineKeyboardButton(label, callback_data=f"mp:{p['slug']}")
-                )
-            rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
-            rows.append([
-                InlineKeyboardButton("◀ Back", callback_data="mb"),
-                InlineKeyboardButton("✗ Cancel", callback_data="mx"),
-            ])
-            keyboard = InlineKeyboardMarkup(rows)
-
-            try:
-                await query.edit_message_text(
-                    text=self.format_message(
-                        (
-                            f"⚙ *Model Configuration*\n\n"
-                            f"Provider family: *{_label or group_id}*\n\n"
-                            f"Select a provider:"
-                        )
-                    ),
-                    parse_mode=ParseMode.MARKDOWN_V2,
-                    reply_markup=keyboard,
-                )
-            except Exception:
-                pass
-            await query.answer()
-
         elif data == "mb":
-            # --- Back to provider list (folds groups) ---
+            # --- Back to provider list ---
             keyboard = self._build_provider_keyboard(state["providers"])
 
             try:
@@ -3383,7 +3302,7 @@ class TelegramAdapter(BasePlatformAdapter):
         query_user_name = getattr(query.from_user, "first_name", None)
 
         # --- Model picker callbacks ---
-        if data.startswith(("mp:", "mpg:", "mm:", "mb", "mx", "mg:")):
+        if data.startswith(("mp:", "mm:", "mb", "mx", "mg:")):
             chat_id = str(query.message.chat_id) if query.message else None
             if chat_id:
                 await self._handle_model_picker_callback(query, data, chat_id)
@@ -4732,7 +4651,7 @@ class TelegramAdapter(BasePlatformAdapter):
     def _telegram_observe_unmentioned_group_messages(self) -> bool:
         """Return whether skipped unmentioned group messages are stored as context.
 
-        When enabled with ``require_mention``, Telegram matches the Yuanbao /
+        When enabled with ``require_mention``, Telegram matches the shared
         OpenClaw-style group UX: observe ordinary group chatter in the session
         transcript, but only dispatch the agent when the bot is explicitly
         addressed.
@@ -6027,7 +5946,7 @@ class TelegramAdapter(BasePlatformAdapter):
     def _get_dm_topic_info(self, chat_id: str, thread_id: Optional[str]) -> Optional[Dict[str, Any]]:
         """Look up DM topic config by chat_id and thread_id.
 
-        Returns the topic config dict (name, skill, etc.) if this thread_id
+        Returns the topic config dict (name, icon color, etc.) if this thread_id
         matches a known DM topic, or None.
         """
         if not thread_id:
@@ -6099,7 +6018,7 @@ class TelegramAdapter(BasePlatformAdapter):
         elif telegram_chat_type == "channel":
             chat_type = "channel"
 
-        # Resolve Telegram topic name and skill binding.
+        # Resolve the Telegram topic name.
         # Only preserve message_thread_id when Telegram marks the message as
         # a real topic/forum message. Telegram can also populate
         # message_thread_id for ordinary reply UI anchors; treating those as
@@ -6123,13 +6042,11 @@ class TelegramAdapter(BasePlatformAdapter):
         if chat_type == "group" and thread_id_str is None and is_forum_group:
             thread_id_str = self._GENERAL_TOPIC_THREAD_ID
         chat_topic = None
-        topic_skill = None
 
         if chat_type == "dm" and thread_id_str:
             topic_info = self._get_dm_topic_info(str(chat.id), thread_id_str)
             if topic_info:
                 chat_topic = topic_info.get("name")
-                topic_skill = topic_info.get("skill")
 
             # Also check forum_topic_created service message for topic discovery
             if hasattr(message, "forum_topic_created") and message.forum_topic_created:
@@ -6140,7 +6057,7 @@ class TelegramAdapter(BasePlatformAdapter):
                         chat_topic = created_name
 
         elif chat_type == "group" and thread_id_str:
-            # Group/supergroup forum topic skill binding via config.extra['group_topics']
+            # Group/supergroup forum topic name via config.extra['group_topics']
             group_topics_config: list = self.config.extra.get("group_topics", [])
             for chat_entry in group_topics_config:
                 if str(chat_entry.get("chat_id", "")) == str(chat.id):
@@ -6148,7 +6065,6 @@ class TelegramAdapter(BasePlatformAdapter):
                         tid = topic.get("thread_id")
                         if tid is not None and str(tid) == thread_id_str:
                             chat_topic = topic.get("name")
-                            topic_skill = topic.get("skill")
                             break
                     break
 
@@ -6217,7 +6133,6 @@ class TelegramAdapter(BasePlatformAdapter):
             platform_update_id=update_id,
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,
-            auto_skill=topic_skill,
             channel_prompt=_channel_prompt,
             timestamp=message.date,
         )

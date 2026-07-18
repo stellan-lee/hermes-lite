@@ -35,8 +35,7 @@ class TestBrowserSecretExfil:
         # check doesn't block a clean URL, not that Chrome starts in CI.
         mock_result = {"success": True, "data": {"title": "ok", "url": "https://github.com/NousResearch/marlow-agent"}}
         with patch("tools.browser_tool._run_browser_command", return_value=mock_result), \
-             patch("tools.browser_tool._get_session_info", return_value={"_first_nav": False}), \
-             patch("tools.browser_tool._is_local_backend", return_value=True):
+             patch("tools.browser_tool._get_session_info", return_value={"_first_nav": False}):
             result = browser_navigate("https://github.com/NousResearch/marlow-agent")
         parsed = json.loads(result)
         # Should NOT be blocked by secret detection
@@ -155,7 +154,7 @@ class TestBrowserSnapshotRedaction:
         assert "Continue" in captured_prompts[0]
 
 
-class TestCamofoxAnnotationRedaction:
+class TestBrowserAnnotationRedaction:
     """Verify annotation context is redacted before vision LLM call."""
 
     def test_annotation_context_secrets_redacted(self):

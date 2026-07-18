@@ -170,35 +170,6 @@ class TestFeishuAdapterMessaging(unittest.TestCase):
         "FEISHU_WEBHOOK_PATH": "/hook",
         "FEISHU_VERIFICATION_TOKEN": "vtok",
     }, clear=True)
-    def test_connect_webhook_mode_starts_local_server(self):
-        from gateway.config import PlatformConfig
-        from gateway.platforms.feishu import FeishuAdapter
-
-        adapter = FeishuAdapter(PlatformConfig())
-        runner = AsyncMock()
-        site = AsyncMock()
-        web_module = SimpleNamespace(
-            Application=lambda: SimpleNamespace(router=SimpleNamespace(add_post=lambda *_args, **_kwargs: None)),
-            AppRunner=lambda _app: runner,
-            TCPSite=lambda _runner, host, port: SimpleNamespace(start=site.start, host=host, port=port),
-        )
-
-        with (
-            patch("gateway.platforms.feishu.FEISHU_AVAILABLE", True),
-            patch("gateway.platforms.feishu.FEISHU_WEBHOOK_AVAILABLE", True),
-            patch("gateway.platforms.feishu.EventDispatcherHandler") as mock_handler_class,
-            patch("gateway.platforms.feishu.acquire_scoped_lock", return_value=(True, None)),
-            patch("gateway.platforms.feishu.release_scoped_lock"),
-            patch.object(adapter, "_hydrate_bot_identity", new=AsyncMock()),
-            patch.object(adapter, "_build_lark_client", return_value=SimpleNamespace()),
-            patch("gateway.platforms.feishu.web", web_module),
-        ):
-            _mock_event_dispatcher_builder(mock_handler_class)
-            connected = asyncio.run(adapter.connect())
-
-        self.assertTrue(connected)
-        runner.setup.assert_awaited_once()
-        site.start.assert_awaited_once()
 
     @patch.dict(os.environ, {
         "FEISHU_APP_ID": "cli_app",
@@ -572,85 +543,6 @@ def _admits_group(adapter, message, sender_id, chat_id=""):
 
 class TestAdapterBehavior(unittest.TestCase):
     @patch.dict(os.environ, {}, clear=True)
-    def test_build_event_handler_registers_reaction_and_card_processors(self):
-        from gateway.config import PlatformConfig
-        from gateway.platforms.feishu import FeishuAdapter
-
-        adapter = FeishuAdapter(PlatformConfig())
-        calls = []
-
-        class _Builder:
-            def register_p2_im_message_message_read_v1(self, _handler):
-                calls.append("message_read")
-                return self
-
-            def register_p2_im_message_receive_v1(self, _handler):
-                calls.append("message_receive")
-                return self
-
-            def register_p2_im_message_reaction_created_v1(self, _handler):
-                calls.append("reaction_created")
-                return self
-
-            def register_p2_im_message_reaction_deleted_v1(self, _handler):
-                calls.append("reaction_deleted")
-                return self
-
-            def register_p2_card_action_trigger(self, _handler):
-                calls.append("card_action")
-                return self
-
-            def register_p2_im_chat_member_bot_added_v1(self, _handler):
-                calls.append("bot_added")
-                return self
-
-            def register_p2_im_chat_member_bot_deleted_v1(self, _handler):
-                calls.append("bot_deleted")
-                return self
-
-            def register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(self, _handler):
-                calls.append("p2p_chat_entered")
-                return self
-
-            def register_p2_im_message_recalled_v1(self, _handler):
-                calls.append("message_recalled")
-                return self
-
-            def register_p2_customized_event(self, event_key, _handler):
-                calls.append(f"customized:{event_key}")
-                return self
-
-            def build(self):
-                calls.append("build")
-                return "handler"
-
-        class _Dispatcher:
-            @staticmethod
-            def builder(_encrypt_key, _verification_token):
-                calls.append("builder")
-                return _Builder()
-
-        with patch("gateway.platforms.feishu.EventDispatcherHandler", _Dispatcher):
-            handler = adapter._build_event_handler()
-
-        self.assertEqual(handler, "handler")
-        self.assertEqual(
-            calls,
-            [
-                "builder",
-                "message_read",
-                "message_receive",
-                "reaction_created",
-                "reaction_deleted",
-                "card_action",
-                "bot_added",
-                "bot_deleted",
-                "p2p_chat_entered",
-                "message_recalled",
-                "customized:drive.notice.comment_add_v1",
-                "build",
-            ],
-        )
 
     @patch.dict(os.environ, {}, clear=True)
     def test_bot_origin_reactions_are_dropped_to_avoid_feedback_loops(self):
@@ -1517,56 +1409,8 @@ class TestAdapterBehavior(unittest.TestCase):
         self.assertTrue(submit.called)
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_webhook_request_uses_same_message_dispatch_path(self):
-        from gateway.config import PlatformConfig
-        from gateway.platforms.feishu import FeishuAdapter
-
-        adapter = FeishuAdapter(PlatformConfig())
-        adapter._on_message_event = Mock()
-
-        body = json.dumps({
-            "header": {"event_type": "im.message.receive_v1"},
-            "event": {"message": {"message_id": "om_test"}},
-        }).encode("utf-8")
-        request = SimpleNamespace(
-            remote="127.0.0.1",
-            content_length=None,
-            headers={},
-            read=AsyncMock(return_value=body),
-        )
-
-        response = asyncio.run(adapter._handle_webhook_request(request))
-
-        self.assertEqual(response.status, 200)
-        adapter._on_message_event.assert_called_once()
 
     @patch.dict(os.environ, {"FEISHU_VERIFICATION_TOKEN": "expected-token"}, clear=True)
-    def test_url_verification_requires_configured_verification_token(self):
-        """url_verification must be rejected when token is set but mismatched.
-
-        Regression: previously the challenge was reflected before the token
-        check, so an unauthenticated remote could prove endpoint control by
-        sending an attacker-controlled challenge string.
-        """
-        from gateway.config import PlatformConfig
-        from gateway.platforms.feishu import FeishuAdapter
-
-        adapter = FeishuAdapter(PlatformConfig())
-        body = json.dumps({
-            "type": "url_verification",
-            "token": "wrong-token",
-            "challenge": "attacker-controlled-challenge",
-        }).encode("utf-8")
-        request = SimpleNamespace(
-            remote="203.0.113.10",
-            content_length=None,
-            headers={},
-            read=AsyncMock(return_value=body),
-        )
-
-        response = asyncio.run(adapter._handle_webhook_request(request))
-
-        self.assertEqual(response.status, 401)
 
     @patch.dict(os.environ, {}, clear=True)
     def test_process_inbound_message_uses_event_sender_identity_only(self):

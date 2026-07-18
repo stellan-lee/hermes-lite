@@ -177,13 +177,6 @@ class TestSpawnAsyncDiagnostic:
         assert "shutdown diagnostic" in contents
         assert "SIGTERM" in contents
 
-    def test_returns_none_on_windows(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(sf, "sys", type("M", (), {"platform": "win32"})())
-        result = sf.spawn_async_diagnostic(
-            tmp_path / "diag.log", "SIGTERM", timeout_seconds=1.0
-        )
-        assert result is None
-
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only diagnostic")
     def test_handles_unwritable_log_path_gracefully(self, tmp_path):
         # Point at a nonexistent parent that we can't create

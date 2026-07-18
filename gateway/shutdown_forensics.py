@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -220,12 +221,7 @@ def spawn_async_diagnostic(
     except OSError:
         return None
 
-    # Inline shell so we don't have to ship a helper script.  bash -c is
-    # available on every POSIX target we support; on Windows we just skip
-    # the snapshot (the platform doesn't ship ps anyway).
-    if sys.platform == "win32":
-        return None
-
+    # Inline shell so we don't have to ship a helper script.
     script = (
         f"echo '=== shutdown diagnostic @ {signal_name} ==='; "
         "echo '--- date ---'; date -u +%Y-%m-%dT%H:%M:%SZ; "
@@ -254,8 +250,12 @@ def spawn_async_diagnostic(
         # would also reap us anyway, but defense in depth).  Without
         # start_new_session, a SIGKILL on our cgroup takes the diag down
         # before it can flush.
+        timeout_bin = shutil.which("timeout") or shutil.which("gtimeout")
+        command = ["bash", "-c", script]
+        if timeout_bin:
+            command = [timeout_bin, f"{timeout_seconds:.0f}", *command]
         proc = subprocess.Popen(
-            ["timeout", f"{timeout_seconds:.0f}", "bash", "-c", script],
+            command,
             stdout=fd,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,

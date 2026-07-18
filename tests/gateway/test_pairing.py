@@ -5,9 +5,7 @@ import os
 import sys
 import time
 from unittest.mock import patch
-
 import pytest
-
 from gateway.pairing import (
     PairingStore,
     ALPHABET,
@@ -26,11 +24,6 @@ def _make_store(tmp_path):
         return PairingStore()
 
 
-# ---------------------------------------------------------------------------
-# _secure_write
-# ---------------------------------------------------------------------------
-
-
 class TestSecureWrite:
     def test_creates_parent_dirs(self, tmp_path):
         target = tmp_path / "sub" / "dir" / "file.json"
@@ -45,13 +38,8 @@ class TestSecureWrite:
     def test_sets_file_permissions(self, tmp_path):
         target = tmp_path / "secret.json"
         _secure_write(target, "data")
-        mode = oct(target.stat().st_mode & 0o777)
+        mode = oct(target.stat().st_mode & 511)
         assert mode == "0o600"
-
-
-# ---------------------------------------------------------------------------
-# Code generation
-# ---------------------------------------------------------------------------
 
 
 class TestCodeGeneration:
@@ -61,7 +49,7 @@ class TestCodeGeneration:
             code = store.generate_code("telegram", "user1", "Alice")
         assert isinstance(code, str) and len(code) == CODE_LENGTH
         assert len(code) == CODE_LENGTH
-        assert all(c in ALPHABET for c in code)
+        assert all((c in ALPHABET for c in code))
 
     def test_code_uniqueness(self, tmp_path):
         """Multiple codes for different users should be distinct."""
@@ -80,17 +68,9 @@ class TestCodeGeneration:
             code = store.generate_code("telegram", "user1", "Alice")
             pending = store.list_pending("telegram")
         assert len(pending) == 1
-        # list_pending no longer returns the original code — it returns a
-        # truncated hash prefix.  Verify the metadata is correct instead.
         assert pending[0]["user_id"] == "user1"
         assert pending[0]["user_name"] == "Alice"
-        # The code field is now a hash prefix, not the original plaintext code
         assert pending[0]["code"] != code
-
-
-# ---------------------------------------------------------------------------
-# Hashed storage
-# ---------------------------------------------------------------------------
 
 
 class TestHashedStorage:
@@ -102,20 +82,15 @@ class TestHashedStorage:
             raw = json.loads(
                 (tmp_path / "telegram-pending.json").read_text(encoding="utf-8")
             )
-
         assert len(raw) == 1
         entry = next(iter(raw.values()))
-        # Must have hash and salt fields
         assert "hash" in entry
         assert "salt" in entry
-        # Hash must be a valid hex SHA-256 digest (64 hex chars)
         assert len(entry["hash"]) == 64
-        assert all(c in "0123456789abcdef" for c in entry["hash"])
-        # Salt must be a valid hex string (32 hex chars for 16 bytes)
+        assert all((c in "0123456789abcdef" for c in entry["hash"]))
         assert len(entry["salt"]) == 32
-        assert all(c in "0123456789abcdef" for c in entry["salt"])
-        # The plaintext code must NOT appear as a key or value anywhere
-        assert code not in raw  # not a key
+        assert all((c in "0123456789abcdef" for c in entry["salt"]))
+        assert code not in raw
         for key, val in raw.items():
             assert code != key
             for field_val in val.values():
@@ -159,7 +134,7 @@ class TestHashedStorage:
                 (tmp_path / "telegram-pending.json").read_text(encoding="utf-8")
             )
         salts = [entry["salt"] for entry in raw.values()]
-        assert len(set(salts)) == 3  # all unique
+        assert len(set(salts)) == 3
 
     def test_hash_code_static_method(self, tmp_path):
         """_hash_code should be deterministic for the same code+salt."""
@@ -167,7 +142,6 @@ class TestHashedStorage:
         h1 = PairingStore._hash_code("ABCD1234", salt)
         h2 = PairingStore._hash_code("ABCD1234", salt)
         assert h1 == h2
-        # Different salt should produce a different hash
         salt2 = os.urandom(16)
         h3 = PairingStore._hash_code("ABCD1234", salt2)
         assert h3 != h1
@@ -186,6 +160,7 @@ class TestLegacyPendingFileCompat:
     def _write_legacy(tmp_path, code="ABCD1234", created_at=None):
         """Write a pre-hash pending.json with plaintext code as the key."""
         import time as _time
+
         if created_at is None:
             created_at = _time.time()
         legacy = {
@@ -204,13 +179,8 @@ class TestLegacyPendingFileCompat:
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
             self._write_legacy(tmp_path, code="LEGACY01")
             store = PairingStore()
-            # The plaintext "code" used to be the key — under the new schema
-            # it's not even looked at, and there's no hash/salt to verify.
-            # Result: approve_code returns None, the legacy entry is left
-            # alone (gets pruned by _cleanup_expired at TTL).
             result = store.approve_code("telegram", "LEGACY01")
             assert result is None
-            # Approved list must be empty
             assert store.is_approved("telegram", "legacy-user") is False
 
     def test_list_pending_handles_legacy_entries(self, tmp_path):
@@ -221,11 +191,12 @@ class TestLegacyPendingFileCompat:
             pending = store.list_pending("telegram")
         assert len(pending) == 1
         assert pending[0]["user_id"] == "legacy-user"
-        assert pending[0]["code"] == "legacy"  # placeholder
+        assert pending[0]["code"] == "legacy"
 
     def test_cleanup_expired_removes_legacy_at_ttl(self, tmp_path):
         """Legacy entries past CODE_TTL must still get pruned."""
         import time as _time
+
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
             self._write_legacy(
                 tmp_path,
@@ -245,7 +216,7 @@ class TestLegacyPendingFileCompat:
             (tmp_path / "telegram-pending.json").write_text(
                 json.dumps({
                     "broken1": "not a dict",
-                    "broken2": {"user_id": "x"},  # no created_at
+                    "broken2": {"user_id": "x"},
                     "broken3": {"created_at": "not a number"},
                 }),
                 encoding="utf-8",
@@ -260,22 +231,21 @@ class TestLegacyPendingFileCompat:
     def test_approve_code_skips_malformed_entries(self, tmp_path):
         """Malformed entries must not crash approve_code's hash loop."""
         import time as _time
+
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
             (tmp_path / "telegram-pending.json").write_text(
                 json.dumps({
-                    "broken": {"user_id": "x", "created_at": _time.time(),
-                               "salt": "not-hex", "hash": "doesntmatter"},
+                    "broken": {
+                        "user_id": "x",
+                        "created_at": _time.time(),
+                        "salt": "not-hex",
+                        "hash": "doesntmatter",
+                    }
                 }),
                 encoding="utf-8",
             )
             store = PairingStore()
-            # Approving with any code must just return None, not crash.
             assert store.approve_code("telegram", "ABCD1234") is None
-
-
-# ---------------------------------------------------------------------------
-# Rate limiting
-# ---------------------------------------------------------------------------
 
 
 class TestRateLimiting:
@@ -285,7 +255,7 @@ class TestRateLimiting:
             code1 = store.generate_code("telegram", "user1")
             code2 = store.generate_code("telegram", "user1")
         assert isinstance(code1, str) and len(code1) == CODE_LENGTH
-        assert code2 is None  # rate limited
+        assert code2 is None
 
     def test_different_users_not_rate_limited(self, tmp_path):
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
@@ -300,37 +270,12 @@ class TestRateLimiting:
             store = PairingStore()
             code1 = store.generate_code("telegram", "user1")
             assert isinstance(code1, str) and len(code1) == CODE_LENGTH
-
-            # Simulate rate limit expiry
             limits = store._load_json(store._rate_limit_path())
             limits["telegram:user1"] = time.time() - RATE_LIMIT_SECONDS - 1
             store._save_json(store._rate_limit_path(), limits)
-
             code2 = store.generate_code("telegram", "user1")
         assert isinstance(code2, str) and len(code2) == CODE_LENGTH
         assert code2 != code1
-
-    def test_whatsapp_alias_flip_hits_same_rate_limit(self, tmp_path, monkeypatch):
-        mapping_dir = tmp_path / "whatsapp" / "session"
-        mapping_dir.mkdir(parents=True, exist_ok=True)
-        (mapping_dir / "lid-mapping-999999999999999.json").write_text(
-            json.dumps("15551234567@s.whatsapp.net"),
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
-
-        with patch("gateway.pairing.PAIRING_DIR", tmp_path):
-            store = PairingStore()
-            code1 = store.generate_code("whatsapp", "15551234567@s.whatsapp.net")
-            code2 = store.generate_code("whatsapp", "999999999999999@lid")
-
-        assert isinstance(code1, str) and len(code1) == CODE_LENGTH
-        assert code2 is None
-
-
-# ---------------------------------------------------------------------------
-# Max pending limit
-# ---------------------------------------------------------------------------
 
 
 class TestMaxPending:
@@ -341,10 +286,12 @@ class TestMaxPending:
             for i in range(MAX_PENDING_PER_PLATFORM + 1):
                 code = store.generate_code("telegram", f"user{i}")
                 codes.append(code)
-
-        # First MAX_PENDING_PER_PLATFORM should succeed
-        assert all(isinstance(c, str) and len(c) == CODE_LENGTH for c in codes[:MAX_PENDING_PER_PLATFORM])
-        # Next one should be blocked
+        assert all(
+            (
+                isinstance(c, str) and len(c) == CODE_LENGTH
+                for c in codes[:MAX_PENDING_PER_PLATFORM]
+            )
+        )
         assert codes[MAX_PENDING_PER_PLATFORM] is None
 
     def test_different_platforms_independent(self, tmp_path):
@@ -352,14 +299,8 @@ class TestMaxPending:
             store = PairingStore()
             for i in range(MAX_PENDING_PER_PLATFORM):
                 store.generate_code("telegram", f"user{i}")
-            # Different platform should still work
             code = store.generate_code("discord", "user0")
         assert isinstance(code, str) and len(code) == CODE_LENGTH
-
-
-# ---------------------------------------------------------------------------
-# Approval flow
-# ---------------------------------------------------------------------------
 
 
 class TestApprovalFlow:
@@ -368,7 +309,6 @@ class TestApprovalFlow:
             store = PairingStore()
             code = store.generate_code("telegram", "user1", "Alice")
             result = store.approve_code("telegram", code)
-
         assert isinstance(result, dict)
         assert "user_id" in result
         assert "user_name" in result
@@ -419,73 +359,14 @@ class TestApprovalFlow:
             result = store.approve_code("telegram", "INVALIDCODE")
         assert result is None
 
-    def test_whatsapp_approved_user_survives_alias_flip(self, tmp_path, monkeypatch):
-        mapping_dir = tmp_path / "whatsapp" / "session"
-        mapping_dir.mkdir(parents=True, exist_ok=True)
-        (mapping_dir / "lid-mapping-999999999999999.json").write_text(
-            json.dumps("15551234567@s.whatsapp.net"),
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
-
-        with patch("gateway.pairing.PAIRING_DIR", tmp_path):
-            store = PairingStore()
-            code = store.generate_code("whatsapp", "15551234567@s.whatsapp.net", "Alice")
-            store.approve_code("whatsapp", code)
-
-            assert store.is_approved("whatsapp", "15551234567@s.whatsapp.net") is True
-            assert store.is_approved("whatsapp", "999999999999999@lid") is True
-
-            approved = store.list_approved("whatsapp")
-
-        assert len(approved) == 1
-        assert approved[0]["user_id"] == "15551234567"
-
-    def test_whatsapp_legacy_raw_jid_approval_survives_alias_flip(self, tmp_path, monkeypatch):
-        mapping_dir = tmp_path / "whatsapp" / "session"
-        mapping_dir.mkdir(parents=True, exist_ok=True)
-        (mapping_dir / "lid-mapping-999999999999999.json").write_text(
-            json.dumps("15551234567@s.whatsapp.net"),
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
-
-        approved_path = tmp_path / "whatsapp-approved.json"
-        approved_path.write_text(
-            json.dumps(
-                {
-                    "15551234567@s.whatsapp.net": {
-                        "user_name": "Legacy Alice",
-                        "approved_at": time.time(),
-                    }
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-
-        with patch("gateway.pairing.PAIRING_DIR", tmp_path):
-            store = PairingStore()
-            assert store.is_approved("whatsapp", "999999999999999@lid") is True
-
-
-# ---------------------------------------------------------------------------
-# Lockout after failed attempts
-# ---------------------------------------------------------------------------
-
 
 class TestLockout:
     def test_lockout_after_max_failures(self, tmp_path):
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
             store = PairingStore()
-            # Generate a valid code so platform has data
             store.generate_code("telegram", "user1")
-
-            # Exhaust failed attempts
             for _ in range(MAX_FAILED_ATTEMPTS):
                 store.approve_code("telegram", "WRONGCODE")
-
-            # Platform should now be locked out — can't generate new codes
             assert store._is_locked_out("telegram") is True
 
     def test_lockout_blocks_code_generation(self, tmp_path):
@@ -493,7 +374,6 @@ class TestLockout:
             store = PairingStore()
             for _ in range(MAX_FAILED_ATTEMPTS):
                 store.approve_code("telegram", "WRONG")
-
             code = store.generate_code("telegram", "newuser")
         assert code is None
 
@@ -507,27 +387,17 @@ class TestLockout:
         """
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
             store = PairingStore()
-            # Generate a valid code before triggering the lockout.
             valid_code = store.generate_code("telegram", "attacker", "Attacker")
             assert valid_code is not None
-
-            # Trigger the lockout with wrong codes.
             for _ in range(MAX_FAILED_ATTEMPTS):
                 assert store.approve_code("telegram", "WRONGCODE") is None
             assert store._is_locked_out("telegram") is True
-
-            # The valid code must be rejected while the lockout is active,
-            # and the user must NOT land in the approved list.
             result = store.approve_code("telegram", valid_code)
             assert result is None
             assert store.is_approved("telegram", "attacker") is False
-
-            # Simulate lockout expiry — the valid code is still in pending
-            # (we didn't pop it) and must now approve normally.
             limits = store._load_json(store._rate_limit_path())
             limits["_lockout:telegram"] = time.time() - 1
             store._save_json(store._rate_limit_path(), limits)
-
             result = store.approve_code("telegram", valid_code)
             assert result is not None
             assert result["user_id"] == "attacker"
@@ -538,19 +408,11 @@ class TestLockout:
             store = PairingStore()
             for _ in range(MAX_FAILED_ATTEMPTS):
                 store.approve_code("telegram", "WRONG")
-
-            # Simulate lockout expiry
             limits = store._load_json(store._rate_limit_path())
             lockout_key = "_lockout:telegram"
-            limits[lockout_key] = time.time() - 1  # expired
+            limits[lockout_key] = time.time() - 1
             store._save_json(store._rate_limit_path(), limits)
-
             assert store._is_locked_out("telegram") is False
-
-
-# ---------------------------------------------------------------------------
-# Code expiry
-# ---------------------------------------------------------------------------
 
 
 class TestCodeExpiry:
@@ -558,14 +420,10 @@ class TestCodeExpiry:
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
             store = PairingStore()
             code = store.generate_code("telegram", "user1")
-
-            # Manually expire all pending entries
             pending = store._load_json(store._pending_path("telegram"))
             for entry_id in pending:
                 pending[entry_id]["created_at"] = time.time() - CODE_TTL_SECONDS - 1
             store._save_json(store._pending_path("telegram"), pending)
-
-            # Cleanup happens on next operation
             remaining = store.list_pending("telegram")
         assert len(remaining) == 0
 
@@ -573,20 +431,12 @@ class TestCodeExpiry:
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
             store = PairingStore()
             code = store.generate_code("telegram", "user1")
-
-            # Expire all entries
             pending = store._load_json(store._pending_path("telegram"))
             for entry_id in pending:
                 pending[entry_id]["created_at"] = time.time() - CODE_TTL_SECONDS - 1
             store._save_json(store._pending_path("telegram"), pending)
-
             result = store.approve_code("telegram", code)
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Revoke
-# ---------------------------------------------------------------------------
 
 
 class TestRevoke:
@@ -596,7 +446,6 @@ class TestRevoke:
             code = store.generate_code("telegram", "user1", "Alice")
             store.approve_code("telegram", code)
             assert store.is_approved("telegram", "user1") is True
-
             revoked = store.revoke("telegram", "user1")
         assert revoked is True
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
@@ -606,11 +455,6 @@ class TestRevoke:
         with patch("gateway.pairing.PAIRING_DIR", tmp_path):
             store = PairingStore()
             assert store.revoke("telegram", "nobody") is False
-
-
-# ---------------------------------------------------------------------------
-# List & clear
-# ---------------------------------------------------------------------------
 
 
 class TestListAndClear:

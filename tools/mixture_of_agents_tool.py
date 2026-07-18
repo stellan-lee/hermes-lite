@@ -24,9 +24,9 @@ Architecture:
 2. Aggregator model synthesizes responses into a high-quality output
 3. Multiple layers can be used for iterative refinement (future enhancement)
 
-Models Used (via OpenRouter):
-- Reference Models: claude-opus-4.6, gemini-3-pro-preview, gpt-5.4-pro, deepseek-v3.2
-- Aggregator Model: claude-opus-4.6 (highest capability for synthesis)
+Runtime:
+- Uses the active Codex or custom/local OpenAI-compatible runtime.
+- Four independent reference calls provide diverse candidate answers.
 
 Configuration:
     To customize the MoA setup, modify the configuration constants at the top of this file:
@@ -47,30 +47,24 @@ Usage:
 
 import json
 import logging
-import os
 import asyncio
 import datetime
 from typing import Dict, Any, List, Optional
-from tools.openrouter_client import get_async_client as _get_openrouter_client, check_api_key as check_openrouter_api_key
-from agent.auxiliary_client import extract_content_or_reasoning
+from agent.auxiliary_client import (
+    async_call_llm,
+    extract_content_or_reasoning,
+    get_text_auxiliary_client,
+)
 from tools.debug_helpers import DebugSession
 import sys
 
 logger = logging.getLogger(__name__)
 
 # Configuration for MoA processing
-# Reference models - these generate diverse initial responses in parallel.
-# Keep this list aligned with current top-tier OpenRouter frontier options.
-REFERENCE_MODELS = [
-    "anthropic/claude-opus-4.6",
-    "google/gemini-2.5-pro",
-    "openai/gpt-5.4-pro",
-    "deepseek/deepseek-v3.2",
-]
-
-# Aggregator model - synthesizes reference responses into final output.
-# Prefer the strongest synthesis model in the current OpenRouter lineup.
-AGGREGATOR_MODEL = "anthropic/claude-opus-4.6"
+# ``active`` means the runtime selected for the current Marlow session. Repeating
+# it is intentional: independent calls still yield diverse candidate answers.
+REFERENCE_MODELS = ["active"] * 4
+AGGREGATOR_MODEL = "active"
 
 # Temperature settings optimized for MoA performance
 REFERENCE_TEMPERATURE = 0.6  # Balanced creativity for diverse perspectives
@@ -126,25 +120,19 @@ async def _run_reference_model_safe(
         try:
             logger.info("Querying %s (attempt %s/%s)", model, attempt + 1, max_retries)
             
-            # Build parameters for the API call
-            api_params = {
-                "model": model,
-                "messages": [{"role": "user", "content": user_prompt}],
-                "max_tokens": max_tokens,
-                "extra_body": {
+            response = await async_call_llm(
+                task="moa",
+                model=None if model == "active" else model,
+                messages=[{"role": "user", "content": user_prompt}],
+                max_tokens=max_tokens,
+                temperature=temperature,
+                extra_body={
                     "reasoning": {
                         "enabled": True,
                         "effort": "xhigh"
                     }
-                }
-            }
-            
-            # GPT models (especially gpt-4o-mini) don't support custom temperature values
-            # Only include temperature for non-GPT models
-            if not model.lower().startswith('gpt-'):
-                api_params["temperature"] = temperature
-            
-            response = await _get_openrouter_client().chat.completions.create(**api_params)
+                },
+            )
             
             content = extract_content_or_reasoning(response)
             if not content:
@@ -181,6 +169,7 @@ async def _run_reference_model_safe(
 async def _run_aggregator_model(
     system_prompt: str,
     user_prompt: str,
+    model: str = AGGREGATOR_MODEL,
     temperature: float = AGGREGATOR_TEMPERATURE,
     max_tokens: int = None
 ) -> str:
@@ -196,16 +185,17 @@ async def _run_aggregator_model(
     Returns:
         str: Synthesized final response
     """
-    logger.info("Running aggregator model: %s", AGGREGATOR_MODEL)
+    logger.info("Running aggregator model: %s", model)
 
-    # Build parameters for the API call
-    api_params = {
-        "model": AGGREGATOR_MODEL,
+    call_kwargs = {
+        "task": "moa",
+        "model": None if model == "active" else model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
         "max_tokens": max_tokens,
+        "temperature": temperature,
         "extra_body": {
             "reasoning": {
                 "enabled": True,
@@ -214,19 +204,14 @@ async def _run_aggregator_model(
         }
     }
 
-    # GPT models (especially gpt-4o-mini) don't support custom temperature values
-    # Only include temperature for non-GPT models
-    if not AGGREGATOR_MODEL.lower().startswith('gpt-'):
-        api_params["temperature"] = temperature
-
-    response = await _get_openrouter_client().chat.completions.create(**api_params)
+    response = await async_call_llm(**call_kwargs)
 
     content = extract_content_or_reasoning(response)
 
     # Retry once on empty content (reasoning-only response)
     if not content:
         logger.warning("Aggregator returned empty content, retrying once")
-        response = await _get_openrouter_client().chat.completions.create(**api_params)
+        response = await async_call_llm(**call_kwargs)
         content = extract_content_or_reasoning(response)
 
     logger.info("Aggregation complete (%s characters)", len(content))
@@ -299,10 +284,6 @@ async def mixture_of_agents_tool(
         logger.info("Starting Mixture-of-Agents processing...")
         logger.info("Query: %s", user_prompt[:100])
         
-        # Validate API key availability
-        if not os.getenv("OPENROUTER_API_KEY"):
-            raise ValueError("OPENROUTER_API_KEY environment variable not set")
-        
         # Use provided models or defaults
         ref_models = reference_models or REFERENCE_MODELS
         agg_model = aggregator_model or AGGREGATOR_MODEL
@@ -352,6 +333,7 @@ async def mixture_of_agents_tool(
         final_response = await _run_aggregator_model(
             aggregator_system_prompt,
             user_prompt,
+            agg_model,
             AGGREGATOR_TEMPERATURE
         )
         
@@ -416,7 +398,11 @@ def check_moa_requirements() -> bool:
     Returns:
         bool: True if requirements are met, False otherwise
     """
-    return check_openrouter_api_key()
+    try:
+        client, model = get_text_auxiliary_client("moa")
+        return client is not None and bool(model)
+    except Exception:
+        return False
 
 
 
@@ -445,16 +431,13 @@ if __name__ == "__main__":
     print("🤖 Mixture-of-Agents Tool Module")
     print("=" * 50)
     
-    # Check if API key is available
-    api_available = check_openrouter_api_key()
+    api_available = check_moa_requirements()
     
     if not api_available:
-        print("❌ OPENROUTER_API_KEY environment variable not set")
-        print("Please set your API key: export OPENROUTER_API_KEY='your-key-here'")
-        print("Get API key at: https://openrouter.ai/")
+        print("❌ No active Codex or compatible local runtime configured")
         sys.exit(1)
     else:
-        print("✅ OpenRouter API key found")
+        print("✅ Active LLM runtime found")
     
     print("🛠️  MoA tools ready for use!")
     
@@ -536,7 +519,6 @@ registry.register(
     schema=MOA_SCHEMA,
     handler=lambda args, **kw: mixture_of_agents_tool(user_prompt=args.get("user_prompt", "")),
     check_fn=check_moa_requirements,
-    requires_env=["OPENROUTER_API_KEY"],
     is_async=True,
     emoji="🧠",
 )

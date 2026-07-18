@@ -240,7 +240,8 @@ class TestTelegramExecApproval:
         )
 
         assert result.success is True
-        assert "MARKDOWN_V2" in repr(sent["parse_mode"])
+        expected = TelegramAdapter.send_update_prompt.__globals__["ParseMode"].MARKDOWN_V2
+        assert sent["parse_mode"] == expected
         assert "Fix \\[issue\\]\\_1" in sent["text"]
         assert "alpha\\_beta" in sent["text"]
 
@@ -421,7 +422,8 @@ class TestTelegramApprovalCallback:
                 await adapter._handle_callback_query(update, context)
 
         edit_kwargs = query.edit_message_text.call_args[1]
-        assert "MARKDOWN_V2" in repr(edit_kwargs["parse_mode"])
+        expected = TelegramAdapter._handle_callback_query.__globals__["ParseMode"].MARKDOWN_V2
+        assert edit_kwargs["parse_mode"] == expected
         assert "Alice\\_Bob" in edit_kwargs["text"]
         assert "Approved once" in edit_kwargs["text"]
 

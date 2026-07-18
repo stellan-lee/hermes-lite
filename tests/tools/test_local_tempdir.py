@@ -5,16 +5,16 @@ from tools.environments.local import LocalEnvironment
 
 class TestLocalTempDir:
     def test_uses_os_tmpdir_for_session_artifacts(self, monkeypatch):
-        monkeypatch.setenv("TMPDIR", "/data/data/com.termux/files/usr/tmp")
+        monkeypatch.setenv("TMPDIR", "/var/tmp/marlow-custom")
         monkeypatch.delenv("TMP", raising=False)
         monkeypatch.delenv("TEMP", raising=False)
 
         with patch.object(LocalEnvironment, "init_session", autospec=True, return_value=None):
             env = LocalEnvironment(cwd=".", timeout=10)
 
-        assert env.get_temp_dir() == "/data/data/com.termux/files/usr/tmp"
-        assert env._snapshot_path == f"/data/data/com.termux/files/usr/tmp/marlow-snap-{env._session_id}.sh"
-        assert env._cwd_file == f"/data/data/com.termux/files/usr/tmp/marlow-cwd-{env._session_id}.txt"
+        assert env.get_temp_dir() == "/var/tmp/marlow-custom"
+        assert env._snapshot_path == f"/var/tmp/marlow-custom/marlow-snap-{env._session_id}.sh"
+        assert env._cwd_file == f"/var/tmp/marlow-custom/marlow-cwd-{env._session_id}.txt"
 
     def test_prefers_backend_env_tmpdir_override(self, monkeypatch):
         monkeypatch.delenv("TMPDIR", raising=False)
@@ -25,15 +25,15 @@ class TestLocalTempDir:
             env = LocalEnvironment(
                 cwd=".",
                 timeout=10,
-                env={"TMPDIR": "/data/data/com.termux/files/home/.cache/marlow-tmp/"},
+                env={"TMPDIR": "/var/tmp/marlow-custom/"},
             )
 
-        assert env.get_temp_dir() == "/data/data/com.termux/files/home/.cache/marlow-tmp"
+        assert env.get_temp_dir() == "/var/tmp/marlow-custom"
         assert env._snapshot_path == (
-            f"/data/data/com.termux/files/home/.cache/marlow-tmp/marlow-snap-{env._session_id}.sh"
+            f"/var/tmp/marlow-custom/marlow-snap-{env._session_id}.sh"
         )
         assert env._cwd_file == (
-            f"/data/data/com.termux/files/home/.cache/marlow-tmp/marlow-cwd-{env._session_id}.txt"
+            f"/var/tmp/marlow-custom/marlow-cwd-{env._session_id}.txt"
         )
 
     def test_falls_back_to_tempfile_when_tmp_missing(self, monkeypatch):

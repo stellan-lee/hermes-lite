@@ -68,26 +68,6 @@ from gateway.platforms.base import (
 from tools.url_safety import is_safe_url
 
 
-def _find_discord_windows_bundled_opus(discord_module: Any = None) -> Optional[str]:
-    """Return discord.py's bundled Windows opus DLL path when present."""
-    if sys.platform != "win32":
-        return None
-    discord_module = discord if discord_module is None else discord_module
-    if discord_module is None:
-        return None
-
-    opus_module = getattr(discord_module, "opus", None)
-    opus_file = getattr(opus_module, "__file__", None)
-    if not opus_file:
-        return None
-
-    target = "x64" if struct.calcsize("P") * 8 > 32 else "x86"
-    bundled = _Path(opus_file).resolve().parent / "bin" / f"libopus-0.{target}.dll"
-    if bundled.is_file():
-        return str(bundled)
-    return None
-
-
 def _clean_discord_id(entry: str) -> str:
     """Strip common prefixes from a Discord user ID or username entry.
 
@@ -631,9 +611,6 @@ class DiscordAdapter(BasePlatformAdapter):
         if not discord.opus.is_loaded():
             import ctypes.util
             opus_candidates = []
-            bundled_opus = _find_discord_windows_bundled_opus(discord)
-            if bundled_opus:
-                opus_candidates.append(bundled_opus)
             opus_path = ctypes.util.find_library("opus")
             if opus_path:
                 opus_candidates.append(opus_path)
@@ -2976,7 +2953,7 @@ class DiscordAdapter(BasePlatformAdapter):
             await self._run_simple_slash(interaction, "/reset", "Session reset~")
 
         @tree.command(name="model", description="Show or change the model")
-        @discord.app_commands.describe(name="Model name (e.g. anthropic/claude-sonnet-4). Leave empty to see current.")
+        @discord.app_commands.describe(name="Codex or custom model id. Leave empty to see current.")
         async def slash_model(interaction: discord.Interaction, name: str = ""):
             await self._run_simple_slash(interaction, f"/model {name}".strip())
 
@@ -3581,29 +3558,16 @@ class DiscordAdapter(BasePlatformAdapter):
 
         _parent_channel = self._thread_parent_channel(getattr(interaction, "channel", None))
         _parent_id = str(getattr(_parent_channel, "id", "") or "")
-        _skills = self._resolve_channel_skills(thread_id, _parent_id or None)
         _channel_prompt = self._resolve_channel_prompt(thread_id, _parent_id or None)
         event = MessageEvent(
             text=text,
             message_type=MessageType.TEXT,
             source=source,
             raw_message=interaction,
-            auto_skill=_skills,
             channel_prompt=_channel_prompt,
         )
         await self.handle_message(event)
 
-    def _resolve_channel_skills(self, channel_id: str, parent_id: str | None = None) -> list[str] | None:
-        """Look up auto-skill bindings for a Discord channel/forum thread.
-
-        Config format (in platform extra):
-            channel_skill_bindings:
-              - id: "123456"
-                skills: ["skill-a", "skill-b"]
-        Also checks parent_id so forum threads inherit the forum's bindings.
-        """
-        from gateway.platforms.base import resolve_channel_skills
-        return resolve_channel_skills(self.config.extra, channel_id, parent_id)
 
     def _resolve_channel_prompt(self, channel_id: str, parent_id: str | None = None) -> str | None:
         """Resolve a Discord per-channel prompt, preferring the exact channel over its parent."""
@@ -4780,7 +4744,7 @@ class DiscordAdapter(BasePlatformAdapter):
                             # ``application/octet-stream`` MIME and emits a context
                             # note with the sandbox-translated cache path via
                             # ``to_agent_visible_cache_path()`` (important for
-                            # Docker/Modal terminal backends).
+                            # Docker terminal backends).
                         except Exception as e:
                             logger.warning(
                                 "[Discord] Failed to cache document %s: %s",
@@ -4847,7 +4811,6 @@ class DiscordAdapter(BasePlatformAdapter):
         _chan = message.channel
         _parent_id = str(getattr(_chan, "parent_id", "") or "")
         _chan_id = str(getattr(_chan, "id", ""))
-        _skills = self._resolve_channel_skills(_chan_id, _parent_id or None)
         _channel_prompt = self._resolve_channel_prompt(_chan_id, _parent_id or None)
 
         reply_to_id = None
@@ -4868,7 +4831,6 @@ class DiscordAdapter(BasePlatformAdapter):
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,
             timestamp=message.created_at,
-            auto_skill=_skills,
             channel_prompt=_channel_prompt,
             channel_context=_channel_context,
         )

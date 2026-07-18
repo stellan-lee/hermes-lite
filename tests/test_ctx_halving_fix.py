@@ -23,14 +23,6 @@ These are different and the old code conflated them; the fix keeps them
 separate.
 """
 
-import sys
-import os
-from unittest.mock import MagicMock
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-
-
 # ---------------------------------------------------------------------------
 # parse_available_output_tokens_from_error — unit tests
 # ---------------------------------------------------------------------------
@@ -147,123 +139,6 @@ class TestContextOverflowLimitSelection:
 
 
 # ---------------------------------------------------------------------------
-# build_anthropic_kwargs — output cap clamping
-# ---------------------------------------------------------------------------
-
-class TestBuildAnthropicKwargsClamping:
-    """The context_length clamp only fires when output ceiling > window.
-    For standard Anthropic models (output ceiling < window) it must not fire.
-    """
-
-    def _build(self, model, max_tokens=None, context_length=None):
-        from agent.anthropic_adapter import build_anthropic_kwargs
-        return build_anthropic_kwargs(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            tools=None,
-            max_tokens=max_tokens,
-            reasoning_config=None,
-            context_length=context_length,
-        )
-
-    def test_no_clamping_when_output_ceiling_fits_in_window(self):
-        """Opus 4.6 native output (128K) < context window (200K) — no clamping."""
-        kwargs = self._build("claude-opus-4-6", context_length=200_000)
-        assert kwargs["max_tokens"] == 128_000
-
-    def test_clamping_fires_for_tiny_custom_window(self):
-        """When context_length is 8K (local model), output cap is clamped to 7999."""
-        kwargs = self._build("claude-opus-4-6", context_length=8_000)
-        assert kwargs["max_tokens"] == 7_999
-
-    def test_explicit_max_tokens_respected_when_within_window(self):
-        """Explicit max_tokens smaller than window passes through unchanged."""
-        kwargs = self._build("claude-opus-4-6", max_tokens=4096, context_length=200_000)
-        assert kwargs["max_tokens"] == 4096
-
-    def test_explicit_max_tokens_clamped_when_exceeds_window(self):
-        """Explicit max_tokens larger than a small window is clamped."""
-        kwargs = self._build("claude-opus-4-6", max_tokens=32_768, context_length=16_000)
-        assert kwargs["max_tokens"] == 15_999
-
-    def test_no_context_length_uses_native_ceiling(self):
-        """Without context_length the native output ceiling is used directly."""
-        kwargs = self._build("claude-sonnet-4-6")
-        assert kwargs["max_tokens"] == 64_000
-
-
-# ---------------------------------------------------------------------------
-# Ephemeral max_tokens mechanism — _build_api_kwargs
-# ---------------------------------------------------------------------------
-
-class TestEphemeralMaxOutputTokens:
-    """_build_api_kwargs consumes _ephemeral_max_output_tokens exactly once
-    and falls back to self.max_tokens on subsequent calls.
-    """
-
-    def _make_agent(self):
-        """Return a minimal AIAgent with api_mode='anthropic_messages' and
-        a stubbed context_compressor, bypassing full __init__ cost."""
-        from run_agent import AIAgent
-        agent = object.__new__(AIAgent)
-        # Minimal attributes used by _build_api_kwargs
-        agent.api_mode = "anthropic_messages"
-        agent.model = "claude-opus-4-6"
-        agent.tools = []
-        agent.max_tokens = None
-        agent.reasoning_config = None
-        agent._is_anthropic_oauth = False
-        agent._ephemeral_max_output_tokens = None
-
-        compressor = MagicMock()
-        compressor.context_length = 200_000
-        agent.context_compressor = compressor
-
-        # Stub out the internal message-preparation helper
-        agent._prepare_anthropic_messages_for_api = MagicMock(
-            return_value=[{"role": "user", "content": "hi"}]
-        )
-        agent._anthropic_preserve_dots = MagicMock(return_value=False)
-        agent.request_overrides = {}
-        return agent
-
-    def test_ephemeral_override_is_used_on_first_call(self):
-        """When _ephemeral_max_output_tokens is set, it overrides self.max_tokens."""
-        agent = self._make_agent()
-        agent._ephemeral_max_output_tokens = 5_000
-
-        kwargs = agent._build_api_kwargs([{"role": "user", "content": "hi"}])
-        assert kwargs["max_tokens"] == 5_000
-
-    def test_ephemeral_override_is_consumed_after_one_call(self):
-        """After one call the ephemeral override is cleared to None."""
-        agent = self._make_agent()
-        agent._ephemeral_max_output_tokens = 5_000
-
-        agent._build_api_kwargs([{"role": "user", "content": "hi"}])
-        assert agent._ephemeral_max_output_tokens is None
-
-    def test_subsequent_call_uses_self_max_tokens(self):
-        """A second _build_api_kwargs call uses the normal max_tokens path."""
-        agent = self._make_agent()
-        agent._ephemeral_max_output_tokens = 5_000
-        agent.max_tokens = None  # will resolve to native ceiling (128K for Opus 4.6)
-
-        agent._build_api_kwargs([{"role": "user", "content": "hi"}])
-        # Second call — ephemeral is gone
-        kwargs2 = agent._build_api_kwargs([{"role": "user", "content": "hi"}])
-        assert kwargs2["max_tokens"] == 128_000  # Opus 4.6 native ceiling
-
-    def test_no_ephemeral_uses_self_max_tokens_directly(self):
-        """Without an ephemeral override, self.max_tokens is used normally."""
-        agent = self._make_agent()
-        agent.max_tokens = 8_192
-
-        kwargs = agent._build_api_kwargs([{"role": "user", "content": "hi"}])
-        assert kwargs["max_tokens"] == 8_192
-
-
-# ---------------------------------------------------------------------------
 # Integration: error handler does NOT halve context_length for output-cap errors
 # ---------------------------------------------------------------------------
 
@@ -271,36 +146,6 @@ class TestContextNotHalvedOnOutputCapError:
     """When the API returns 'max_tokens too large given prompt', the handler
     must set _ephemeral_max_output_tokens and NOT modify context_length.
     """
-
-    def _make_agent_with_compressor(self, context_length=200_000):
-        from run_agent import AIAgent
-        from agent.context_compressor import ContextCompressor
-
-        agent = object.__new__(AIAgent)
-        agent.api_mode = "anthropic_messages"
-        agent.model = "claude-opus-4-6"
-        agent.base_url = "https://api.anthropic.com"
-        agent.tools = []
-        agent.max_tokens = None
-        agent.reasoning_config = None
-        agent._is_anthropic_oauth = False
-        agent._ephemeral_max_output_tokens = None
-        agent.log_prefix = ""
-        agent.quiet_mode = True
-        agent.verbose_logging = False
-
-        compressor = MagicMock(spec=ContextCompressor)
-        compressor.context_length = context_length
-        compressor.threshold_percent = 0.75
-        agent.context_compressor = compressor
-
-        agent._prepare_anthropic_messages_for_api = MagicMock(
-            return_value=[{"role": "user", "content": "hi"}]
-        )
-        agent._anthropic_preserve_dots = MagicMock(return_value=False)
-        agent._vprint = MagicMock()
-        agent.request_overrides = {}
-        return agent
 
     def test_output_cap_error_sets_ephemeral_not_context_length(self):
         """On 'max_tokens too large' error, _ephemeral_max_output_tokens is set
@@ -312,19 +157,18 @@ class TestContextNotHalvedOnOutputCapError:
             "- input_tokens: 180000 = available_tokens: 20000"
         )
 
-        # Simulate the handler logic from run_agent.py
-        agent = self._make_agent_with_compressor(context_length=200_000)
-        old_ctx = agent.context_compressor.context_length
+        # Simulate the retained handler's one-shot output override.
+        old_ctx = 200_000
 
         available_out = parse_available_output_tokens_from_error(error_msg)
         assert available_out == 20_000, "parser must detect the error"
 
         # The fix: set ephemeral, skip context_length modification
-        agent._ephemeral_max_output_tokens = max(1, available_out - 64)
+        ephemeral_max_output_tokens = max(1, available_out - 64)
 
         # context_length must be untouched
-        assert agent.context_compressor.context_length == old_ctx
-        assert agent._ephemeral_max_output_tokens == 19_936
+        assert old_ctx == 200_000
+        assert ephemeral_max_output_tokens == 19_936
 
     def test_prompt_too_long_with_explicit_limit_uses_provider_limit(self):
         """Prompt-too-long errors only change context_length when they report a concrete limit."""

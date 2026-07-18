@@ -272,8 +272,8 @@ class TestBackendGate:
 
 
 class TestBundledBackendAutoLoad:
-    def test_bundled_image_gen_openai_autoloads(self, tmp_path, monkeypatch):
-        """The bundled ``plugins/image_gen/openai/`` plugin loads without
+    def test_bundled_image_gen_codex_autoloads(self, tmp_path, monkeypatch):
+        """The bundled ``plugins/image_gen/openai-codex/`` plugin loads without
         any opt-in — it's ``kind: backend`` and shipped in-repo."""
         import os
         marlow_home = Path(os.environ["MARLOW_HOME"])  # set by hermetic conftest fixture
@@ -281,8 +281,8 @@ class TestBundledBackendAutoLoad:
         mgr = PluginManager()
         mgr.discover_and_load()
 
-        assert "image_gen/openai" in mgr._plugins
-        loaded = mgr._plugins["image_gen/openai"]
+        assert "image_gen/openai-codex" in mgr._plugins
+        loaded = mgr._plugins["image_gen/openai-codex"]
         assert loaded.manifest.source == "bundled"
         assert loaded.manifest.kind == "backend"
         assert loaded.enabled is True, f"error: {loaded.error}"

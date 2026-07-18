@@ -2,7 +2,7 @@
 name: webhook-subscriptions
 description: "Webhook subscriptions: event-driven agent runs."
 version: 1.1.0
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 metadata:
   marlow:
     tags: [webhook, events, automation, integrations, notifications, push]
@@ -127,7 +127,7 @@ marlow webhook subscribe github-prs \
   --events "pull_request" \
   --prompt "PR #{pull_request.number} {action}: {pull_request.title}\nBy: {pull_request.user.login}\nBranch: {pull_request.head.ref}\n\n{pull_request.body}" \
   --skills "github-code-review" \
-  --deliver github_comment
+  --deliver slack --deliver-chat-id C0123456789
 ```
 
 ### Stripe: payment events
@@ -176,7 +176,7 @@ marlow webhook subscribe antenna-matches \
 
 The POST returns `200 OK` on successful delivery, `502` on target failure — so upstream services can retry intelligently. HMAC auth, rate limits, and idempotency still apply.
 
-Requires `--deliver` to be a real target (telegram, discord, slack, github_comment, etc.) — `--deliver log` is rejected because log-only direct delivery is pointless.
+Requires `--deliver` to be a real target (telegram, discord, slack, etc.) — `--deliver log` is rejected because log-only direct delivery is pointless.
 
 ## Security
 
@@ -190,7 +190,7 @@ Requires `--deliver` to be a real target (telegram, discord, slack, github_comme
 1. `marlow webhook subscribe` writes to `~/.marlow/webhook_subscriptions.json`
 2. The webhook adapter hot-reloads this file on each incoming request (mtime-gated, negligible overhead)
 3. When a POST arrives matching a route, the adapter formats the prompt and triggers an agent run
-4. The agent's response is delivered to the configured target (Telegram, Discord, GitHub comment, etc.)
+4. The agent's response is delivered to the configured target (Telegram, Discord, Slack, etc.)
 
 ## Troubleshooting
 

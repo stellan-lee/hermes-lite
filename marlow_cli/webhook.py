@@ -175,7 +175,6 @@ def _cmd_subscribe(args):
         "events": events,
         "secret": secret,
         "prompt": args.prompt or "",
-        "skills": [s.strip() for s in args.skills.split(",")] if args.skills else [],
         "deliver": args.deliver or "log",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
@@ -184,7 +183,7 @@ def _cmd_subscribe(args):
         if route["deliver"] == "log":
             print(
                 "Error: --deliver-only requires --deliver to be a real target "
-                "(telegram, discord, slack, github_comment, etc.) — not 'log'."
+                "(telegram, discord, slack, etc.) — not 'log'."
             )
             return
         route["deliver_only"] = True

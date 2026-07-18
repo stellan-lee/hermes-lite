@@ -26,15 +26,15 @@ class TestCLILoadingIndicator:
 
         with patch.object(cli_obj, "_handle_skills_command", side_effect=fake_handle), \
              patch.object(cli_obj, "_invalidate") as invalidate_mock:
-            assert cli_obj.process_command("/skills search kubernetes")
+            assert cli_obj.process_command("/skills")
 
         output = capsys.readouterr().out
-        assert "⏳ Searching skills..." in output
+        assert "⏳ Listing local skills..." in output
         assert "skills done" in output
         assert seen == {
-            "cmd": "/skills search kubernetes",
+            "cmd": "/skills",
             "running": True,
-            "status": "Searching skills...",
+            "status": "Listing local skills...",
         }
         assert cli_obj._command_running is False
         assert cli_obj._command_status == ""

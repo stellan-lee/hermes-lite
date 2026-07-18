@@ -31,30 +31,12 @@ def _resolve_git_executable() -> Optional[str]:
     """Resolve a git binary for subprocess use when ``PATH`` may be minimal.
 
     Matches other Marlow subprocess resolution: :func:`shutil.which` first,
-    then common Git for Windows install paths and POSIX defaults.
+    then common POSIX defaults.
     """
     found = shutil.which("git")
     if found:
         return found
-    if os.name == "nt":
-        prog = os.environ.get("ProgramFiles", r"C:\Program Files")
-        prog_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-        local = os.environ.get("LOCALAPPDATA", "")
-        candidates = [
-            os.path.join(prog, "Git", "cmd", "git.exe"),
-            os.path.join(prog, "Git", "bin", "git.exe"),
-            os.path.join(prog_x86, "Git", "cmd", "git.exe"),
-            os.path.join(prog_x86, "Git", "bin", "git.exe"),
-        ]
-        if local:
-            candidates.extend(
-                (
-                    os.path.join(local, "Programs", "Git", "cmd", "git.exe"),
-                    os.path.join(local, "Programs", "Git", "bin", "git.exe"),
-                )
-            )
-    else:
-        candidates = ["/usr/bin/git", "/usr/local/bin/git", "/bin/git"]
+    candidates = ["/usr/bin/git", "/usr/local/bin/git", "/bin/git"]
     for c in candidates:
         if c and os.path.isfile(c):
             return c
@@ -1413,208 +1395,6 @@ def _run_composite_fallback(plugin_names, plugin_labels, plugin_selected,
     print()
 
 
-def dashboard_install_plugin(
-    identifier: str,
-    *,
-    force: bool,
-    enable: bool,
-) -> dict[str, Any]:
-    """Non-interactive install for the web dashboard. Returns a JSON-serializable dict."""
-    warnings: list[str] = []
-    try:
-        git_url = _resolve_git_url(identifier)
-        if git_url.startswith(("http://", "file://")):
-            warnings.append(
-                "Insecure URL scheme; prefer https:// or git@ for production installs.",
-            )
-    except ValueError:
-        pass
-
-    try:
-        target, installed_manifest, installed_name = _install_plugin_core(
-            identifier,
-            force=force,
-        )
-    except PluginOperationError as exc:
-        return {"ok": False, "error": str(exc)}
-
-    missing_env = _missing_requires_env_names(installed_manifest)
-    if enable:
-        en = _get_enabled_set()
-        dis = _get_disabled_set()
-        en.add(installed_name)
-        dis.discard(installed_name)
-        _save_enabled_set(en)
-        _save_disabled_set(dis)
-
-    hint: str | None = None
-    ap = target / "after-install.md"
-    if ap.exists():
-        hint = str(ap)
-
-    return {
-        "ok": True,
-        "plugin_name": installed_name,
-        "warnings": warnings,
-        "missing_env": missing_env,
-        "after_install_path": hint,
-        "enabled": enable,
-    }
-
-
-def _get_plugin_toolset_key(name: str) -> Optional[str]:
-    """Return the toolset key a plugin registers its tools under, or None.
-
-    Queries the live tool registry — the plugin must already be loaded.
-    Falls back to reading ``provides_tools`` from plugin.yaml and looking
-    up the toolset from the registry for the first tool name found.
-    """
-    try:
-        from tools.registry import registry
-    except Exception:
-        return None
-
-    # Check the plugin manager for tools this plugin registered
-    try:
-        from marlow_cli.plugins import discover_plugins, get_plugin_manager
-        discover_plugins()  # idempotent — ensures plugins are loaded
-        manager = get_plugin_manager()
-        for _key, loaded in manager._plugins.items():
-            if loaded.manifest.name == name or _key == name:
-                for tool_name in loaded.tools_registered:
-                    entry = registry.get_entry(tool_name)
-                    if entry and entry.toolset:
-                        return entry.toolset
-                break
-    except Exception:
-        pass
-
-    # Fallback: read provides_tools from manifest on disk and query registry
-    try:
-        from marlow_cli.plugins import get_bundled_plugins_dir
-        for base in (get_bundled_plugins_dir(), _plugins_dir()):
-            if not base.is_dir():
-                continue
-            candidate = base / name
-            if candidate.is_dir():
-                manifest = _read_manifest(candidate)
-                for tool_name in manifest.get("provides_tools") or []:
-                    entry = registry.get_entry(tool_name)
-                    if entry and entry.toolset:
-                        return entry.toolset
-    except Exception:
-        pass
-
-    return None
-
-
-def _toggle_plugin_toolset(name: str, *, enable: bool) -> None:
-    """Add or remove a plugin's toolset from platform_toolsets for all platforms.
-
-    Only acts if the plugin actually provides tools (has a toolset key).
-    """
-    toolset_key = _get_plugin_toolset_key(name)
-    if not toolset_key:
-        return
-
-    from marlow_cli.config import load_config, save_config
-
-    config = load_config()
-    platform_toolsets = config.get("platform_toolsets")
-    if not isinstance(platform_toolsets, dict):
-        platform_toolsets = {}
-        config["platform_toolsets"] = platform_toolsets
-
-    changed = False
-    for platform, ts_list in platform_toolsets.items():
-        if not isinstance(ts_list, list):
-            continue
-        if enable:
-            if toolset_key not in ts_list:
-                ts_list.append(toolset_key)
-                changed = True
-        elif toolset_key in ts_list:
-            ts_list.remove(toolset_key)
-            changed = True
-
-    # If enabling and no platforms have toolset lists yet, add to "cli" at minimum
-    if enable and not changed and not platform_toolsets:
-        platform_toolsets["cli"] = [toolset_key]
-        changed = True
-
-    if changed:
-        save_config(config)
-
-
-def dashboard_set_agent_plugin_enabled(name: str, *, enabled: bool) -> dict[str, Any]:
-    """Enable or disable a plugin in ``config.yaml`` (runtime allow/deny lists).
-
-    For plugins that provide tools (toolsets), also toggles the toolset in
-    ``platform_toolsets`` so the agent actually sees the tools in sessions.
-    """
-    if not _plugin_exists(name):
-        return {"ok": False, "error": f"Plugin '{name}' is not installed or bundled."}
-
-    en = _get_enabled_set()
-    dis = _get_disabled_set()
-
-    if enabled:
-        if name in en and name not in dis:
-            return {"ok": True, "name": name, "unchanged": True}
-        en.add(name)
-        dis.discard(name)
-        _save_enabled_set(en)
-        _save_disabled_set(dis)
-        _toggle_plugin_toolset(name, enable=True)
-        return {"ok": True, "name": name, "unchanged": False}
-
-    if name not in en and name in dis:
-        return {"ok": True, "name": name, "unchanged": True}
-
-    en.discard(name)
-    dis.add(name)
-    _save_enabled_set(en)
-    _save_disabled_set(dis)
-    _toggle_plugin_toolset(name, enable=False)
-    return {"ok": True, "name": name, "unchanged": False}
-
-
-def _user_installed_plugin_dir(name: str) -> Optional[Path]:
-    """Resolved path under ``~/.marlow/plugins/<name>`` if it exists."""
-    plugins_dir = _plugins_dir()
-    try:
-        target = _sanitize_plugin_name(name, plugins_dir, allow_subdir=True)
-    except ValueError:
-        return None
-    return target if target.is_dir() else None
-
-
-def dashboard_update_user_plugin(name: str) -> dict[str, Any]:
-    """``git pull`` inside ``~/.marlow/plugins/<name>``."""
-    target = _user_installed_plugin_dir(name)
-    if target is None:
-        return {
-            "ok": False,
-            "error": f"Plugin '{name}' was not found under {_plugins_dir()}.",
-        }
-
-    if not (target / ".git").exists():
-        return {
-            "ok": False,
-            "error": f"Plugin '{name}' is not a git checkout; cannot pull updates.",
-        }
-
-    ok, msg = _git_pull_plugin_dir(target)
-    if not ok:
-        return {"ok": False, "error": msg}
-
-    from rich.console import Console
-
-    _copy_example_files(target, Console())
-    unchanged = "Already up to date" in msg
-    return {"ok": True, "name": name, "output": msg, "unchanged": unchanged}
-
-
 def _git_pull_plugin_dir(target: Path) -> tuple[bool, str]:
     git_exe = _resolve_git_executable()
     if not git_exe:
@@ -1636,24 +1416,6 @@ def _git_pull_plugin_dir(target: Path) -> tuple[bool, str]:
         err = (result.stderr or "").strip() or result.stdout.strip()
         return False, err or "git pull failed."
     return True, result.stdout.strip()
-
-
-def dashboard_remove_user_plugin(name: str) -> dict[str, Any]:
-    """Delete a plugin tree under ``~/.marlow/plugins/`` only."""
-    plugins_dir = _plugins_dir()
-    for n, _ver, _d, src, _path in _discover_all_plugins():
-        if n == name and src == "bundled":
-            return {"ok": False, "error": "Bundled plugins cannot be removed from the dashboard."}
-
-    target = _user_installed_plugin_dir(name)
-    if target is None:
-        return {
-            "ok": False,
-            "error": f"Plugin '{name}' was not found under {plugins_dir}.",
-        }
-
-    shutil.rmtree(target)
-    return {"ok": True, "name": name}
 
 
 def plugins_command(args) -> None:

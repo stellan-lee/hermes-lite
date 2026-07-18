@@ -68,32 +68,6 @@ def _job_output_dir(job_id: str) -> Path:
     return OUTPUT_DIR / text
 
 
-def _normalize_skill_list(skill: Optional[str] = None, skills: Optional[Any] = None) -> List[str]:
-    """Normalize legacy/single-skill and multi-skill inputs into a unique ordered list."""
-    if skills is None:
-        raw_items = [skill] if skill else []
-    elif isinstance(skills, str):
-        raw_items = [skills]
-    else:
-        raw_items = list(skills)
-
-    normalized: List[str] = []
-    for item in raw_items:
-        text = str(item or "").strip()
-        if text and text not in normalized:
-            normalized.append(text)
-    return normalized
-
-
-def _apply_skill_fields(job: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a job dict with canonical `skills` and legacy `skill` fields aligned."""
-    normalized = dict(job)
-    skills = _normalize_skill_list(normalized.get("skill"), normalized.get("skills"))
-    normalized["skills"] = skills
-    normalized["skill"] = skills[0] if skills else None
-    return normalized
-
-
 def _coerce_job_text(value: Any, fallback: str = "") -> str:
     """Coerce legacy/hand-edited nullable cron fields to strings for readers."""
     if value is None:
@@ -125,7 +99,9 @@ def _normalize_job_record(job: Dict[str, Any]) -> Dict[str, Any]:
     ``name``, or ``schedule_display``.  Keep storage untouched on read, but
     ensure consumers never crash while formatting or running those records.
     """
-    normalized = _apply_skill_fields(job)
+    normalized = dict(job)
+    normalized.pop("skill", None)
+    normalized.pop("skills", None)
     job_id = _coerce_job_text(normalized.get("id"), "unknown")
     prompt = _coerce_job_text(normalized.get("prompt"))
     normalized["id"] = job_id
@@ -136,7 +112,6 @@ def _normalize_job_record(job: Dict[str, Any]) -> Dict[str, Any]:
         script = _coerce_job_text(normalized.get("script")).strip()
         label_source = (
             prompt
-            or (normalized["skills"][0] if normalized.get("skills") else "")
             or script
             or job_id
             or "cron job"
@@ -554,8 +529,6 @@ def create_job(
     repeat: Optional[int] = None,
     deliver: Optional[str] = None,
     origin: Optional[Dict[str, Any]] = None,
-    skill: Optional[str] = None,
-    skills: Optional[List[str]] = None,
     model: Optional[str] = None,
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
@@ -570,15 +543,13 @@ def create_job(
     Create a new cron job.
 
     Args:
-        prompt: The prompt to run (must be self-contained, or a task instruction when skill is set).
+        prompt: The self-contained prompt to run.
                 Ignored when ``no_agent=True`` except as an optional name hint.
         schedule: Schedule string (see parse_schedule)
         name: Optional friendly name
         repeat: How many times to run (None = forever, 1 = once)
         deliver: Where to deliver output ("origin", "local", "telegram", etc.)
         origin: Source info where job was created (for "origin" delivery)
-        skill: Optional legacy single skill name to load before running the prompt
-        skills: Optional ordered list of skills to load before running the prompt
         model: Optional per-job model override
         provider: Optional per-job provider override
         base_url: Optional per-job base URL override
@@ -607,7 +578,7 @@ def create_job(
                 predictably.
         profile: Optional Marlow profile name. When set, the job runs with
                 that profile's MARLOW_HOME so profile-specific config,
-                credentials, scripts, skills, and memory paths resolve
+                credentials, scripts, local skills, and memory paths resolve
                 consistently. ``default`` selects the root profile; empty /
                 None preserves the scheduler's existing behaviour.
         no_agent: When True, skip the agent entirely — run ``script`` on schedule
@@ -635,7 +606,6 @@ def create_job(
     job_id = uuid.uuid4().hex[:12]
     now = _marlow_now().isoformat()
 
-    normalized_skills = _normalize_skill_list(skill, skills)
     normalized_model = str(model).strip() if isinstance(model, str) else None
     normalized_provider = str(provider).strip() if isinstance(provider, str) else None
     normalized_base_url = str(base_url).strip().rstrip("/") if isinstance(base_url, str) else None
@@ -668,13 +638,11 @@ def create_job(
         context_from = None
 
     prompt_text = _coerce_job_text(prompt)
-    label_source = (prompt_text or (normalized_skills[0] if normalized_skills else None) or (normalized_script if normalized_no_agent else None)) or "cron job"
+    label_source = (prompt_text or (normalized_script if normalized_no_agent else None)) or "cron job"
     job = {
         "id": job_id,
         "name": name or label_source[:50].strip(),
         "prompt": prompt_text,
-        "skills": normalized_skills,
-        "skill": normalized_skills[0] if normalized_skills else None,
         "model": normalized_model,
         "provider": normalized_provider,
         "base_url": normalized_base_url,
@@ -801,13 +769,8 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
             else:
                 updates["profile"] = _normalize_profile(_profile)
 
-        updated = _apply_skill_fields({**job, **updates})
+        updated = {**job, **updates}
         schedule_changed = "schedule" in updates
-
-        if "skills" in updates or "skill" in updates:
-            normalized_skills = _normalize_skill_list(updated.get("skill"), updated.get("skills"))
-            updated["skills"] = normalized_skills
-            updated["skill"] = normalized_skills[0] if normalized_skills else None
 
         if schedule_changed:
             updated_schedule = updated["schedule"]
@@ -1025,7 +988,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
     """Inner implementation of get_due_jobs(); must be called with _jobs_file_lock held."""
     now = _marlow_now()
     raw_jobs = load_jobs()
-    jobs = [_apply_skill_fields(j) for j in copy.deepcopy(raw_jobs)]
+    jobs = [dict(j) for j in copy.deepcopy(raw_jobs)]
     due = []
     needs_save = False
 
@@ -1137,120 +1100,3 @@ def save_job_output(job_id: str, output: str):
         raise
     
     return output_file
-
-
-# =============================================================================
-# Skill reference rewriting (curator integration)
-# =============================================================================
-
-def rewrite_skill_refs(
-    consolidated: Optional[Dict[str, str]] = None,
-    pruned: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """Rewrite cron job skill references after a curator consolidation pass.
-
-    When the curator consolidates a skill X into umbrella Y (or archives X
-    as pruned), any cron job that lists ``X`` in its ``skills`` field will
-    fail to load ``X`` at run time — the scheduler logs a warning and
-    skips the skill, so the job runs without the instructions it was
-    scheduled to follow. See cron/scheduler.py where ``skill_view`` is
-    called per skill name.
-
-    This function repairs cron jobs in-place:
-
-    - A skill listed in ``consolidated`` is replaced with its umbrella
-      target (the ``into`` value). If the umbrella is already in the
-      job's skill list, the stale name is dropped without duplication.
-    - A skill listed in ``pruned`` is dropped outright — there is no
-      forwarding target.
-    - Ordering and other skills in the list are preserved.
-    - The legacy ``skill`` field is realigned via ``_apply_skill_fields``.
-
-    Args:
-        consolidated: mapping of ``old_skill_name -> umbrella_skill_name``.
-        pruned: list of skill names that were archived with no forwarding
-            target.
-
-    Returns a report dict::
-
-        {
-            "rewrites": [
-                {
-                    "job_id": ...,
-                    "job_name": ...,
-                    "before": [...],
-                    "after": [...],
-                    "mapped": {"old": "new", ...},
-                    "dropped": ["old", ...],
-                },
-                ...
-            ],
-            "jobs_updated": N,
-            "jobs_scanned": M,
-        }
-
-    Best-effort: exceptions from loading/saving propagate to the caller so
-    tests can assert behaviour; the curator invocation site wraps this
-    call in a try/except so a failure here never breaks the curator.
-    """
-    consolidated = dict(consolidated or {})
-    pruned_set = set(pruned or [])
-    # A skill listed in both wins as "consolidated" — it has a target,
-    # which is the more useful of the two outcomes.
-    pruned_set -= set(consolidated.keys())
-
-    if not consolidated and not pruned_set:
-        return {"rewrites": [], "jobs_updated": 0, "jobs_scanned": 0}
-
-    with _jobs_file_lock:
-        jobs = load_jobs()
-        rewrites: List[Dict[str, Any]] = []
-        changed = False
-
-        for job in jobs:
-            skills_before = _normalize_skill_list(job.get("skill"), job.get("skills"))
-            if not skills_before:
-                continue
-
-            mapped: Dict[str, str] = {}
-            dropped: List[str] = []
-            new_skills: List[str] = []
-
-            for name in skills_before:
-                if name in consolidated:
-                    target = consolidated[name]
-                    mapped[name] = target
-                    if target and target not in new_skills:
-                        new_skills.append(target)
-                elif name in pruned_set:
-                    dropped.append(name)
-                elif name not in new_skills:
-                    new_skills.append(name)
-
-            if not mapped and not dropped:
-                continue
-
-            job["skills"] = new_skills
-            job["skill"] = new_skills[0] if new_skills else None
-            changed = True
-
-            rewrites.append({
-                "job_id": job.get("id"),
-                "job_name": job.get("name") or job.get("id"),
-                "before": list(skills_before),
-                "after": list(new_skills),
-                "mapped": mapped,
-                "dropped": dropped,
-            })
-
-        if changed:
-            save_jobs(jobs)
-            logger.info(
-                "Curator rewrote skill references in %d cron job(s)", len(rewrites)
-            )
-
-        return {
-            "rewrites": rewrites,
-            "jobs_updated": len(rewrites),
-            "jobs_scanned": len(jobs),
-        }

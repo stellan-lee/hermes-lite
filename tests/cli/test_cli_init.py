@@ -15,13 +15,13 @@ def _make_cli(env_overrides=None, config_overrides=None, **kwargs):
 
     _clean_config = {
         "model": {
-            "default": "anthropic/claude-opus-4.6",
-            "base_url": "https://openrouter.ai/api/v1",
-            "provider": "auto",
+            "default": "local-model",
+            "base_url": "http://localhost:11434/v1",
+            "provider": "custom",
         },
         "display": {"compact": False, "tool_progress": "all"},
         "agent": {},
-        "terminal": {"env_type": "local"},
+        "terminal": {"backend": "local"},
     }
     if config_overrides:
         _clean_config.update(config_overrides)
@@ -81,10 +81,6 @@ class TestMaxTurnsResolution:
         cli_obj = _make_cli(env_overrides={"MARLOW_MAX_ITERATIONS": "not-a-number"})
         assert cli_obj.max_turns == 90
 
-    def test_legacy_root_max_turns_is_used_when_agent_key_exists_without_value(self):
-        cli_obj = _make_cli(config_overrides={"agent": {}, "max_turns": 77})
-        assert cli_obj.max_turns == 77
-
     def test_max_turns_never_none_for_agent(self):
         """The value passed to AIAgent must never be None (causes TypeError in run_conversation)."""
         cli = _make_cli()
@@ -103,16 +99,16 @@ class TestVerboseAndToolProgress:
 
 
 class TestFallbackChainInit:
-    def test_merges_new_and_legacy_fallback_config(self):
+    def test_reads_fallback_providers(self):
         cli = _make_cli(config_overrides={
             "fallback_providers": [
-                {"provider": "openrouter", "model": "anthropic/claude-sonnet-4.6"},
+                {"provider": "custom", "model": "local-backup"},
+                {"provider": "openai-codex", "model": "gpt-5.3-codex"},
             ],
-            "fallback_model": {"provider": "nous", "model": "Hermes-4"},
         })
-        assert cli._fallback_model == [
-            {"provider": "openrouter", "model": "anthropic/claude-sonnet-4.6"},
-            {"provider": "nous", "model": "Hermes-4"},
+        assert cli._fallback_providers == [
+            {"provider": "custom", "model": "local-backup"},
+            {"provider": "openai-codex", "model": "gpt-5.3-codex"},
         ]
 
 
@@ -180,9 +176,9 @@ class TestPromptToolkitTerminalCompatibility:
     def test_lf_enter_binds_to_submit_handler_posix(self):
         """Some thin PTYs deliver Enter as LF/c-j instead of CR/enter.
 
-        On a bare local POSIX TTY (no SSH/WSL/WT/Ghostty) we keep c-j → submit so
+        On a bare local POSIX TTY we keep c-j → submit so
         Enter works on thin PTYs (docker exec, certain ssh configurations).
-        On Windows, WSL, SSH sessions, Windows Terminal, and Ghostty we leave c-j
+        On SSH sessions and Ghostty we leave c-j
         unbound here so it can be used as the Ctrl+Enter newline keystroke
         without conflicting with submit. See issue #22379.
         """
@@ -196,7 +192,7 @@ class TestPromptToolkitTerminalCompatibility:
         def submit_handler(event):
             return None
 
-        # Bare local POSIX (no SSH/WSL markers): both enter and c-j submit.
+        # Bare local POSIX (no SSH markers): both enter and c-j submit.
         with _patch.object(_sys, "platform", "linux"), \
              _patch.dict(_os.environ, {}, clear=True), \
              _patch("builtins.open", side_effect=OSError("no /proc")):
@@ -206,8 +202,7 @@ class TestPromptToolkitTerminalCompatibility:
             assert bindings[("c-m",)] is submit_handler
             assert bindings[("c-j",)] is submit_handler
 
-        # POSIX over SSH: c-j stays free so Ctrl+Enter (sent as LF by
-        # Windows Terminal / Kitty / mintty over SSH) inserts a newline.
+        # POSIX over SSH: c-j stays free so Ctrl+Enter sent as LF inserts a newline.
         with _patch.object(_sys, "platform", "linux"), \
              _patch.dict(_os.environ, {"SSH_CONNECTION": "1.2.3.4 5 6.7.8.9 22"}, clear=True), \
              _patch("builtins.open", side_effect=OSError("no /proc")):
@@ -222,15 +217,6 @@ class TestPromptToolkitTerminalCompatibility:
         with _patch.object(_sys, "platform", "linux"), \
              _patch.dict(_os.environ, {"TERM": "tmux-256color", "TERM_PROGRAM": "tmux", "GHOSTTY_RESOURCES_DIR": "/usr/share/ghostty"}, clear=True), \
              _patch("builtins.open", side_effect=OSError("no /proc")):
-            kb = KeyBindings()
-            _bind_prompt_submit_keys(kb, submit_handler)
-            bindings = {tuple(key.value for key in binding.keys): binding.handler for binding in kb.bindings}
-            assert bindings[("c-m",)] is submit_handler
-            assert ("c-j",) not in bindings
-
-        # Windows: only enter submits; c-j is free for the newline binding
-        # added separately in the prompt setup.
-        with _patch.object(_sys, "platform", "win32"):
             kb = KeyBindings()
             _bind_prompt_submit_keys(kb, submit_handler)
             bindings = {tuple(key.value for key in binding.keys): binding.handler for binding in kb.bindings}
@@ -484,155 +470,6 @@ class TestHistoryDisplay:
         assert called_with.lower().startswith("/sessions")
 
 
-class TestRootLevelProviderOverride:
-    """Root-level provider/base_url in config.yaml must NOT override model.provider."""
-
-    def test_model_provider_wins_over_root_provider(self, tmp_path, monkeypatch):
-        """model.provider takes priority — root-level provider is only a fallback."""
-        import yaml
-
-        marlow_home = tmp_path / ".marlow"
-        marlow_home.mkdir()
-        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
-        config_path = marlow_home / "config.yaml"
-        config_path.write_text(yaml.safe_dump({
-            "provider": "opencode-go",  # stale root-level key
-            "model": {
-                "default": "google/gemini-3-flash-preview",
-                "provider": "openrouter",  # correct canonical key
-            },
-        }))
-
-        import cli
-        monkeypatch.setattr(cli, "_marlow_home", marlow_home)
-        cfg = cli.load_cli_config()
-
-        assert cfg["model"]["provider"] == "openrouter"
-
-    def test_root_provider_used_as_fallback_when_model_provider_missing(self, tmp_path, monkeypatch):
-        """Legacy root-level provider still populates model.provider in the CLI loader."""
-        import yaml
-
-        marlow_home = tmp_path / ".marlow"
-        marlow_home.mkdir()
-        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
-        config_path = marlow_home / "config.yaml"
-        config_path.write_text(yaml.safe_dump({
-            "provider": "opencode-go",  # stale root key
-            "model": {
-                "default": "google/gemini-3-flash-preview",
-                # no explicit model.provider — defaults provide "auto"
-            },
-        }))
-
-        import cli
-        monkeypatch.setattr(cli, "_marlow_home", marlow_home)
-        cfg = cli.load_cli_config()
-
-        assert cfg["model"]["provider"] == "opencode-go"
-
-    def test_root_base_url_used_as_fallback_when_model_base_url_missing(self, tmp_path, monkeypatch):
-        """Legacy root-level base_url still populates model.base_url in the CLI loader."""
-        import yaml
-
-        marlow_home = tmp_path / ".marlow"
-        marlow_home.mkdir()
-        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
-        config_path = marlow_home / "config.yaml"
-        config_path.write_text(yaml.safe_dump({
-            "base_url": "https://example.com/v1",
-            "model": {
-                "default": "google/gemini-3-flash-preview",
-            },
-        }))
-
-        import cli
-        monkeypatch.setattr(cli, "_marlow_home", marlow_home)
-        cfg = cli.load_cli_config()
-
-        assert cfg["model"]["base_url"] == "https://example.com/v1"
-
-    def test_normalize_root_model_keys_moves_to_model(self):
-        """_normalize_root_model_keys migrates root keys into model section."""
-        from marlow_cli.config import _normalize_root_model_keys
-
-        config = {
-            "provider": "opencode-go",
-            "base_url": "https://example.com/v1",
-            "model": {
-                "default": "some-model",
-            },
-        }
-        result = _normalize_root_model_keys(config)
-        # Root keys removed
-        assert "provider" not in result
-        assert "base_url" not in result
-        # Migrated into model section
-        assert result["model"]["provider"] == "opencode-go"
-        assert result["model"]["base_url"] == "https://example.com/v1"
-
-    def test_normalize_root_model_keys_does_not_override_existing(self):
-        """Existing model.provider is never overridden by root-level key."""
-        from marlow_cli.config import _normalize_root_model_keys
-
-        config = {
-            "provider": "stale-provider",
-            "model": {
-                "default": "some-model",
-                "provider": "correct-provider",
-            },
-        }
-        result = _normalize_root_model_keys(config)
-        assert result["model"]["provider"] == "correct-provider"
-        assert "provider" not in result  # root key still cleaned up
-
-    def test_normalize_root_context_length_migrates_to_model(self):
-        """Root-level context_length is migrated into the model section."""
-        from marlow_cli.config import _normalize_root_model_keys
-
-        config = {
-            "context_length": 128000,
-            "model": {
-                "default": "my-model",
-            },
-        }
-        result = _normalize_root_model_keys(config)
-        assert result["model"]["context_length"] == 128000
-        assert "context_length" not in result  # root key cleaned up
-
-    def test_normalize_root_context_length_does_not_override_existing(self):
-        """Existing model.context_length is not overridden by root-level key."""
-        from marlow_cli.config import _normalize_root_model_keys
-
-        config = {
-            "context_length": 256000,
-            "model": {
-                "default": "my-model",
-                "context_length": 128000,
-            },
-        }
-        result = _normalize_root_model_keys(config)
-        assert result["model"]["context_length"] == 128000  # preserved
-        assert "context_length" not in result  # root key still cleaned up
-
-    def test_normalize_root_context_length_with_string_model(self):
-        """Root-level context_length is migrated even when model is a string."""
-        from marlow_cli.config import _normalize_root_model_keys
-
-        config = {
-            "context_length": 128000,
-            "model": "my-model",
-        }
-        result = _normalize_root_model_keys(config)
-        assert isinstance(result["model"], dict)
-        assert result["model"]["default"] == "my-model"
-        assert result["model"]["context_length"] == 128000
-        assert "context_length" not in result
-
-
 class TestProviderResolution:
     def test_api_key_is_string_or_none(self):
         cli = _make_cli()
@@ -646,4 +483,4 @@ class TestProviderResolution:
     def test_model_is_string(self):
         cli = _make_cli()
         assert isinstance(cli.model, str)
-        assert isinstance(cli.model, str) and '/' in cli.model
+        assert cli.model == "local-model"

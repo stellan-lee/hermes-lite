@@ -843,7 +843,7 @@ def mcp_command(args):
         run_picker()
         print(color("  Commands:", Colors.CYAN))
         _info("marlow mcp                                    Open the catalog picker (default)")
-        _info("marlow mcp catalog                            List Nous-approved MCPs")
+        _info("marlow mcp catalog                            List bundled MCPs")
         _info("marlow mcp install <name>                     Install a catalog MCP")
         _info("marlow mcp serve                              Run as MCP server")
         _info("marlow mcp add <name> --url <endpoint>        Add a custom MCP server")

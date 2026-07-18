@@ -4,7 +4,7 @@ description: "Delegate coding to Claude Code CLI (features, PRs)."
 version: 2.2.0
 author: Marlow Agent + Teknium
 license: MIT
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 metadata:
   marlow:
     tags: [Coding-Agent, Claude, Anthropic, Code-Review, Refactoring, PTY, Automation]

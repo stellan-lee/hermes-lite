@@ -171,6 +171,8 @@ def test_crashed_runner_produces_error_completion():
     )
     assert r["status"] == "dispatched"
     evt = _drain_one()
+    while evt is not None and evt.get("delegation_id") != r["delegation_id"]:
+        evt = _drain_one()
     assert evt is not None
     assert evt["status"] == "error"
     text = format_process_notification(evt)

@@ -8,20 +8,8 @@ Features ASCII art branding, interactive REPL, toolset selection, and rich forma
 Usage:
     python cli.py                          # Start interactive mode with all tools
     python cli.py --toolsets web,terminal  # Start with specific toolsets
-    python cli.py --skills marlow-agent-dev,github-auth
     python cli.py --list-tools             # List available tools and exit
 """
-
-# IMPORTANT: marlow_bootstrap must be the very first import — UTF-8 stdio
-# on Windows.  No-op on POSIX.  See marlow_bootstrap.py for full rationale.
-try:
-    import marlow_bootstrap  # noqa: F401
-except ModuleNotFoundError:
-    # Graceful fallback when marlow_bootstrap isn't registered in the venv
-    # yet — happens during partial ``marlow update`` where git-reset landed
-    # new code but ``uv pip install -e .`` didn't finish.  Missing bootstrap
-    # means UTF-8 stdio setup is skipped on Windows; POSIX is unaffected.
-    pass
 
 import logging
 import os
@@ -259,7 +247,6 @@ from marlow_cli.browser_connect import (
     try_launch_chrome_debug,
 )
 from marlow_cli.env_loader import load_marlow_dotenv
-from utils import base_url_host_matches
 
 _marlow_home = get_marlow_home()
 _project_env = Path(__file__).parent / '.env'
@@ -400,23 +387,13 @@ def _load_prefill_messages(file_path: str) -> List[Dict[str, Any]]:
 
 
 def _parse_reasoning_config(effort: str) -> dict | None:
-    """Parse a reasoning effort level into an OpenRouter reasoning config dict."""
+    """Parse a reasoning effort level into a compatible runtime config."""
     from marlow_constants import parse_reasoning_effort
     result = parse_reasoning_effort(effort)
     if effort and effort.strip() and result is None:
         logger.warning("Unknown reasoning_effort '%s', using default (medium)", effort)
     return result
 
-
-def _parse_service_tier_config(raw: str) -> str | None:
-    """Parse a persisted service-tier preference into a Responses API value."""
-    value = str(raw or "").strip().lower()
-    if not value or value in {"normal", "default", "standard", "off", "none"}:
-        return None
-    if value in {"fast", "priority", "on"}:
-        return "priority"
-    logger.warning("Unknown service_tier '%s', ignoring", raw)
-    return None
 
 def load_cli_config() -> Dict[str, Any]:
     """
@@ -457,15 +434,12 @@ def load_cli_config() -> Dict[str, Any]:
             "provider": "auto",
         },
         "terminal": {
-            "env_type": "local",
+            "backend": "local",
             "cwd": ".",  # "." is resolved to os.getcwd() at runtime
             "timeout": 60,
             "lifetime_seconds": 300,
             "docker_image": "nikolaik/python-nodejs:python3.11-nodejs20",
             "docker_forward_env": [],
-            "singularity_image": "docker://nikolaik/python-nodejs:python3.11-nodejs20",
-            "modal_image": "nikolaik/python-nodejs:python3.11-nodejs20",
-            "daytona_image": "nikolaik/python-nodejs:python3.11-nodejs20",
             "docker_volumes": [],  # host:container volume mounts for Docker backend
             "docker_mount_cwd_to_workspace": False,  # explicit opt-in only; default off for sandbox isolation
         },
@@ -473,10 +447,6 @@ def load_cli_config() -> Dict[str, Any]:
             "inactivity_timeout": 120,  # Auto-cleanup inactive browser sessions after 2 min
             "record_sessions": False,  # Auto-record browser sessions as WebM videos
             "engine": "auto",  # Browser engine: auto (Chrome), lightpanda, chrome
-            "camofox": {
-                "rewrite_loopback_urls": False,
-                "loopback_host_alias": "host.docker.internal",
-            },
         },
         "compression": {
             "enabled": True,      # Auto-compress when approaching context limit
@@ -488,7 +458,6 @@ def load_cli_config() -> Dict[str, Any]:
             "system_prompt": "",
             "prefill_messages_file": "",
             "reasoning_effort": "",
-            "service_tier": "",
             "personalities": {
                 "helpful": "You are a helpful, friendly AI assistant.",
                 "concise": "You are a concise assistant. Keep responses brief and to the point.",
@@ -569,9 +538,7 @@ def load_cli_config() -> Dict[str, Any]:
     if config_path.exists():
         try:
             with open(config_path, "r", encoding="utf-8") as f:
-                from marlow_cli.config import _normalize_root_model_keys
-
-                file_config = _normalize_root_model_keys(yaml.safe_load(f) or {})
+                file_config = yaml.safe_load(f) or {}
             
             _file_has_terminal_config = "terminal" in file_config
 
@@ -604,19 +571,11 @@ def load_cli_config() -> Dict[str, Any]:
                         defaults[key] = file_config[key]
             
             # Second: carry over keys from file_config that aren't in defaults
-            # (e.g. platform_toolsets, provider_routing, memory, honcho, etc.)
+            # (e.g. platform_toolsets, memory, honcho, etc.)
             for key in file_config:
                 if key not in defaults and key != "model":
                     defaults[key] = file_config[key]
             
-            # Handle legacy root-level max_turns (backwards compat) - copy to
-            # agent.max_turns whenever the nested key is missing.
-            agent_file_config = file_config.get("agent")
-            if "max_turns" in file_config and not (
-                isinstance(agent_file_config, dict)
-                and agent_file_config.get("max_turns") is not None
-            ):
-                defaults["agent"]["max_turns"] = file_config["max_turns"]
         except Exception as e:
             logger.warning("Failed to load cli-config.yaml: %s", e)
 
@@ -627,19 +586,13 @@ def load_cli_config() -> Dict[str, Any]:
     # Apply terminal config to environment variables (so terminal_tool picks them up)
     terminal_config = defaults.get("terminal", {})
     
-    # Normalize config key: the new config system (marlow_cli/config.py) and all
-    # documentation use "backend", the legacy cli-config.yaml uses "env_type".
-    # Accept both, with "backend" taking precedence (it's the documented key).
-    if "backend" in terminal_config:
-        terminal_config["env_type"] = terminal_config["backend"]
-    
     # CWD resolution for CLI/TUI. The gateway has its own config bridge in
     # gateway/run.py but may lazily import cli.py (triggering this code).
     # Local backend: always os.getcwd(). Use `cd /dir && marlow` to control it.
     # Non-local with placeholder: pop so terminal_tool uses its per-backend default.
     # Non-local with explicit path: keep as-is.
     _CWD_PLACEHOLDERS = (".", "auto", "cwd")
-    effective_backend = terminal_config.get("env_type", "local")
+    effective_backend = terminal_config.get("backend", "local")
 
     if effective_backend == "local":
         terminal_config["cwd"] = os.getcwd()
@@ -648,21 +601,18 @@ def load_cli_config() -> Dict[str, Any]:
         terminal_config.pop("cwd", None)
     
     env_mappings = {
-        "env_type": "TERMINAL_ENV",
+        "backend": "TERMINAL_ENV",
         "cwd": "TERMINAL_CWD",
         "timeout": "TERMINAL_TIMEOUT",
         "lifetime_seconds": "TERMINAL_LIFETIME_SECONDS",
         "docker_image": "TERMINAL_DOCKER_IMAGE",
         "docker_forward_env": "TERMINAL_DOCKER_FORWARD_ENV",
-        "singularity_image": "TERMINAL_SINGULARITY_IMAGE",
-        "modal_image": "TERMINAL_MODAL_IMAGE",
-        "daytona_image": "TERMINAL_DAYTONA_IMAGE",
         # SSH config
         "ssh_host": "TERMINAL_SSH_HOST",
         "ssh_user": "TERMINAL_SSH_USER",
         "ssh_port": "TERMINAL_SSH_PORT",
         "ssh_key": "TERMINAL_SSH_KEY",
-        # Container resource config (docker, singularity, modal, daytona -- ignored for local/ssh)
+        # Container resource config (Docker only; ignored for local/SSH)
         "container_cpu": "TERMINAL_CONTAINER_CPU",
         "container_memory": "TERMINAL_CONTAINER_MEMORY",
         "container_disk": "TERMINAL_CONTAINER_DISK",
@@ -957,7 +907,6 @@ def _cleanup_all_browsers(*args, **kwargs):
 _cleanup_done = False
 # Weak reference to the active AIAgent for memory provider shutdown at exit
 _active_agent_ref = None
-_deferred_agent_startup_done = False
 # Set True once the TUI's prompt_toolkit app starts (which enables focus
 # reporting + mouse tracking). Gates the on-exit terminal reset so non-TUI
 # one-shot CLI runs — which also register _run_cleanup via atexit — don't emit
@@ -970,52 +919,6 @@ def _mark_tui_input_modes_active() -> None:
     global _tui_input_modes_active
     _tui_input_modes_active = True
 
-
-def _prepare_deferred_agent_startup() -> None:
-    """Run Termux-deferred agent discovery before the first real agent turn."""
-    global _deferred_agent_startup_done
-    if _deferred_agent_startup_done:
-        return
-    if os.environ.get("MARLOW_DEFER_AGENT_STARTUP") != "1":
-        return
-    _deferred_agent_startup_done = True
-    _accept_hooks = os.environ.get("MARLOW_ACCEPT_HOOKS", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    try:
-        from marlow_cli.plugins import discover_plugins
-
-        discover_plugins()
-    except Exception:
-        logger.warning(
-            "plugin discovery failed at deferred CLI startup",
-            exc_info=True,
-        )
-    try:
-        from marlow_cli.mcp_startup import start_background_mcp_discovery
-
-        start_background_mcp_discovery(
-            logger=logger,
-            thread_name="termux-cli-mcp-discovery",
-        )
-    except Exception:
-        logger.debug(
-            "MCP tool discovery failed at deferred CLI startup",
-            exc_info=True,
-        )
-    try:
-        from agent.shell_hooks import register_from_config
-        from marlow_cli.config import load_config
-
-        register_from_config(load_config(), accept_hooks=_accept_hooks)
-    except Exception:
-        logger.debug(
-            "shell-hook registration failed at deferred CLI startup",
-            exc_info=True,
-        )
 
 def _run_cleanup():
     """Run resource cleanup exactly once."""
@@ -1130,43 +1033,8 @@ def _reset_terminal_input_modes_on_exit() -> None:
 _active_worktree: Optional[Dict[str, str]] = None
 
 
-def _normalize_git_bash_path(p: Optional[str]) -> Optional[str]:
-    """Translate a Git Bash-style path (``/c/Users/...``) to the native
-    Windows form (``C:\\Users\\...``) that Python's ``subprocess.Popen``
-    and ``pathlib.Path`` accept.
-
-    No-op on non-Windows and for paths that already look native.  Git on
-    native Windows normally emits forward-slash Windows paths
-    (``C:/Users/...``) which both bash and Python handle, but certain
-    configurations (Git Bash shells, MSYS2, WSL-mounted repos) surface
-    ``/c/...`` or ``/cygdrive/c/...`` variants.
-    """
-    if not p:
-        return p
-    if sys.platform != "win32":
-        return p
-    import re as _re
-    # /c/Users/... or /C/Users/...
-    m = _re.match(r"^/([a-zA-Z])/(.*)$", p)
-    if m:
-        drive, rest = m.group(1), m.group(2)
-        return f"{drive.upper()}:\\{rest.replace('/', chr(92))}"
-    # /cygdrive/c/... or /mnt/c/...
-    m = _re.match(r"^/(?:cygdrive|mnt)/([a-zA-Z])/(.*)$", p)
-    if m:
-        drive, rest = m.group(1), m.group(2)
-        return f"{drive.upper()}:\\{rest.replace('/', chr(92))}"
-    return p
-
-
 def _git_repo_root() -> Optional[str]:
-    """Return the git repo root for CWD, or None if not in a repo.
-
-    Runs through :func:`_normalize_git_bash_path` so callers can pass
-    the result directly to ``Path``/``subprocess.Popen(cwd=...)`` on
-    Windows without hitting ``C:\\c\\Users\\...`` style resolution
-    mistakes.
-    """
+    """Return the git repo root for CWD, or None if not in a repo."""
     import subprocess
     try:
         result = subprocess.run(
@@ -1174,7 +1042,7 @@ def _git_repo_root() -> Optional[str]:
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:
-            return _normalize_git_bash_path(result.stdout.strip())
+            return result.stdout.strip()
     except Exception:
         pass
     return None
@@ -1269,34 +1137,28 @@ def _setup_worktree(repo_root: str = None) -> Optional[Dict[str, str]]:
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(str(src), str(dst))
                 elif src.is_dir():
-                    # Symlink directories (faster, saves disk).  On Windows,
-                    # symlink creation requires Developer Mode or elevation,
-                    # and fails with OSError otherwise — fall back to a
-                    # recursive copy so the worktree is still usable.  The
-                    # copy is slower and uses disk, but it doesn't require
-                    # admin and matches the Linux/macOS symlink outcome
-                    # functionally.
+                    # Symlink directories (faster, saves disk). Fall back to a
+                    # recursive copy if the filesystem rejects symlinks.
                     if not dst.exists():
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         try:
                             os.symlink(str(src_resolved), str(dst))
                         except (OSError, NotImplementedError) as _sym_err:
-                            if sys.platform == "win32":
-                                logger.info(
-                                    ".worktreeinclude: symlink failed (%s) — "
-                                    "falling back to copytree on Windows.",
-                                    _sym_err,
+                            logger.info(
+                                ".worktreeinclude: symlink failed (%s) — "
+                                "falling back to copytree.",
+                                _sym_err,
+                            )
+                            try:
+                                shutil.copytree(
+                                    str(src_resolved),
+                                    str(dst),
+                                    symlinks=True,
+                                    dirs_exist_ok=False,
                                 )
-                                try:
-                                    shutil.copytree(
-                                        str(src_resolved),
-                                        str(dst),
-                                        symlinks=True,
-                                        dirs_exist_ok=False,
-                                    )
-                                except Exception as _copy_err:
-                                    logger.warning(
-                                        ".worktreeinclude: copy fallback "
+                            except Exception as _copy_err:
+                                logger.warning(
+                                    ".worktreeinclude: copy fallback "
                                         "also failed for %s -> %s: %s",
                                         src, dst, _copy_err,
                                     )
@@ -1997,28 +1859,6 @@ def _strip_markdown_syntax(text: str) -> str:
     return plain.strip("\n")
 
 
-_WINDOWS_PATH_WITH_DOT_SEGMENT_RE = re.compile(
-    r"(?i)(?:\b[a-z]:\\|\\\\)[^\s`]*\\\.[^\s`]*"
-)
-
-
-def _preserve_windows_dot_segments_for_markdown(text: str) -> str:
-    r"""Keep Windows path separators before hidden directories in Markdown.
-
-    CommonMark treats ``\.`` as an escaped literal dot, so Rich Markdown would
-    render ``D:\repo\.ai`` as ``D:\repo.ai``.  Doubling only that separator
-    inside Windows path-looking tokens preserves the path without changing
-    ordinary markdown escapes like ``1\. not a list``.
-    """
-    if "\\." not in text:
-        return text
-
-    def _protect(match: re.Match[str]) -> str:
-        return re.sub(r"(?<!\\)\\(?=\.)", r"\\\\", match.group(0))
-
-    return _WINDOWS_PATH_WITH_DOT_SEGMENT_RE.sub(_protect, text)
-
-
 def _terminal_width_for_streaming() -> int:
     """Display cells available inside the streamed response box.
 
@@ -2070,7 +1910,6 @@ def _render_final_assistant_content(text: str, mode: str = "render"):
     # normalise model-emitted under-padded tables so that mid-render fallbacks
     # (narrow panels, etc.) at least see consistent input.
     plain = _rich_text_from_ansi(text or "").plain
-    plain = _preserve_windows_dot_segments_for_markdown(plain)
     plain = realign_markdown_tables(plain, panel_width)
     return Markdown(plain)
 
@@ -2200,7 +2039,7 @@ def _cprint(text: str):
         except Exception:
             # Fallback when stdout is not a real console (e.g. subprocess
             # worker logging to a file). prompt_toolkit raises
-            # NoConsoleScreenBufferError (Windows) or OSError (other).
+            # Terminal rendering may fail while the output stream is closing.
             try:
                 print(text)
             except Exception:
@@ -2311,23 +2150,6 @@ _IMAGE_EXTENSIONS = frozenset({
 })
 
 
-from marlow_constants import is_termux as _is_termux_environment
-
-
-def _termux_example_image_path(filename: str = "cat.png") -> str:
-    """Return a realistic example media path for the current Termux setup."""
-    candidates = [
-        os.path.expanduser("~/storage/shared"),
-        "/sdcard",
-        "/storage/emulated/0",
-        "/storage/self/primary",
-    ]
-    for root in candidates:
-        if os.path.isdir(root):
-            return os.path.join(root, "Pictures", filename)
-    return os.path.join("~/storage/shared", "Pictures", filename)
-
-
 def _split_path_input(raw: str) -> tuple[str, str]:
     r"""Split a leading file path token from trailing free-form text.
 
@@ -2394,15 +2216,9 @@ def _resolve_attachment_path(raw_path: str) -> Path | None:
             parsed = urlparse(token)
             if parsed.scheme == "file":
                 expanded = unquote(parsed.path or "")
-                if parsed.netloc and os.name == "nt":
-                    expanded = f"//{parsed.netloc}{expanded}"
         except Exception:
             expanded = token
     expanded = os.path.expandvars(os.path.expanduser(expanded))
-    if os.name != "nt":
-        normalized = expanded.replace("\\", "/")
-        if len(normalized) >= 3 and normalized[1] == ":" and normalized[2] == "/" and normalized[0].isalpha():
-            expanded = f"/mnt/{normalized[0].lower()}/{normalized[3:]}"
     path = Path(expanded)
     if not path.is_absolute():
         base_dir = Path(os.getenv("TERMINAL_CWD", os.getcwd()))
@@ -2439,7 +2255,7 @@ def _detect_file_drop(user_input: str) -> "dict | None":
     """Detect if *user_input* starts with a real local file path.
 
     This catches dragged/pasted paths before they are mistaken for slash
-    commands, and also supports Termux-friendly paths like ``~/storage/...``.
+    commands and expanded home-directory paths.
 
     Returns a dict on match::
 
@@ -2510,7 +2326,7 @@ def _detect_file_drop(user_input: str) -> "dict | None":
 def _format_image_attachment_badges(attached_images: list[Path], image_counter: int, width: int | None = None) -> str:
     """Format the attached-image badge row for the interactive CLI.
 
-    Narrow terminals such as Termux should get a compact summary that fits on a
+    Narrow terminals should get a compact summary that fits on a
     single row, while wider terminals can show the classic per-image badges.
     """
     if not attached_images:
@@ -2687,8 +2503,8 @@ _TERMINAL_INPUT_MODE_RESET_SEQ = (
 def _preserve_ctrl_enter_newline() -> bool:
     """Detect environments where Ctrl+Enter must produce a newline, not submit.
 
-    Windows Terminal, WSL, SSH sessions, Ghostty, and some modern terminals
-    deliver Ctrl+Enter/Ctrl+J as bare LF (c-j). On those terminals c-j must
+    SSH sessions, Ghostty, and some modern terminals deliver Ctrl+Enter/Ctrl+J
+    as bare LF (c-j). On those terminals c-j must
     NOT be bound to submit;
     binding it to submit makes Ctrl+Enter (intended as 'newline like Alt+Enter')
     submit instead. Local POSIX TTYs that deliver Enter as LF (docker exec,
@@ -2697,11 +2513,7 @@ def _preserve_ctrl_enter_newline() -> bool:
 
     See issue #22379.
     """
-    if sys.platform == "win32":
-        return True
     if any(os.environ.get(v) for v in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY")):
-        return True
-    if os.environ.get("WT_SESSION"):
         return True
     if os.environ.get("GHOSTTY_RESOURCES_DIR") or os.environ.get("GHOSTTY_BIN_DIR"):
         return True
@@ -2709,16 +2521,6 @@ def _preserve_ctrl_enter_newline() -> bool:
         return True
     if os.environ.get("TERM_PROGRAM", "").lower() == "ghostty":
         return True
-    if "microsoft" in os.environ.get("WSL_DISTRO_NAME", "").lower():
-        return True
-    # WSL detection — env vars can be scrubbed under sudo, also peek /proc.
-    for p in ("/proc/version", "/proc/sys/kernel/osrelease"):
-        try:
-            with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                if "microsoft" in f.read().lower():
-                    return True
-        except OSError:
-            continue
     return False
 
 
@@ -2729,7 +2531,7 @@ def _bind_prompt_submit_keys(kb, handler) -> None:
     some thin PTYs (docker exec, certain SSH flavors) deliver Enter as LF
     instead of CR — without this, Enter appears dead on those terminals.
 
-    Exception: on Windows, WSL, SSH sessions, Windows Terminal, and Ghostty,
+    Exception: in SSH sessions and Ghostty,
     c-j is the wire encoding of Ctrl+Enter (a distinct keystroke from
     plain Enter / c-m). We leave c-j unbound there so the c-j newline
     handler registered separately can fire — giving the user an
@@ -2737,7 +2539,7 @@ def _bind_prompt_submit_keys(kb, handler) -> None:
     See _preserve_ctrl_enter_newline() and issue #22379.
     """
     kb.add("enter")(handler)
-    if sys.platform != "win32" and not _preserve_ctrl_enter_newline():
+    if not _preserve_ctrl_enter_newline():
         kb.add("c-j")(handler)
 
 
@@ -2974,7 +2776,6 @@ def _looks_like_slash_command(text: str) -> bool:
 # ============================================================================
 
 _skill_commands = None
-_skill_bundles = None
 
 
 def _ensure_skill_commands() -> dict:
@@ -2996,27 +2797,6 @@ def build_skill_invocation_message(*args, **kwargs):
     return _impl(*args, **kwargs)
 
 
-def build_preloaded_skills_prompt(*args, **kwargs):
-    from agent.skill_commands import build_preloaded_skills_prompt as _impl
-
-    return _impl(*args, **kwargs)
-
-
-def get_skill_bundles() -> dict:
-    global _skill_bundles
-    if _skill_bundles is None:
-        from agent.skill_bundles import get_skill_bundles as _impl
-
-        _skill_bundles = _impl()
-    return _skill_bundles
-
-
-def build_bundle_invocation_message(*args, **kwargs):
-    from agent.skill_bundles import build_bundle_invocation_message as _impl
-
-    return _impl(*args, **kwargs)
-
-
 def _get_plugin_cmd_handler_names() -> set:
     """Return plugin command names (without slash prefix) for dispatch matching."""
     try:
@@ -3024,30 +2804,6 @@ def _get_plugin_cmd_handler_names() -> set:
         return set(get_plugin_commands().keys())
     except Exception:
         return set()
-
-
-def _parse_skills_argument(skills: str | list[str] | tuple[str, ...] | None) -> list[str]:
-    """Normalize a CLI skills flag into a deduplicated list of skill identifiers."""
-    if not skills:
-        return []
-
-    if isinstance(skills, str):
-        raw_values = [skills]
-    elif isinstance(skills, (list, tuple)):
-        raw_values = [str(item) for item in skills if item is not None]
-    else:
-        raw_values = [str(skills)]
-
-    parsed: list[str] = []
-    seen: set[str] = set()
-    for raw in raw_values:
-        for part in raw.split(","):
-            normalized = part.strip()
-            if not normalized or normalized in seen:
-                continue
-            seen.add(normalized)
-            parsed.append(normalized)
-    return parsed
 
 
 def save_config_value(key_path: str, value: any) -> bool:
@@ -3124,11 +2880,11 @@ class MarlowCLI:
         Initialize the Marlow CLI.
 
         Args:
-            model: Model to use (default: from env or claude-sonnet)
+            model: Model to use (default: from config)
             toolsets: List of toolsets to enable (default: all)
-            provider: Inference provider ("auto", "openrouter", "nous", "openai-codex", "zai", "kimi-coding", "minimax", "minimax-cn")
-            api_key: API key (default: from environment)
-            base_url: API base URL (default: OpenRouter)
+            provider: Inference provider ("auto", "openai-codex", "lmstudio", or a custom endpoint)
+            api_key: Optional API key for a custom endpoint
+            base_url: Custom/local OpenAI-compatible API base URL
             max_turns: Maximum tool-calling iterations shared with subagents (default: 90)
             verbose: Enable verbose logging
             compact: Use compact display mode
@@ -3254,27 +3010,17 @@ class MarlowCLI:
         self._provider_source: Optional[str] = None
         self.provider = self.requested_provider
         self.api_mode = "chat_completions"
-        self.acp_command: Optional[str] = None
-        self.acp_args: list[str] = []
         self.base_url = (
             base_url
             or CLI_CONFIG["model"].get("base_url", "")
-            or os.getenv("OPENROUTER_BASE_URL", "")
         ) or None
-        # Match key to resolved base_url: OpenRouter URL → prefer OPENROUTER_API_KEY,
-        # custom endpoint → prefer OPENAI_API_KEY (issue #560).
-        # Note: _ensure_runtime_credentials() re-resolves this before first use.
-        if self.base_url and base_url_host_matches(self.base_url, "openrouter.ai"):
-            self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        else:
-            self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        # Runtime resolution fills Codex credentials or custom-provider keys.
+        self.api_key = api_key
         # Max turns priority: CLI arg > config file > env var > default
         if max_turns is not None:  # CLI arg was explicitly set
             self.max_turns = max_turns
         elif CLI_CONFIG["agent"].get("max_turns"):
             self.max_turns = CLI_CONFIG["agent"]["max_turns"]
-        elif CLI_CONFIG.get("max_turns"):  # Backwards compat: root-level max_turns
-            self.max_turns = CLI_CONFIG["max_turns"]
         elif os.getenv("MARLOW_MAX_ITERATIONS"):
             try:
                 self.max_turns = int(os.getenv("MARLOW_MAX_ITERATIONS", ""))
@@ -3323,45 +3069,17 @@ class MarlowCLI:
             CLI_CONFIG["agent"].get("prefill_messages_file", "")
         )
         
-        # Reasoning config (OpenRouter reasoning effort level)
+        # Reasoning effort for retained Codex/custom-compatible runtimes.
         self.reasoning_config = _parse_reasoning_config(
             CLI_CONFIG["agent"].get("reasoning_effort", "")
         )
-        self.service_tier = _parse_service_tier_config(
-            CLI_CONFIG["agent"].get("service_tier", "")
-        )
-        
-        # OpenRouter provider routing preferences
-        pr = CLI_CONFIG.get("provider_routing", {}) or {}
-        self._provider_sort = pr.get("sort")
-        self._providers_only = pr.get("only")
-        self._providers_ignore = pr.get("ignore")
-        self._providers_order = pr.get("order")
-        self._provider_require_params = pr.get("require_parameters", False)
-        self._provider_data_collection = pr.get("data_collection")
-
-        # OpenRouter Pareto Code router knob — coding-score floor (0.0-1.0).
-        # Only applied when model.model == "openrouter/pareto-code".
-        # Empty string / None / out-of-range = unset (let OR pick strongest coder).
-        _or_cfg = CLI_CONFIG.get("openrouter", {}) or {}
-        _raw_score = _or_cfg.get("min_coding_score")
-        self._openrouter_min_coding_score: Optional[float] = None
-        if _raw_score not in {None, ""}:
-            try:
-                _f = float(_raw_score)
-                if 0.0 <= _f <= 1.0:
-                    self._openrouter_min_coding_score = _f
-            except (TypeError, ValueError):
-                pass
         
         # Fallback provider chain — tried in order when primary fails after retries.
-        # Merge new ``fallback_providers`` entries with any legacy
-        # ``fallback_model`` entries so old configs still participate.
-        self._fallback_model = get_fallback_chain(CLI_CONFIG)
+        self._fallback_providers = get_fallback_chain(CLI_CONFIG)
 
         # Signature of the currently-initialised agent's runtime.  Used to
         # rebuild the agent when provider / model / base_url changes across
-        # turns (e.g. after /model or credential rotation).
+        # turns (for example after /model).
         self._active_agent_route_signature = None
 
         # Agent will be initialized on first use
@@ -3466,8 +3184,6 @@ class MarlowCLI:
         self._command_status = ""
         self._attached_images: list[Path] = []
         self._image_counter = 0
-        self.preloaded_skills: list[str] = []
-        self._startup_skills_line_shown = False
 
         # Voice mode state (also reinitialized inside run() for interactive TUI).
         self._voice_lock = threading.Lock()
@@ -3842,7 +3558,7 @@ class MarlowCLI:
         """Return the live prompt_toolkit width, falling back to ``shutil``.
 
         The TUI layout can be narrower than ``shutil.get_terminal_size()`` reports,
-        especially on Termux/mobile shells, so prefer prompt_toolkit's width whenever
+        especially on narrow shells, so prefer prompt_toolkit's width whenever
         an app is active.
         """
         try:
@@ -4190,50 +3906,6 @@ class MarlowCLI:
         except Exception:
             pass
 
-        if resolved_provider == "copilot":
-            try:
-                from marlow_cli.models import copilot_model_api_mode, normalize_copilot_model_id
-
-                canonical = normalize_copilot_model_id(current_model, api_key=self.api_key)
-                if canonical and canonical != current_model:
-                    if not self._model_is_default:
-                        self._console_print(
-                            f"[yellow]⚠️  Normalized Copilot model '{current_model}' to '{canonical}'.[/]"
-                        )
-                    self.model = canonical
-                    current_model = canonical
-                    changed = True
-
-                resolved_mode = copilot_model_api_mode(current_model, api_key=self.api_key)
-                if resolved_mode != self.api_mode:
-                    self.api_mode = resolved_mode
-                    changed = True
-            except Exception:
-                pass
-            return changed
-
-        if resolved_provider in {"opencode-zen", "opencode-go"}:
-            try:
-                from marlow_cli.models import normalize_opencode_model_id, opencode_model_api_mode
-
-                canonical = normalize_opencode_model_id(resolved_provider, current_model)
-                if canonical and canonical != current_model:
-                    if not self._model_is_default:
-                        self._console_print(
-                            f"[yellow]⚠️  Stripped provider prefix from '{current_model}'; using '{canonical}' for {resolved_provider}.[/]"
-                        )
-                    self.model = canonical
-                    current_model = canonical
-                    changed = True
-
-                resolved_mode = opencode_model_api_mode(resolved_provider, current_model)
-                if resolved_mode != self.api_mode:
-                    self.api_mode = resolved_mode
-                    changed = True
-            except Exception:
-                pass
-            return changed
-
         if resolved_provider != "openai-codex":
             return changed
 
@@ -4251,7 +3923,7 @@ class MarlowCLI:
 
         # 2. Replace untouched default with a Codex model
         if self._model_is_default:
-            fallback_model = "gpt-5.3-codex"
+            default_model = "gpt-5.3-codex"
             try:
                 from marlow_cli.codex_models import get_codex_model_ids
 
@@ -4259,12 +3931,12 @@ class MarlowCLI:
                     access_token=self.api_key if self.api_key else None,
                 )
                 if available:
-                    fallback_model = available[0]
+                    default_model = available[0]
             except Exception:
                 pass
 
-            if current_model != fallback_model:
-                self.model = fallback_model
+            if current_model != default_model:
+                self.model = default_model
                 changed = True
 
         return changed
@@ -4793,16 +4465,8 @@ class MarlowCLI:
     def _slow_command_status(self, command: str) -> str:
         """Return a user-facing status message for slower slash commands."""
         cmd_lower = command.lower().strip()
-        if cmd_lower.startswith("/skills search"):
-            return "Searching skills..."
-        if cmd_lower.startswith("/skills browse"):
-            return "Loading skills..."
-        if cmd_lower.startswith("/skills inspect"):
-            return "Inspecting skill..."
-        if cmd_lower.startswith("/skills install"):
-            return "Installing skill..."
         if cmd_lower.startswith("/skills"):
-            return "Processing skills command..."
+            return "Listing local skills..."
         if cmd_lower == "/reload-mcp":
             return "Reloading MCP servers..."
         if cmd_lower == "/reload-skills" or cmd_lower == "/reload_skills":
@@ -4890,7 +4554,7 @@ class MarlowCLI:
         if runtime is None and _primary_exc is not None:
             from marlow_cli.auth import AuthError
             if isinstance(_primary_exc, AuthError):
-                _fb_chain = self._fallback_model if isinstance(self._fallback_model, list) else []
+                _fb_chain = self._fallback_providers
                 for _fb in _fb_chain:
                     _fb_provider = (_fb.get("provider") or "").strip().lower()
                     _fb_model = (_fb.get("model") or "").strip()
@@ -4917,11 +4581,8 @@ class MarlowCLI:
 
         api_key = runtime.get("api_key")
         base_url = runtime.get("base_url")
-        resolved_provider = runtime.get("provider", "openrouter")
+        resolved_provider = runtime.get("provider", "custom")
         resolved_api_mode = runtime.get("api_mode", self.api_mode)
-        resolved_acp_command = runtime.get("command")
-        resolved_acp_args = list(runtime.get("args") or [])
-        resolved_credential_pool = runtime.get("credential_pool")
         # A callable api_key is a bearer-token provider (Azure Foundry
         # Entra ID — ``azure_identity_adapter.build_token_provider``).
         # The OpenAI SDK accepts ``Callable[[], str]`` for ``api_key`` and
@@ -4934,7 +4595,7 @@ class MarlowCLI:
             # no API key was found, use a placeholder so the OpenAI SDK
             # doesn't reject the request and local servers just ignore it.
             _source = runtime.get("source", "")
-            _has_custom_base = isinstance(base_url, str) and base_url and "openrouter.ai" not in base_url
+            _has_custom_base = isinstance(base_url, str) and bool(base_url)
             if _has_custom_base:
                 api_key = "no-key-required"
                 logger.debug(
@@ -4943,8 +4604,7 @@ class MarlowCLI:
                     base_url, _source,
                 )
             else:
-                print("\n⚠️  Provider resolver returned an empty API key. "
-                      "Set OPENROUTER_API_KEY or run: marlow setup")
+                print("\n⚠️  Provider resolver returned an empty API key. Run: marlow setup")
                 return False
         if not isinstance(base_url, str) or not base_url:
             print("\n⚠️  Provider resolver returned an empty base URL. "
@@ -4955,14 +4615,9 @@ class MarlowCLI:
         routing_changed = (
             resolved_provider != self.provider
             or resolved_api_mode != self.api_mode
-            or resolved_acp_command != self.acp_command
-            or resolved_acp_args != self.acp_args
         )
         self.provider = resolved_provider
         self.api_mode = resolved_api_mode
-        self.acp_command = resolved_acp_command
-        self.acp_args = resolved_acp_args
-        self._credential_pool = resolved_credential_pool
         self._provider_source = runtime.get("source")
         self.api_key = api_key
         self.base_url = base_url
@@ -5014,21 +4669,13 @@ class MarlowCLI:
     def _resolve_turn_agent_config(self, user_message: str) -> dict:
         """Build the effective model/runtime config for a single user turn.
 
-        Always uses the session's primary model/provider.  If the user has
-        toggled `/fast` on and the current model supports Priority
-        Processing / Anthropic fast mode, attach `request_overrides` so the
-        API call is marked accordingly.
+        Always uses the session's primary model and retained runtime.
         """
-        from marlow_cli.models import resolve_fast_mode_overrides
-
         runtime = {
             "api_key": self.api_key,
             "base_url": self.base_url,
             "provider": self.provider,
             "api_mode": self.api_mode,
-            "command": self.acp_command,
-            "args": list(self.acp_args or []),
-            "credential_pool": getattr(self, "_credential_pool", None),
         }
         route = {
             "model": self.model,
@@ -5038,21 +4685,10 @@ class MarlowCLI:
                 runtime["provider"],
                 runtime["base_url"],
                 runtime["api_mode"],
-                runtime["command"],
-                tuple(runtime["args"]),
             ),
         }
 
-        service_tier = getattr(self, "service_tier", None)
-        if not service_tier:
-            route["request_overrides"] = None
-            return route
-
-        try:
-            overrides = resolve_fast_mode_overrides(route["model"])
-        except Exception:
-            overrides = None
-        route["request_overrides"] = overrides
+        route["request_overrides"] = None
         return route
 
     def _install_tool_callbacks(self) -> None:
@@ -5101,7 +4737,6 @@ class MarlowCLI:
         if self.agent is not None:
             return True
 
-        _prepare_deferred_agent_startup()
         self._install_tool_callbacks()
         self._ensure_tirith_security()
 
@@ -5208,9 +4843,6 @@ class MarlowCLI:
                 "base_url": self.base_url,
                 "provider": self.provider,
                 "api_mode": self.api_mode,
-                "command": self.acp_command,
-                "args": list(self.acp_args or []),
-                "credential_pool": getattr(self, "_credential_pool", None),
             }
             effective_model = model_override or self.model
             self.agent = AIAgent(
@@ -5219,9 +4851,6 @@ class MarlowCLI:
                 base_url=runtime.get("base_url"),
                 provider=runtime.get("provider"),
                 api_mode=runtime.get("api_mode"),
-                acp_command=runtime.get("command"),
-                acp_args=runtime.get("args"),
-                credential_pool=runtime.get("credential_pool"),
                 max_iterations=self.max_turns,
                 enabled_toolsets=self.enabled_toolsets,
                 disabled_toolsets=self.disabled_toolsets,
@@ -5230,22 +4859,14 @@ class MarlowCLI:
                 ephemeral_system_prompt=self.system_prompt if self.system_prompt else None,
                 prefill_messages=self.prefill_messages or None,
                 reasoning_config=self.reasoning_config,
-                service_tier=self.service_tier,
                 request_overrides=request_overrides,
-                providers_allowed=self._providers_only,
-                providers_ignored=self._providers_ignore,
-                providers_order=self._providers_order,
-                provider_sort=self._provider_sort,
-                provider_require_parameters=self._provider_require_params,
-                provider_data_collection=self._provider_data_collection,
-                openrouter_min_coding_score=self._openrouter_min_coding_score,
                 session_id=self.session_id,
                 platform="cli",
                 session_db=self._session_db,
                 clarify_callback=self._clarify_callback,
                 reasoning_callback=self._current_reasoning_callback(),
 
-                fallback_model=self._fallback_model,
+                fallback_providers=self._fallback_providers,
                 thinking_callback=self._on_thinking,
                 checkpoints_enabled=self.checkpoints_enabled,
                 checkpoint_max_snapshots=self.checkpoint_max_snapshots,
@@ -5350,10 +4971,7 @@ class MarlowCLI:
                 context_length=ctx_len,
             )
         
-        # Tool discovery is intentionally deferred on the Termux bare prompt
-        # path; availability warnings are shown once tools are initialized.
-        if os.environ.get("MARLOW_DEFER_AGENT_STARTUP") != "1":
-            self._show_tool_availability_warnings()
+        self._show_tool_availability_warnings()
 
         # Warn about low context lengths (common with local servers). Keep
         # this tied to the runtime guard so guidance cannot drift again.
@@ -5380,24 +4998,6 @@ class MarlowCLI:
                 self._console_print(
                     "[dim]   Fix: Set model.context_length in config.yaml, or increase your server's context setting[/]"
                 )
-
-        # Warn if the configured model is a Nous Marlow LLM (not agentic)
-        from marlow_cli.model_switch import is_nous_hermes_non_agentic
-
-        model_name = getattr(self, "model", "") or ""
-        if is_nous_hermes_non_agentic(model_name):
-            self._console_print()
-            self._console_print(
-                "[bold yellow]⚠  Nous Research Hermes 3 & 4 models are NOT agentic and are not "
-                "designed for use with Marlow Agent.[/]"
-            )
-            self._console_print(
-                "[dim]   They lack tool-calling capabilities required for agent workflows. "
-                "Consider using an agentic model (Claude, GPT, Gemini, DeepSeek, etc.).[/]"
-            )
-            self._console_print(
-                "[dim]   Switch with: /model sonnet  or  /model gpt5[/]"
-            )
 
         self._console_print()
 
@@ -5788,93 +5388,6 @@ class MarlowCLI:
             # Treat as a git hash
             return ref
 
-    def _handle_snapshot_command(self, command: str):
-        """Handle /snapshot — lightweight state snapshots for Marlow config/state.
-
-        Syntax:
-            /snapshot                  — list recent snapshots
-            /snapshot create [label]   — create a snapshot
-            /snapshot restore <id>     — restore state from snapshot
-            /snapshot prune [N]        — prune to N snapshots (default 20)
-        """
-        from marlow_cli.backup import (
-            create_quick_snapshot, list_quick_snapshots,
-            restore_quick_snapshot, prune_quick_snapshots,
-        )
-        from marlow_constants import display_marlow_home
-
-        parts = command.split()
-        subcmd = parts[1].lower() if len(parts) > 1 else "list"
-
-        if subcmd in {"list", "ls"}:
-            snaps = list_quick_snapshots()
-            if not snaps:
-                print("  No state snapshots yet.")
-                print("  Create one: /snapshot create [label]")
-                return
-            print(f"  State snapshots ({display_marlow_home()}/state-snapshots/):\n")
-            print(f"  {'#':>3}  {'ID':<35} {'Files':>5} {'Size':>10} {'Label'}")
-            print(f"  {'─'*3}  {'─'*35} {'─'*5} {'─'*10} {'─'*20}")
-            for i, s in enumerate(snaps, 1):
-                size = s.get("total_size", 0)
-                if size < 1024:
-                    size_str = f"{size} B"
-                elif size < 1024 * 1024:
-                    size_str = f"{size / 1024:.0f} KB"
-                else:
-                    size_str = f"{size / 1024 / 1024:.1f} MB"
-                label = s.get("label") or ""
-                print(f"  {i:3}  {s['id']:<35} {s.get('file_count', 0):>5} {size_str:>10} {label}")
-
-        elif subcmd == "create":
-            label = " ".join(parts[2:]) if len(parts) > 2 else None
-            snap_id = create_quick_snapshot(label=label)
-            if snap_id:
-                print(f"  Snapshot created: {snap_id}")
-            else:
-                print("  No state files found to snapshot.")
-
-        elif subcmd in {"restore", "rewind"}:
-            if len(parts) < 3:
-                print("  Usage: /snapshot restore <snapshot-id>")
-                # Show hint with most recent snapshot
-                snaps = list_quick_snapshots(limit=1)
-                if snaps:
-                    print(f"  Most recent: {snaps[0]['id']}")
-                return
-            snap_id = parts[2]
-            # Allow restore by number (1-indexed)
-            try:
-                idx = int(snap_id)
-                snaps = list_quick_snapshots()
-                if 1 <= idx <= len(snaps):
-                    snap_id = snaps[idx - 1]["id"]
-                else:
-                    print(f"  Invalid snapshot number. Use 1-{len(snaps)}.")
-                    return
-            except ValueError:
-                pass
-            if restore_quick_snapshot(snap_id):
-                print(f"  Restored state from: {snap_id}")
-                print("  Restart recommended for state.db changes to take effect.")
-            else:
-                print(f"  Snapshot not found: {snap_id}")
-
-        elif subcmd == "prune":
-            keep = 20
-            if len(parts) > 2:
-                try:
-                    keep = int(parts[2])
-                except ValueError:
-                    print("  Usage: /snapshot prune [keep-count]")
-                    return
-            deleted = prune_quick_snapshots(keep=keep)
-            print(f"  Pruned {deleted} old snapshot(s) (keeping {keep}).")
-
-        else:
-            print(f"  Unknown subcommand: {subcmd}")
-            print("  Usage: /snapshot [list|create [label]|restore <id>|prune [N]]")
-
     def _handle_stop_command(self):
         """Handle /stop — kill all running background processes.
 
@@ -5937,17 +5450,8 @@ class MarlowCLI:
         """Handle /paste — explicitly check clipboard for an image.
 
         This is the reliable fallback for terminals where BracketedPaste
-        doesn't fire for image-only clipboard content (e.g., VSCode terminal,
-        Windows Terminal with WSL2).
+        doesn't fire for image-only clipboard content (e.g., VSCode terminal).
         """
-        if _is_termux_environment():
-            _cprint(
-                f"  {_DIM}Clipboard image paste is not available on Termux — "
-                f"use /image <path> or paste a local image path like "
-                f"{_termux_example_image_path()}{_RST}"
-            )
-            return
-
         from marlow_cli.clipboard import has_clipboard_image
         if has_clipboard_image():
             if self._try_attach_clipboard_image():
@@ -6048,8 +5552,7 @@ class MarlowCLI:
         """Handle /image <path> — attach a local image file for the next prompt."""
         raw_args = (cmd_original.split(None, 1)[1].strip() if " " in cmd_original else "")
         if not raw_args:
-            hint = _termux_example_image_path() if _is_termux_environment() else "/path/to/image.png"
-            _cprint(f"  {_DIM}Usage: /image <path>  e.g. /image {hint}{_RST}")
+            _cprint(f"  {_DIM}Usage: /image <path>  e.g. /image /path/to/image.png{_RST}")
             return
 
         path_token, _remainder = _split_path_input(raw_args)
@@ -6065,8 +5568,6 @@ class MarlowCLI:
         _cprint(f"  📎 Attached image: {image_path.name}")
         if _remainder:
             _cprint(f"  {_DIM}Now type your prompt (or use --image in single-query mode): {_remainder}{_RST}")
-        elif _is_termux_environment():
-            _cprint(f"  {_DIM}Tip: type your next message, or run marlow chat -q --image {_termux_example_image_path(image_path.name)} \"What do you see?\"{_RST}")
 
     def _preprocess_images_with_vision(self, text: str, images: list, *, announce: bool = True) -> str:
         """Analyze attached images via the vision tool and return enriched text.
@@ -6158,13 +5659,9 @@ class MarlowCLI:
     
     def _show_status(self):
         """Show compact startup status line."""
-        # Avoid pulling the full tool registry into the bare Termux prompt path.
-        if os.environ.get("MARLOW_DEFER_AGENT_STARTUP") == "1":
-            tool_status = "tools deferred"
-        else:
-            tools = get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
-            tool_count = len(tools) if tools else 0
-            tool_status = f"{tool_count} tools"
+        tools = get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
+        tool_count = len(tools) if tools else 0
+        tool_status = f"{tool_count} tools"
 
         # Format model name (shorten if needed)
         model_short = self.model.split("/")[-1] if "/" in self.model else self.model
@@ -6253,18 +5750,7 @@ class MarlowCLI:
         ])
         self._console_print("\n".join(lines), highlight=False, markup=False)
     
-    def _fast_command_available(self) -> bool:
-        try:
-            from marlow_cli.models import model_supports_fast_mode
-        except Exception:
-            return False
-        agent = getattr(self, "agent", None)
-        model = getattr(agent, "model", None) or getattr(self, "model", None)
-        return model_supports_fast_mode(model)
-
     def _command_available(self, slash_command: str) -> bool:
-        if slash_command == "/fast":
-            return self._fast_command_available()
         return True
 
     def show_help(self):
@@ -6299,24 +5785,10 @@ class MarlowCLI:
                     f"    [bold {_accent_hex()}]{cmd:<22}[/] [dim]-[/] {_escape(info['description'])}"
                 )
 
-        _bundles_now = get_skill_bundles()
-        if _bundles_now:
-            _cprint(f"\n  ▣ {_BOLD}Skill Bundles{_RST} ({len(_bundles_now)} installed):")
-            for cmd, info in sorted(_bundles_now.items()):
-                skill_count = len(info.get("skills", []))
-                desc = info.get("description") or f"Load {skill_count} skills"
-                ChatConsole().print(
-                    f"    [bold {_accent_hex()}]{cmd:<22}[/] [dim]-[/] "
-                    f"{_escape(desc)} [dim]({skill_count} skills)[/]"
-                )
-
         _cprint(f"\n  {_DIM}Tip: Just type your message to chat with Marlow!{_RST}")
         _cprint(f"  {_DIM}Multi-line: Alt+Enter for a new line{_RST}")
         _cprint(f"  {_DIM}Draft editor: Ctrl+G (Alt+G in VSCode/Cursor){_RST}")
-        if _is_termux_environment():
-            _cprint(f"  {_DIM}Attach image: /image {_termux_example_image_path()} or start your prompt with a local image path{_RST}\n")
-        else:
-            _cprint(f"  {_DIM}Paste image: Alt+V (or /paste){_RST}\n")
+        _cprint(f"  {_DIM}Paste image: Alt+V (or /paste){_RST}\n")
     
     def show_tools(self):
         """Display available tools with kawaii ASCII art."""
@@ -6498,11 +5970,8 @@ class MarlowCLI:
             config_path = project_config_path
         config_status = "(loaded)" if config_path.exists() else "(not found)"
         
-        # ``self.api_key`` may be a callable (Azure Foundry Entra ID bearer
-        # provider). Never invoke it; just identify the auth surface.
-        from agent.azure_identity_adapter import is_token_provider
-        if is_token_provider(self.api_key):
-            api_key_display = "Microsoft Entra ID"
+        if callable(self.api_key):
+            api_key_display = "dynamic token provider"
         elif isinstance(self.api_key, str) and len(self.api_key) > 12:
             api_key_display = f"{self.api_key[:8]}...{self.api_key[-4:]}"
         else:
@@ -7573,7 +7042,7 @@ class MarlowCLI:
             try:
                 run_in_terminal(_ask)
             except Exception:
-                # WSL / Warp / certain terminal emulators silently drop the
+                # Some terminal emulators silently drop the
                 # scheduled coroutine.  Fall back to a direct input() so the
                 # user's keystrokes don't leak into the agent buffer.
                 try:
@@ -7604,24 +7073,8 @@ class MarlowCLI:
         choices visible and lets the normal Enter key binding submit the typed
         or highlighted choice.
 
-        **Platform note (Windows dead-lock — issue #30768):**
-        The queue-based modal relies on prompt_toolkit key bindings receiving
-        keyboard events and calling ``_submit_slash_confirm_response``.  On
-        Windows (PowerShell / Windows Terminal) the prompt_toolkit input
-        channel can become unresponsive when the modal is entered from the
-        ``process_loop`` daemon thread, causing a dead-lock: the user sees the
-        confirmation panel but keystrokes never reach the key bindings and the
-        ``response_queue.get()`` blocks until the 120-second timeout expires.
-
-        To avoid this, we fall back to ``_prompt_text_input`` (a simple
-        ``input()``-based prompt) when any of these conditions hold:
-
-        * ``sys.platform == "win32"`` — native Windows console (ConPTY /
-          win32_input) does not support the modal reliably.
-        * ``self._app`` is not set — unit tests / non-interactive contexts.
-
-        On non-Windows platforms the modal itself is still safe from the
-        ``process_loop`` daemon thread as long as the main-thread event loop
+        The modal is safe from the ``process_loop`` daemon thread as long as
+        the main-thread event loop
         owns the prompt_toolkit buffer mutations.  When we are off the main
         thread, schedule the modal snapshot / restore work on ``self._app.loop``
         via ``call_soon_threadsafe`` and keep the queue-based response path.
@@ -7635,14 +7088,6 @@ class MarlowCLI:
         # If prompt_toolkit is not running (unit tests / non-interactive calls),
         # keep the simple stdin fallback.
         if not getattr(self, "_app", None):
-            return self._prompt_text_input("Choice [1/2/3]: ")
-
-        # On Windows the prompt_toolkit input channel can deadlock when the
-        # modal is entered from the process_loop daemon thread — keystrokes
-        # never reach the key bindings, so response_queue.get() blocks for
-        # the full timeout (issue #30768).  Fall back to the simpler
-        # stdin-based prompt which works reliably on Windows.
-        if sys.platform == "win32":
             return self._prompt_text_input("Choice [1/2/3]: ")
 
         try:
@@ -7929,10 +7374,7 @@ class MarlowCLI:
         _cprint(f"  ✓ Model switched: {result.new_model}")
         _cprint(f"    Provider: {provider_label}")
 
-        # Context: always resolve via the provider-aware chain so Codex OAuth,
-        # Copilot, and Nous-enforced caps win over the raw models.dev entry
-        # (e.g. gpt-5.5 is 1.05M on openai but 272K on Codex OAuth).
-        mi = result.model_info
+        # Resolve context through the retained Codex/custom endpoint path.
         try:
             from marlow_cli.model_switch import resolve_display_context_length
             ctx = resolve_display_context_length(
@@ -7940,26 +7382,12 @@ class MarlowCLI:
                 result.target_provider,
                 base_url=result.base_url or self.base_url or "",
                 api_key=result.api_key or self.api_key or "",
-                model_info=mi,
                 config_context_length=getattr(self.agent, "_config_context_length", None) if self.agent else None,
             )
             if ctx:
                 _cprint(f"    Context: {ctx:,} tokens")
         except Exception:
             pass
-        if mi:
-            if mi.max_output:
-                _cprint(f"    Max output: {mi.max_output:,} tokens")
-            if mi.has_cost_data():
-                _cprint(f"    Cost: {mi.format_cost()}")
-            _cprint(f"    Capabilities: {mi.format_capabilities()}")
-
-        cache_enabled = (
-            (base_url_host_matches(result.base_url or "", "openrouter.ai") and "claude" in result.new_model.lower())
-            or result.api_mode == "anthropic_messages"
-        )
-        if cache_enabled:
-            _cprint("    Prompt caching: enabled")
         if result.warning_message:
             _cprint(f"    ⚠ {result.warning_message}")
         if persist_global:
@@ -8064,8 +7492,7 @@ class MarlowCLI:
             except Exception:
                 pass
 
-        # Single inventory context — replaces the inline config-slice the
-        # dashboard / TUI used to duplicate. Overlay live session state
+        # Single inventory context for the TUI. Overlay live session state
         # via with_overrides (truthy-only) so empty self.* attrs don't
         # clobber disk config.
         from marlow_cli.inventory import build_models_payload, load_picker_context
@@ -8176,36 +7603,17 @@ class MarlowCLI:
         _cprint(f"  ✓ Model switched: {result.new_model}")
         _cprint(f"    Provider: {provider_label}")
 
-        # Context: always resolve via the provider-aware chain so Codex OAuth,
-        # Copilot, and Nous-enforced caps win over the raw models.dev entry
-        # (e.g. gpt-5.5 is 1.05M on openai but 272K on Codex OAuth).
-        mi = result.model_info
+        # Resolve context through the retained Codex/custom endpoint path.
         from marlow_cli.model_switch import resolve_display_context_length
         ctx = resolve_display_context_length(
             result.new_model,
             result.target_provider,
             base_url=result.base_url or self.base_url or "",
             api_key=result.api_key or self.api_key or "",
-            model_info=mi,
             config_context_length=getattr(self.agent, "_config_context_length", None) if self.agent else None,
         )
         if ctx:
             _cprint(f"    Context: {ctx:,} tokens")
-        if mi:
-            if mi.max_output:
-                _cprint(f"    Max output: {mi.max_output:,} tokens")
-            if mi.has_cost_data():
-                _cprint(f"    Cost: {mi.format_cost()}")
-            _cprint(f"    Capabilities: {mi.format_capabilities()}")
-
-        # Cache notice
-        cache_enabled = (
-            (base_url_host_matches(result.base_url or "", "openrouter.ai") and "claude" in result.new_model.lower())
-            or result.api_mode == "anthropic_messages"
-        )
-        if cache_enabled:
-            _cprint("    Prompt caching: enabled")
-
         # Warning from validation
         if result.warning_message:
             _cprint(f"    ⚠ {result.warning_message}")
@@ -8317,52 +7725,6 @@ class MarlowCLI:
             return "\n".join(p for p in parts if p)
         return str(value)
 
-    def _handle_gquota_command(self, cmd_original: str) -> None:
-        """Show Google Gemini Code Assist quota usage for the current OAuth account."""
-        try:
-            from agent.google_oauth import get_valid_access_token, GoogleOAuthError, load_credentials
-            from agent.google_code_assist import retrieve_user_quota, CodeAssistError
-        except ImportError as exc:
-            self._console_print(f"  [red]Gemini modules unavailable: {exc}[/]")
-            return
-
-        try:
-            access_token = get_valid_access_token()
-        except GoogleOAuthError as exc:
-            self._console_print(f"  [yellow]{exc}[/]")
-            self._console_print("  Run [bold]/model[/] and pick 'Google Gemini (OAuth)' to sign in.")
-            return
-
-        creds = load_credentials()
-        project_id = (creds.project_id if creds else "") or ""
-
-        try:
-            buckets = retrieve_user_quota(access_token, project_id=project_id)
-        except CodeAssistError as exc:
-            self._console_print(f"  [red]Quota lookup failed:[/] {exc}")
-            return
-
-        if not buckets:
-            self._console_print("  [dim]No quota buckets reported (account may be on legacy/unmetered tier).[/]")
-            return
-
-        # Sort for stable display, group by model
-        buckets.sort(key=lambda b: (b.model_id, b.token_type))
-        self._console_print()
-        self._console_print(f"  [bold]Gemini Code Assist quota[/]  (project: {project_id or '(auto / free-tier)'})")
-        self._console_print()
-        for b in buckets:
-            pct = max(0.0, min(1.0, b.remaining_fraction))
-            width = 20
-            filled = int(round(pct * width))
-            bar = "▓" * filled + "░" * (width - filled)
-            pct_str = f"{int(pct * 100):3d}%"
-            header = b.model_id
-            if b.token_type:
-                header += f" [{b.token_type}]"
-            self._console_print(f"    {header:40s}  {bar}  {pct_str}")
-        self._console_print()
-
     def _handle_personality_command(self, cmd: str):
         """Handle the /personality command to set predefined personalities."""
         parts = cmd.split(maxsplit=1)
@@ -8416,23 +7778,11 @@ class MarlowCLI:
         def _cron_api(**kwargs):
             return json.loads(cronjob_tool(**kwargs))
 
-        def _normalize_skills(values):
-            normalized = []
-            for value in values:
-                text = str(value or "").strip()
-                if text and text not in normalized:
-                    normalized.append(text)
-            return normalized
-
         def _parse_flags(tokens):
             opts = {
                 "name": None,
                 "deliver": None,
                 "repeat": None,
-                "skills": [],
-                "add_skills": [],
-                "remove_skills": [],
-                "clear_skills": False,
                 "all": False,
                 "prompt": None,
                 "schedule": None,
@@ -8454,18 +7804,6 @@ class MarlowCLI:
                         print("(._.) --repeat must be an integer")
                         return None
                     i += 2
-                elif token == "--skill" and i + 1 < len(tokens):
-                    opts["skills"].append(tokens[i + 1])
-                    i += 2
-                elif token == "--add-skill" and i + 1 < len(tokens):
-                    opts["add_skills"].append(tokens[i + 1])
-                    i += 2
-                elif token == "--remove-skill" and i + 1 < len(tokens):
-                    opts["remove_skills"].append(tokens[i + 1])
-                    i += 2
-                elif token == "--clear-skills":
-                    opts["clear_skills"] = True
-                    i += 1
                 elif token == "--all":
                     opts["all"] = True
                     i += 1
@@ -8490,11 +7828,8 @@ class MarlowCLI:
             print()
             print("  Commands:")
             print("    /cron list")
-            print('    /cron add "every 2h" "Check server status" [--skill blogwatcher]')
+            print('    /cron add "every 2h" "Check server status"')
             print('    /cron edit <job_id> --schedule "every 4h" --prompt "New task"')
-            print("    /cron edit <job_id> --skill blogwatcher --skill maps")
-            print("    /cron edit <job_id> --remove-skill blogwatcher")
-            print("    /cron edit <job_id> --clear-skills")
             print("    /cron pause <job_id>")
             print("    /cron resume <job_id>")
             print("    /cron run <job_id>")
@@ -8508,8 +7843,6 @@ class MarlowCLI:
                 for job in jobs:
                     repeat_str = job.get("repeat", "?")
                     print(f"    {job['job_id'][:12]:<12} | {job['schedule']:<15} | {repeat_str:<8}")
-                    if job.get("skills"):
-                        print(f"      Skills: {', '.join(job['skills'])}")
                     print(f"      {job.get('prompt_preview', '')}")
                     if job.get("next_run_at"):
                         print(f"      Next: {job['next_run_at']}")
@@ -8540,8 +7873,6 @@ class MarlowCLI:
                 print(f"  State: {job.get('state', '?')}")
                 print(f"  Schedule: {job['schedule']} ({job.get('repeat', '?')})")
                 print(f"  Next run: {job.get('next_run_at', 'N/A')}")
-                if job.get("skills"):
-                    print(f"  Skills: {', '.join(job['skills'])}")
                 print(f"  Prompt: {job.get('prompt_preview', '')}")
                 if job.get("last_run_at"):
                     print(f"  Last run: {job['last_run_at']} ({job.get('last_status', '?')})")
@@ -8555,9 +7886,8 @@ class MarlowCLI:
                 return
             schedule = opts["schedule"] or positionals[0]
             prompt = opts["prompt"] or " ".join(positionals[1:])
-            skills = _normalize_skills(opts["skills"])
-            if not prompt and not skills:
-                print("(._.) Please provide a prompt or at least one skill")
+            if not prompt:
+                print("(._.) Please provide a prompt")
                 return
             result = _cron_api(
                 action="create",
@@ -8566,13 +7896,10 @@ class MarlowCLI:
                 name=opts["name"],
                 deliver=opts["deliver"],
                 repeat=opts["repeat"],
-                skills=skills or None,
             )
             if result.get("success"):
                 print(f"(^_^)b Created job: {result['job_id']}")
                 print(f"  Schedule: {result['schedule']}")
-                if result.get("skills"):
-                    print(f"  Skills: {', '.join(result['skills'])}")
                 print(f"  Next run: {result['next_run_at']}")
             else:
                 print(f"(x_x) Failed to create job: {result.get('error')}")
@@ -8581,28 +7908,13 @@ class MarlowCLI:
         if subcommand == "edit":
             positionals = opts["positionals"]
             if not positionals:
-                print("(._.) Usage: /cron edit <job_id> [--schedule ...] [--prompt ...] [--skill ...]")
+                print("(._.) Usage: /cron edit <job_id> [--schedule ...] [--prompt ...]")
                 return
             job_id = positionals[0]
             existing = get_job(job_id)
             if not existing:
                 print(f"(._.) Job not found: {job_id}")
                 return
-
-            final_skills = None
-            replacement_skills = _normalize_skills(opts["skills"])
-            add_skills = _normalize_skills(opts["add_skills"])
-            remove_skills = set(_normalize_skills(opts["remove_skills"]))
-            existing_skills = list(existing.get("skills") or ([] if not existing.get("skill") else [existing.get("skill")]))
-            if opts["clear_skills"]:
-                final_skills = []
-            elif replacement_skills:
-                final_skills = replacement_skills
-            elif add_skills or remove_skills:
-                final_skills = [skill for skill in existing_skills if skill not in remove_skills]
-                for skill in add_skills:
-                    if skill not in final_skills:
-                        final_skills.append(skill)
 
             result = _cron_api(
                 action="update",
@@ -8612,16 +7924,11 @@ class MarlowCLI:
                 name=opts["name"],
                 deliver=opts["deliver"],
                 repeat=opts["repeat"],
-                skills=final_skills,
             )
             if result.get("success"):
                 job = result["job"]
                 print(f"(^_^)b Updated job: {job['job_id']}")
                 print(f"  Schedule: {job['schedule']}")
-                if job.get("skills"):
-                    print(f"  Skills: {', '.join(job['skills'])}")
-                else:
-                    print("  Skills: none")
             else:
                 print(f"(x_x) Failed to update job: {result.get('error')}")
             return
@@ -8653,42 +7960,6 @@ class MarlowCLI:
         print(f"(._.) Unknown cron command: {subcommand}")
         print("  Available: list, add, edit, pause, resume, run, remove")
 
-    def _handle_suggestions_command(self, cmd: str):
-        """Review, accept, or dismiss suggested automations."""
-        import shlex
-
-        try:
-            tokens = shlex.split(cmd)[1:] if cmd else []
-        except ValueError:
-            tokens = (cmd or "").split()[1:]
-        try:
-            from marlow_cli.suggestions_cmd import handle_suggestions_command
-
-            output = handle_suggestions_command(" ".join(tokens))
-        except Exception as exc:
-            output = f"Suggestions command failed: {exc}"
-        self._console_print(output)
-
-    def _handle_blueprint_command(self, cmd: str):
-        """List or instantiate a parameterized automation blueprint."""
-        import shlex
-
-        try:
-            tokens = shlex.split(cmd)[1:] if cmd else []
-        except ValueError:
-            tokens = (cmd or "").split()[1:]
-        args = " ".join(shlex.quote(token) for token in tokens)
-        try:
-            from marlow_cli.blueprint_cmd import handle_blueprint_command
-
-            result = handle_blueprint_command(args)
-        except Exception as exc:
-            self._console_print(f"Cron blueprint command failed: {exc}")
-            return
-        self._console_print(result.text)
-        if result.agent_seed:
-            self._pending_agent_seed = result.agent_seed
-
     def _handle_curator_command(self, cmd: str):
         """Handle /curator slash command.
 
@@ -8712,9 +7983,15 @@ class MarlowCLI:
             print(f"(._.) curator: {exc}")
 
     def _handle_skills_command(self, cmd: str):
-        """Handle /skills slash command — delegates to marlow_cli.skills_hub."""
-        from marlow_cli.skills_hub import handle_skills_slash
-        handle_skills_slash(cmd, ChatConsole())
+        """List locally installed skill commands."""
+        del cmd
+        skills = _ensure_skill_commands()
+        if not skills:
+            self._console_print("No local skills installed.")
+            return
+        self._console_print(f"Local skills ({len(skills)}):")
+        for command, info in sorted(skills.items()):
+            self._console_print(f"  {command:<24} {info.get('description', '')}")
 
     def _handle_learn_command(self, cmd: str):
         """Queue a standards-guided skill-authoring turn."""
@@ -8750,7 +8027,8 @@ class MarlowCLI:
                 Platform.TELEGRAM: ("Telegram", "TELEGRAM_BOT_TOKEN"),
                 Platform.DISCORD: ("Discord", "DISCORD_BOT_TOKEN"),
                 Platform.SLACK: ("Slack", "SLACK_BOT_TOKEN"),
-                Platform.WHATSAPP: ("WhatsApp", "WHATSAPP_ENABLED"),
+                Platform.EMAIL: ("Email", "EMAIL_ADDRESS"),
+                Platform.FEISHU: ("Feishu", "FEISHU_APP_ID"),
             }
             
             for platform, (name, env_var) in platform_status.items():
@@ -8994,9 +8272,6 @@ class MarlowCLI:
             self._handle_model_switch(cmd_original)
         elif canonical == "codex-runtime":
             self._handle_codex_runtime(cmd_original)
-        elif canonical == "gquota":
-            self._handle_gquota_command(cmd_original)
-
         elif canonical == "personality":
             # Use original case (handler lowercases the personality name itself)
             self._handle_personality_command(cmd_original)
@@ -9035,10 +8310,6 @@ class MarlowCLI:
             self.save_conversation()
         elif canonical == "cron":
             self._handle_cron_command(cmd_original)
-        elif canonical == "suggestions":
-            self._handle_suggestions_command(cmd_original)
-        elif canonical == "blueprint":
-            self._handle_blueprint_command(cmd_original)
         elif canonical == "curator":
             self._handle_curator_command(cmd_original)
         elif canonical == "skills":
@@ -9062,8 +8333,6 @@ class MarlowCLI:
             self._toggle_yolo()
         elif canonical == "reasoning":
             self._handle_reasoning_command(cmd_original)
-        elif canonical == "fast":
-            self._handle_fast_command(cmd_original)
         elif canonical == "compress":
             self._manual_compress(cmd_original)
         elif canonical == "usage":
@@ -9093,8 +8362,6 @@ class MarlowCLI:
         elif canonical == "reload-skills":
             with self._busy_command(self._slow_command_status(cmd_original)):
                 self._reload_skills()
-        elif canonical == "bundles":
-            self._handle_bundles_command(cmd_original)
         elif canonical == "browser":
             self._handle_browser_command(cmd_original)
         elif canonical == "plugins":
@@ -9121,8 +8388,6 @@ class MarlowCLI:
                 print(f"Plugin system error: {e}")
         elif canonical == "rollback":
             self._handle_rollback_command(cmd_original)
-        elif canonical == "snapshot":
-            self._handle_snapshot_command(cmd_original)
         elif canonical == "stop":
             self._handle_stop_command()
         elif canonical == "agents":
@@ -9195,7 +8460,6 @@ class MarlowCLI:
             # Check for user-defined quick commands (bypass agent loop, no LLM call)
             base_cmd = cmd_lower.split()[0]
             skill_commands = _ensure_skill_commands()
-            skill_bundles = get_skill_bundles()
             quick_commands = self.config.get("quick_commands", {})
             if base_cmd.lstrip("/") in quick_commands:
                 qcmd = quick_commands[base_cmd.lstrip("/")]
@@ -9249,36 +8513,7 @@ class MarlowCLI:
                             _cprint(str(result))
                     except Exception as e:
                         _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
-            # Skill bundles take precedence over individual skills — /<bundle>
-            # loads multiple skills at once. Rescans cheaply when files change.
-            elif base_cmd in skill_bundles:
-                user_instruction = cmd_original[len(base_cmd):].strip()
-                bundle_result = build_bundle_invocation_message(
-                    base_cmd, user_instruction, task_id=self.session_id
-                )
-                if bundle_result:
-                    msg, loaded_names, missing = bundle_result
-                    bundle_info = skill_bundles[base_cmd]
-                    print(
-                        f"\n⚡ Loading bundle: {bundle_info['name']} "
-                        f"({len(loaded_names)} skills)"
-                    )
-                    if missing:
-                        ChatConsole().print(
-                            f"[yellow]Skipped missing skills: {', '.join(missing)}[/]"
-                        )
-                    if hasattr(self, '_pending_input'):
-                        self._pending_input.put(
-                            _PendingCLIInput(
-                                msg,
-                                raw_user_message=user_instruction or None,
-                            )
-                        )
-                else:
-                    ChatConsole().print(
-                        f"[bold red]Failed to load bundle for {base_cmd}[/]"
-                    )
-            # Check for skill slash commands (/gif-search, /axolotl, etc.)
+            # Check for skill slash commands (/skill-name, etc.)
             elif base_cmd in skill_commands:
                 user_instruction = cmd_original[len(base_cmd):].strip()
                 msg = build_skill_invocation_message(
@@ -9302,7 +8537,7 @@ class MarlowCLI:
                 # that execution-time resolution agrees with tab-completion.
                 from marlow_cli.commands import COMMANDS
                 typed_base = cmd_lower.split()[0]
-                all_known = set(COMMANDS) | set(skill_commands) | set(skill_bundles)
+                all_known = set(COMMANDS) | set(skill_commands)
                 matches = [c for c in all_known if c.startswith(typed_base)]
                 if len(matches) > 1:
                     # Prefer an exact match (typed the full command name)
@@ -9383,8 +8618,6 @@ class MarlowCLI:
                     base_url=turn_route["runtime"].get("base_url"),
                     provider=turn_route["runtime"].get("provider"),
                     api_mode=turn_route["runtime"].get("api_mode"),
-                    acp_command=turn_route["runtime"].get("command"),
-                    acp_args=turn_route["runtime"].get("args"),
                     max_iterations=self.max_turns,
                     enabled_toolsets=self.enabled_toolsets,
                     quiet_mode=True,
@@ -9393,16 +8626,8 @@ class MarlowCLI:
                     platform="cli",
                     session_db=self._session_db,
                     reasoning_config=self.reasoning_config,
-                    service_tier=self.service_tier,
                     request_overrides=turn_route.get("request_overrides"),
-                    providers_allowed=self._providers_only,
-                    providers_ignored=self._providers_ignore,
-                    providers_order=self._providers_order,
-                    provider_sort=self._provider_sort,
-                    provider_require_parameters=self._provider_require_params,
-                    provider_data_collection=self._provider_data_collection,
-                    openrouter_min_coding_score=self._openrouter_min_coding_score,
-                    fallback_model=self._fallback_model,
+                    fallback_providers=self._fallback_providers,
                 )
                 # Silence raw spinner; route thinking through TUI widget when no foreground agent is active.
                 bg_agent._print_fn = lambda *_a, **_kw: None
@@ -9504,44 +8729,6 @@ class MarlowCLI:
         Returns True if a launch command was executed (doesn't guarantee success).
         """
         return try_launch_chrome_debug(port, system)
-
-    def _handle_bundles_command(self, cmd: str) -> None:
-        """In-session ``/bundles`` — show installed skill bundles.
-
-        Mirrors ``marlow bundles list`` but renders inside the running
-        CLI so users can discover what's available without dropping out
-        of their session. Bundles are loaded via ``/<bundle-name>``.
-        """
-        try:
-            from agent.skill_bundles import list_bundles, _bundles_dir
-        except Exception as exc:
-            _cprint(f"\033[1;31mBundle subsystem unavailable: {exc}{_RST}")
-            return
-
-        bundles = list_bundles()
-        if not bundles:
-            _cprint("  No skill bundles installed.")
-            _cprint(
-                f"  {_DIM}Create one with: marlow bundles create "
-                f"<name> --skill <s1> --skill <s2>{_RST}"
-            )
-            _cprint(f"  {_DIM}Directory: {_bundles_dir()}{_RST}")
-            return
-
-        _cprint(f"\n  ▣ {_BOLD}Skill Bundles{_RST} ({len(bundles)} installed):")
-        for info in bundles:
-            skill_count = len(info.get("skills", []))
-            desc = info.get("description") or f"Load {skill_count} skills"
-            ChatConsole().print(
-                f"    [bold {_accent_hex()}]/{info['slug']:<20}[/] "
-                f"[dim]-[/] {_escape(desc)} [dim]({skill_count} skills)[/]"
-            )
-            for s in info.get("skills", []):
-                ChatConsole().print(f"        [dim]· {_escape(s)}[/]")
-        _cprint(
-            f"\n  {_DIM}Invoke a bundle with /<slug>. "
-            f"Manage with `marlow bundles`.{_RST}"
-        )
 
     def _handle_browser_command(self, cmd: str):
         """Handle /browser connect|disconnect|status — manage live Chromium-family CDP connection."""
@@ -9679,14 +8866,14 @@ class MarlowCLI:
                     pass
                 print()
                 print("🌐 Browser disconnected from live Chromium-family browser")
-                print("   Browser tools reverted to default mode (local headless or cloud provider)")
+                print("   Browser tools reverted to the local headless browser")
                 print()
 
                 if hasattr(self, '_pending_input'):
                     self._pending_input.put(
                         _PendingCLIInput(
                             "[System note: The user has disconnected the browser tools from their live Chromium-family browser. "
-                            "Browser tools are back to default mode (headless local browser or cloud provider).]",
+                            "Browser tools are back to the local headless browser.]",
                             raw_user_message=None,
                         )
                     )
@@ -9716,29 +8903,20 @@ class MarlowCLI:
                 except (OSError, Exception):
                     print("   Status: ⚠ not reachable (browser may not be running)")
             else:
+                # Show engine info for local mode.
                 try:
-                    from tools.browser_tool import _get_cloud_provider
-                    provider = _get_cloud_provider()
+                    from tools.browser_tool import _get_browser_engine
+                    engine = _get_browser_engine()
                 except Exception:
-                    provider = None
-
-                if provider is not None:
-                    print(f"🌐 Browser: {provider.provider_name()} (cloud)")
+                    engine = "auto"
+                if engine == "lightpanda":
+                    print("🌐 Browser: local Lightpanda (agent-browser --engine lightpanda)")
+                    print("   ⚡ Lightpanda: faster navigation, no screenshot support")
+                    print("   Automatic Chromium fallback for screenshots and failed commands")
+                elif engine == "chrome":
+                    print("🌐 Browser: local headless Chromium (agent-browser --engine chrome)")
                 else:
-                    # Show engine info for local mode
-                    try:
-                        from tools.browser_tool import _get_browser_engine
-                        engine = _get_browser_engine()
-                    except Exception:
-                        engine = "auto"
-                    if engine == "lightpanda":
-                        print("🌐 Browser: local Lightpanda (agent-browser --engine lightpanda)")
-                        print("   ⚡ Lightpanda: faster navigation, no screenshot support")
-                        print("   Automatic Chromium fallback for screenshots and failed commands")
-                    elif engine == "chrome":
-                        print("🌐 Browser: local headless Chromium (agent-browser --engine chrome)")
-                    else:
-                        print("🌐 Browser: local headless Chromium (agent-browser)")
+                    print("🌐 Browser: local headless Chromium (agent-browser)")
             print()
             print("   /browser connect      — connect to your live Chromium-family browser")
             print("   /browser disconnect   — revert to default")
@@ -10369,49 +9547,6 @@ class MarlowCLI:
         else:
             _cprint(f"  {_ACCENT}✓ Busy input mode set to '{arg}' (session only){_RST}")
 
-    def _handle_fast_command(self, cmd: str):
-        """Handle /fast — toggle fast mode (OpenAI Priority Processing / Anthropic Fast Mode)."""
-        if not self._fast_command_available():
-            _cprint("  (._.) /fast is only available for models that support fast mode (OpenAI Priority Processing or Anthropic Fast Mode).")
-            return
-
-        # Determine the branding for the current model
-        try:
-            from marlow_cli.models import _is_anthropic_fast_model
-            agent = getattr(self, "agent", None)
-            model = getattr(agent, "model", None) or getattr(self, "model", None)
-            feature_name = "Anthropic Fast Mode" if _is_anthropic_fast_model(model) else "Priority Processing"
-        except Exception:
-            feature_name = "Fast mode"
-
-        parts = cmd.strip().split(maxsplit=1)
-        if len(parts) < 2 or parts[1].strip().lower() == "status":
-            status = "fast" if self.service_tier == "priority" else "normal"
-            _cprint(f"  {_ACCENT}{feature_name}: {status}{_RST}")
-            _cprint(f"  {_DIM}Usage: /fast [normal|fast|status]{_RST}")
-            return
-
-        arg = parts[1].strip().lower()
-
-        if arg in {"fast", "on"}:
-            self.service_tier = "priority"
-            saved_value = "fast"
-            label = "FAST"
-        elif arg in {"normal", "off"}:
-            self.service_tier = None
-            saved_value = "normal"
-            label = "NORMAL"
-        else:
-            _cprint(f"  {_DIM}(._.) Unknown argument: {arg}{_RST}")
-            _cprint(f"  {_DIM}Usage: /fast [normal|fast|status]{_RST}")
-            return
-
-        self.agent = None  # Force agent re-init with new service-tier config
-        if save_config_value("agent.service_tier", saved_value):
-            _cprint(f"  {_ACCENT}✓ {feature_name} set to {label} (saved to config){_RST}")
-        else:
-            _cprint(f"  {_ACCENT}✓ {feature_name} set to {label} (session only){_RST}")
-
     def _on_reasoning(self, reasoning_text: str):
         """Callback for intermediate reasoning display during tool-call loops."""
         if not reasoning_text:
@@ -10621,9 +9756,7 @@ class MarlowCLI:
         # Store the relaunch args so run() can exec them from the main thread
         # after prompt_toolkit exits and restores terminal modes.  Calling
         # relaunch() directly here (from the process_loop daemon thread) would
-        # skip terminal cleanup on POSIX (execvp replaces the process mid-TUI)
-        # and only exit the worker thread on Windows (subprocess.run +
-        # sys.exit inside a non-main thread does not exit the process).
+        # skip terminal cleanup because execvp replaces the process mid-TUI.
         self._pending_relaunch = ["update"]
         return True
 
@@ -10741,7 +9874,7 @@ class MarlowCLI:
             # tools/run_agent/etc. in quiet mode. Setting logger.setLevel
             # above the file handler level filters records before they
             # reach handlers, so agent.log / errors.log lose visibility
-            # into stream-retry events, credential rotations, etc.
+            # into stream-retry eventss, etc.
             # Console quietness is enforced by marlow_logging not
             # installing a console StreamHandler in non-verbose mode.
 
@@ -10838,9 +9971,6 @@ class MarlowCLI:
             print("  ⚠️  MCP reload timed out (30s). Some servers may not have reconnected.")
 
     # Inline-skip tokens that bypass the destructive-slash confirmation modal.
-    # Matches the escape-hatch pattern users on broken modal platforms
-    # (currently native Windows PowerShell — issue #30768) need to self-serve
-    # without having to flip approvals.destructive_slash_confirm in config.
     _DESTRUCTIVE_SKIP_TOKENS = frozenset({"now", "--yes", "-y"})
 
     @classmethod
@@ -10898,9 +10028,8 @@ class MarlowCLI:
         Inline-skip: if ``cmd_original`` contains ``now``, ``--yes``, or
         ``-y`` as an argument (e.g. ``/reset now``, ``/new --yes My title``),
         the modal is bypassed and ``"once"`` is returned immediately. This is
-        an escape hatch for platforms where the prompt_toolkit modal hangs
-        (issue #30768 — native Windows PowerShell). Callers are responsible
-        for stripping the skip tokens from any remaining argument parsing
+        an explicit non-interactive escape hatch. Callers are responsible for
+        stripping the skip tokens from any remaining argument parsing
         (see :meth:`_split_destructive_skip`).
 
         Returns ``"once"``, ``"always"``, or ``None`` (cancelled).  Callers
@@ -11335,19 +10464,6 @@ class MarlowCLI:
 
         reqs = check_voice_requirements()
         if not reqs["audio_available"]:
-            if _is_termux_environment():
-                details = reqs.get("details", "")
-                if "Termux:API Android app is not installed" in details:
-                    raise RuntimeError(
-                        "Termux:API command package detected, but the Android app is missing.\n"
-                        "Install/update the Termux:API Android app, then retry /voice on.\n"
-                        "Fallback: pkg install python-numpy portaudio && python -m pip install sounddevice"
-                    )
-                raise RuntimeError(
-                    "Voice mode requires either Termux:API microphone access or Python audio libraries.\n"
-                    "Option 1: pkg install termux-api and install the Termux:API Android app\n"
-                    "Option 2: pkg install python-numpy portaudio && python -m pip install sounddevice"
-                )
             raise RuntimeError(
                 "Voice mode requires sounddevice and numpy.\n"
                 f"Install with: {sys.executable} -m pip install sounddevice numpy"
@@ -11427,8 +10543,6 @@ class MarlowCLI:
         _label = self._voice_record_key_label()
         if getattr(self._voice_recorder, "supports_silence_autostop", True):
             _recording_hint = f"auto-stops on silence | {_label} to stop & exit continuous"
-        elif _is_termux_environment():
-            _recording_hint = f"Termux:API capture | {_label} to stop"
         else:
             _recording_hint = f"{_label} to stop"
         _cprint(f"\n{_ACCENT}● Recording...{_RST} {_DIM}({_recording_hint}){_RST}")
@@ -11671,12 +10785,7 @@ class MarlowCLI:
             for line in reqs["details"].split("\n"):
                 _cprint(f"  {_DIM}{line}{_RST}")
             if reqs["missing_packages"]:
-                if _is_termux_environment():
-                    _cprint(f"\n  {_BOLD}Option 1: pkg install termux-api{_RST}")
-                    _cprint(f"  {_DIM}Then install/update the Termux:API Android app for microphone capture{_RST}")
-                    _cprint(f"  {_BOLD}Option 2: pkg install python-numpy portaudio && python -m pip install sounddevice{_RST}")
-                else:
-                    _cprint(f"\n  {_BOLD}Install: {sys.executable} -m pip install {' '.join(reqs['missing_packages'])}{_RST}")
+                _cprint(f"\n  {_BOLD}Install: {sys.executable} -m pip install {' '.join(reqs['missing_packages'])}{_RST}")
             return
 
         with self._voice_lock:
@@ -12451,7 +11560,7 @@ class MarlowCLI:
                 # in terminal_tool is populated for this thread.  The main thread
                 # registration (run() line ~9046) is invisible here because
                 # _callback_tls is threading.local().  Matches the pattern used
-                # by acp_adapter/server.py for ACP sessions.
+                # by other session-scoped runtime entry points.
                 set_sudo_password_callback(self._sudo_password_callback)
                 set_approval_callback(self._approval_callback)
                 try:
@@ -13199,30 +12308,6 @@ class MarlowCLI:
                 )
         except Exception:
             pass
-        # First-time OpenClaw-residue banner — fires once if ~/.openclaw/ exists
-        # after an OpenClaw→Marlow migration (especially migrations done by
-        # OpenClaw's own tool, which doesn't archive the source directory).
-        try:
-            from agent.onboarding import (
-                OPENCLAW_RESIDUE_FLAG,
-                detect_openclaw_residue,
-                is_seen,
-                mark_seen,
-                openclaw_residue_hint_cli,
-            )
-            if not is_seen(self.config, OPENCLAW_RESIDUE_FLAG) and detect_openclaw_residue():
-                try:
-                    _resid_color = _welcome_skin.get_color("banner_dim", "#B8860B")
-                except Exception:
-                    _resid_color = "#B8860B"
-                self._console_print(f"[{_resid_color}]{openclaw_residue_hint_cli()}[/]")
-                try:
-                    from marlow_cli.config import get_config_path as _get_cfg_path_resid
-                    mark_seen(_get_cfg_path_resid(), OPENCLAW_RESIDUE_FLAG)
-                except Exception:
-                    pass  # best-effort — banner will fire again next session
-        except Exception:
-            pass  # banner is non-critical — never break startup
         # Show a random tip to help users discover features
         try:
             from marlow_cli.tips import get_random_tip
@@ -13249,12 +12334,6 @@ class MarlowCLI:
             )
         except Exception:
             pass
-        if self.preloaded_skills and not self._startup_skills_line_shown:
-            skills_label = ", ".join(self.preloaded_skills)
-            self._console_print(
-                f"[bold {_accent_hex()}]Activated skills:[/] {skills_label}"
-            )
-            self._startup_skills_line_shown = True
         self._console_print()
         
         # State for async operation
@@ -13325,11 +12404,8 @@ class MarlowCLI:
         self._voice_tts_done = threading.Event()  # Signals TTS playback finished
         self._voice_tts_done.set()  # Initially "done" (no TTS pending)
 
-        if os.environ.get("MARLOW_DEFER_AGENT_STARTUP") != "1":
-            self._install_tool_callbacks()
-
-        if os.environ.get("MARLOW_DEFER_AGENT_STARTUP") != "1":
-            self._ensure_tirith_security()
+        self._install_tool_callbacks()
+        self._ensure_tirith_security()
         
         # Key bindings for the input area
         kb = KeyBindings()
@@ -13545,20 +12621,17 @@ class MarlowCLI:
         def handle_alt_enter(event):
             """Alt+Enter inserts a newline for multi-line input.
 
-            Works on mac/Linux/WSL. On Windows Terminal this keystroke is
-            intercepted at the terminal layer (toggles fullscreen) and never
-            reaches here — Windows users get newline via Ctrl+Enter instead
-            (bound below as c-j, since WT delivers Ctrl+Enter as LF).
+            Works on macOS and Linux terminals that forward the keystroke.
             """
             event.current_buffer.insert_text('\n')
 
         if _preserve_ctrl_enter_newline():
             @kb.add('c-j')
             def handle_ctrl_enter_newline(event):
-                """Ctrl+Enter inserts a newline on Windows, WSL, SSH, and WT.
+                """Ctrl+Enter inserts a newline in SSH and supported terminals.
 
-                Windows Terminal (incl. WSL/SSH sessions through it) delivers
-                Ctrl+Enter as LF (c-j), distinct from plain Enter (c-m). This
+                Some terminals deliver Ctrl+Enter as LF (c-j), distinct from
+                plain Enter (c-m). This
                 binding makes Ctrl+Enter the equivalent of Alt+Enter on those
                 terminals, giving an Enter-involving newline keystroke
                 without requiring terminal settings changes. Ctrl+J (the raw
@@ -13591,7 +12664,7 @@ class MarlowCLI:
             2. Ghost text suggestion available → accept auto-suggestion
             3. Otherwise → start completion menu
 
-            After accepting a provider like 'anthropic:', the completion menu
+            After accepting a provider prefix, the completion menu
             closes and complete_while_typing doesn't fire (no keystroke).
             This binding re-triggers completions so stage-2 models appear
             immediately.
@@ -13866,7 +12939,7 @@ class MarlowCLI:
                 event.app.exit()
 
         # Ctrl+Shift+C: no binding needed. Terminal emulators (GNOME Terminal,
-        # iTerm2, kitty, Windows Terminal, etc.) intercept Ctrl+Shift+C before
+        # iTerm2, kitty, and similar terminals) intercept Ctrl+Shift+C before
         # the keystroke reaches the application's stdin — prompt_toolkit never
         # sees it, and prompt_toolkit's key spec parser doesn't even recognise
         # 'c-S-c' anyway (the Shift modifier is meaningless on control-sequence
@@ -13999,10 +13072,6 @@ class MarlowCLI:
         @kb.add('c-z')
         def handle_ctrl_z(event):
             """Handle Ctrl+Z - suspend process to background (Unix only)."""
-            if sys.platform == 'win32':
-                _cprint(f"\n{_DIM}Suspend (Ctrl+Z) is not supported on Windows.{_RST}")
-                event.app.invalidate()
-                return
             import signal as _sig
             from prompt_toolkit.application import run_in_terminal
             from marlow_cli.skin_engine import get_active_skin
@@ -14018,7 +13087,7 @@ class MarlowCLI:
         # Config spellings (ctrl/control/alt/option/opt) are normalized to
         # prompt_toolkit's c-x / a-x format via ``normalize_voice_record_key_for_prompt_toolkit``
         # so the same config value binds identically in the TUI and CLI
-        # (Copilot round-9 review on #19835). ``super``/``win``/``windows``
+        # (Copilot round-9 review on #19835). ``super``
         # configs silently fall back to the default here since prompt_toolkit
         # has no super modifier — log a warning so users notice the
         # TUI/CLI split instead of a silent mismatch (round-11).
@@ -14033,11 +13102,11 @@ class MarlowCLI:
             _voice_key = normalize_voice_record_key_for_prompt_toolkit(_raw_key)
             if (
                 isinstance(_raw_key, str)
-                and _raw_key.strip().lower().split("+", 1)[0].strip() in {"super", "win", "windows"}
+                and _raw_key.strip().lower().split("+", 1)[0].strip() == "super"
                 and _voice_key == "c-b"
             ):
                 logger.warning(
-                    "voice.record_key %r uses a TUI-only modifier (super/win); "
+                    "voice.record_key %r uses the TUI-only super modifier; "
                     "CLI fell back to Ctrl+B. Use ctrl+<key> or alt+<key> for "
                     "cross-runtime parity.",
                     _raw_key,
@@ -14133,7 +13202,7 @@ class MarlowCLI:
             _paste_handler_start = time.perf_counter()
             _paste_raw_size = len(event.data or "")
             pasted_text = event.data or ""
-            # Normalise line endings — Windows \r\n and old Mac \r both become \n
+            # Normalise CRLF and legacy CR line endings to LF.
             # so the 5-line collapse threshold and display are consistent.
             pasted_text = pasted_text.replace('\r\n', '\n').replace('\r', '\n')
             pasted_text = _strip_leaked_bracketed_paste_wrappers(pasted_text)
@@ -14187,7 +13256,7 @@ class MarlowCLI:
             sends raw byte 0x16 instead of triggering a paste.  This
             binding catches that and checks the clipboard for images.
             On terminals that DO intercept Ctrl+V for paste (macOS
-            Terminal, iTerm2, VSCode, Windows Terminal), the bracketed
+            Terminal, iTerm2, VSCode), the bracketed
             paste handler fires instead and this binding never triggers.
             """
             if self._try_attach_clipboard_image():
@@ -14200,7 +13269,7 @@ class MarlowCLI:
             Alt key combos pass through all terminal emulators (sent as
             ESC + key), unlike Ctrl+V which terminals intercept for text
             paste.  This is the reliable way to attach clipboard images
-            on WSL2, VSCode, and any terminal over SSH where Ctrl+V
+            in VSCode and terminals over SSH where Ctrl+V
             can't reach the application for image-only clipboard.
             """
             if self._try_attach_clipboard_image():
@@ -14223,7 +13292,6 @@ class MarlowCLI:
         _completer = SlashCommandCompleter(
             skill_commands_provider=lambda: get_skill_commands(),
             command_filter=cli_ref._command_available,
-            skill_bundles_provider=lambda: get_skill_bundles(),
         )
         input_area = TextArea(
             height=Dimension(min=1, max=8, preferred=1),
@@ -15384,35 +14452,6 @@ class MarlowCLI:
             if hasattr(_signal, 'SIGHUP'):
                 _signal.signal(_signal.SIGHUP, _signal_handler)
 
-            # Windows: install a SIGINT handler that absorbs the signal
-            # instead of letting Python's default handler raise
-            # KeyboardInterrupt in MainThread. Windows Terminal / Win32
-            # delivers spurious CTRL_C_EVENT to the marlow process when
-            # child processes are spawned from background threads (agent
-            # subprocess Popen path). The default Python SIGINT handler
-            # would then unwind prompt_toolkit's app.run(), trigger
-            # _run_cleanup mid-turn, and close browser sessions mid-open
-            # — causing "Daemon process exited during startup" errors.
-            #
-            # The handler is a silent no-op. Real user Ctrl+C still works
-            # because prompt_toolkit binds c-c at the TUI layer and never
-            # reaches this OS-signal path. This matches how Claude Code
-            # handles the same Windows quirk (cancellation is driven by
-            # the TUI key handler, not by OS signals).
-            #
-            # POSIX: leave the default SIGINT handler alone. prompt_toolkit
-            # installs its own handler there and it works as expected.
-            if sys.platform == "win32":
-                def _sigint_absorb(signum, frame):
-                    # Absorb silently. Do NOT call agent.interrupt() here:
-                    # Windows fires spurious CTRL_C_EVENT whenever a
-                    # background thread spawns a .cmd subprocess, and
-                    # interrupt() would inject a fake user message each
-                    # time. Real user Ctrl+C routes through prompt_toolkit's
-                    # own c-c key binding at the TUI layer (same pattern as
-                    # Claude Code's Windows handling).
-                    return
-                _signal.signal(_signal.SIGINT, _sigint_absorb)
         except Exception:
             pass  # Signal handlers may fail in restricted environments
         
@@ -15593,8 +14632,7 @@ class MarlowCLI:
         # Deferred relaunch: /update sets _pending_relaunch so the exec
         # happens here — after prompt_toolkit has exited and fully restored
         # terminal modes — rather than from the background process_loop
-        # thread (which would skip terminal cleanup on POSIX and only exit
-        # the worker thread on Windows).
+        # thread, which would skip terminal cleanup.
         if getattr(self, '_pending_relaunch', None):
             from marlow_cli.relaunch import relaunch
             relaunch(self._pending_relaunch, preserve_inherited=False)
@@ -15609,7 +14647,6 @@ def main(
     q: str = None,
     image: str = None,
     toolsets: str = None,
-    skills: str | list[str] | tuple[str, ...] = None,
     model: str = None,
     provider: str = None,
     api_key: str = None,
@@ -15637,9 +14674,8 @@ def main(
         q: Shorthand for --query
         image: Optional local image path to attach to a single query
         toolsets: Comma-separated list of toolsets to enable (e.g., "web,terminal")
-        skills: Comma-separated or repeated list of skills to preload for the session
-        model: Model to use (default: anthropic/claude-opus-4-20250514)
-        provider: Inference provider ("auto", "openrouter", "nous", "openai-codex", "zai", "kimi-coding", "minimax", "minimax-cn")
+        model: Model to use
+        provider: Inference provider ("auto", "openai-codex", "lmstudio", or custom)
         api_key: API key for authentication
         base_url: Base URL for the API
         max_turns: Maximum tool-calling iterations (default: 60)
@@ -15654,7 +14690,6 @@ def main(
     Examples:
         python cli.py                            # Start interactive mode
         python cli.py --toolsets web,terminal    # Use specific toolsets
-        python cli.py --skills marlow-agent-dev,github-auth
         python cli.py -q "What is Python?"       # Single query mode
         python cli.py -q "Describe this" --image ~/storage/shared/Pictures/cat.png
         python cli.py --list-tools               # List tools and exit
@@ -15663,15 +14698,6 @@ def main(
         python cli.py -w -q "Fix issue #123"     # Single query in worktree
     """
     global _active_worktree
-
-    # Force UTF-8 stdio on Windows before any banner/print() runs — the
-    # Rich console prints Unicode box-drawing characters that would
-    # UnicodeEncodeError on cp1252.  No-op on Linux/macOS.
-    try:
-        from marlow_cli.stdio import configure_windows_stdio
-        configure_windows_stdio()
-    except Exception:
-        pass
 
     # Signal to terminal_tool that we're in interactive mode
     # This enables interactive sudo password prompts with timeout
@@ -15731,8 +14757,6 @@ def main(
         from marlow_cli.tools_config import _get_platform_tools
         toolsets_list = sorted(_get_platform_tools(CLI_CONFIG, "cli"))
     
-    parsed_skills = _parse_skills_argument(skills)
-
     # Create CLI instance
     cli = MarlowCLI(
         model=model,
@@ -15748,20 +14772,6 @@ def main(
         pass_session_id=pass_session_id,
         ignore_rules=ignore_rules,
     )
-
-    if parsed_skills:
-        skills_prompt, loaded_skills, missing_skills = build_preloaded_skills_prompt(
-            parsed_skills,
-            task_id=cli.session_id,
-        )
-        if missing_skills:
-            missing_display = ", ".join(missing_skills)
-            raise ValueError(f"Unknown skill(s): {missing_display}")
-        if skills_prompt:
-            cli.system_prompt = "\n\n".join(
-                part for part in (cli.system_prompt, skills_prompt) if part
-            ).strip()
-            cli.preloaded_skills = loaded_skills
 
     # Inject worktree context into agent's system prompt
     if wt_info:

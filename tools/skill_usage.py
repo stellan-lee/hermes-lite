@@ -7,13 +7,13 @@ decide lifecycle transitions.
 
 Design notes:
   - Sidecar, not frontmatter. Keeps operational telemetry out of user-authored
-    SKILL.md content and avoids conflict pressure for bundled/hub skills.
+    SKILL.md content and avoids conflict pressure for bundled skills.
   - Atomic writes via tempfile + os.replace (same pattern as .bundled_manifest).
   - All counter bumps are best-effort: failures log at DEBUG and return silently.
     A broken sidecar never breaks the underlying tool call.
   - Provenance filter: curator-managed skills are explicitly marked when
-    created through skill_manage. Bundled / hub-installed skills stay
-    off-limits, and manually authored skills are not inferred from location.
+    created through skill_manage. Bundled skills stay off-limits, and manually
+    authored skills are not inferred from location.
 
 Lifecycle states:
     active    -> default
@@ -38,16 +38,7 @@ from agent.skill_utils import is_excluded_skill_path
 
 logger = logging.getLogger(__name__)
 
-# fcntl is Unix-only; on Windows use msvcrt for file locking.
-msvcrt = None
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - platform-specific fallback
-    fcntl = None
-    try:
-        import msvcrt
-    except ImportError:
-        pass
+import fcntl
 
 
 STATE_ACTIVE = "active"
@@ -70,33 +61,15 @@ def _usage_file_lock():
     lock_path = _usage_file().with_suffix(".json.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if fcntl is None and msvcrt is None:
-        yield
-        return
-
-    if msvcrt and (not lock_path.exists() or lock_path.stat().st_size == 0):
-        lock_path.write_text(" ", encoding="utf-8")
-
-    fd = open(lock_path, "r+" if msvcrt else "a+", encoding="utf-8")
+    fd = open(lock_path, "a+", encoding="utf-8")
     try:
-        if fcntl:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        else:
-            fd.seek(0)
-            msvcrt.locking(fd.fileno(), msvcrt.LK_LOCK, 1)
+        fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
-        if fcntl:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except (OSError, IOError):
-                pass
-        elif msvcrt:
-            try:
-                fd.seek(0)
-                msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
-            except (OSError, IOError):
-                pass
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except (OSError, IOError):
+            pass
         fd.close()
 
 
@@ -177,44 +150,6 @@ def _read_bundled_manifest_names() -> Set[str]:
     except OSError as e:
         logger.debug("Failed to read bundled manifest: %s", e)
     return names
-
-
-def _read_hub_installed_names() -> Set[str]:
-    """Return the set of skill names installed via the Skills Hub.
-
-    Reads ~/.marlow/skills/.hub/lock.json (see tools/skills_hub.py :: HubLockFile).
-    """
-    lock_path = _skills_dir() / ".hub" / "lock.json"
-    if not lock_path.exists():
-        return set()
-    try:
-        data = json.loads(lock_path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            installed = data.get("installed") or {}
-            if isinstance(installed, dict):
-                names = {str(k) for k in installed.keys()}
-                skills_dir = _skills_dir()
-                for entry in installed.values():
-                    if not isinstance(entry, dict):
-                        continue
-                    install_path = entry.get("install_path")
-                    if not isinstance(install_path, str) or not install_path.strip():
-                        continue
-                    skill_dir = Path(install_path)
-                    if not skill_dir.is_absolute():
-                        skill_dir = skills_dir / skill_dir
-                    try:
-                        resolved = skill_dir.resolve()
-                        resolved.relative_to(skills_dir.resolve())
-                    except (OSError, ValueError):
-                        continue
-                    skill_md = resolved / "SKILL.md"
-                    if skill_md.exists():
-                        names.add(_read_skill_name(skill_md, fallback=resolved.name))
-                return names
-    except (OSError, json.JSONDecodeError) as e:
-        logger.debug("Failed to read hub lock file: %s", e)
-    return set()
 
 
 def _prune_builtins_enabled() -> bool:
@@ -312,14 +247,12 @@ def list_agent_created_skill_names() -> List[str]:
     ``skill_manage(action="create")``). When ``curator.prune_builtins`` is
     enabled, bundled built-in skills are ALSO included even though they have no
     agent-created usage record — their inactivity clock is anchored on first
-    sight (see ``apply_automatic_transitions``). Hub-installed skills are never
-    included; manually authored skills are not inferred from filesystem
-    location.
+    sight (see ``apply_automatic_transitions``). Manually authored skills are
+    not inferred from filesystem location.
     """
     base = _skills_dir()
     if not base.exists():
         return []
-    hub = _read_hub_installed_names()
     bundled = _read_bundled_manifest_names()
     prune_builtins = _prune_builtins_enabled()
     usage = load_usage()
@@ -335,9 +268,6 @@ def list_agent_created_skill_names() -> List[str]:
         except ValueError:
             continue
         name = _read_skill_name(skill_md, fallback=skill_md.parent.name)
-        # Hub-installed skills are always off-limits.
-        if name in hub:
-            continue
         if name in bundled:
             # Built-ins are only candidates when pruning is enabled. They never
             # carry a curator-managed record, so the record gate is skipped.
@@ -387,14 +317,8 @@ def _read_skill_name(skill_md: Path, fallback: str) -> str:
 
 
 def is_agent_created(skill_name: str) -> bool:
-    """Whether *skill_name* is neither bundled nor hub-installed."""
-    off_limits = _read_bundled_manifest_names() | _read_hub_installed_names()
-    return skill_name not in off_limits
-
-
-def is_hub_installed(skill_name: str) -> bool:
-    """Whether *skill_name* was installed via the Skills Hub."""
-    return skill_name in _read_hub_installed_names()
+    """Whether *skill_name* was not seeded from the bundled repository."""
+    return skill_name not in _read_bundled_manifest_names()
 
 
 def is_bundled(skill_name: str) -> bool:
@@ -406,11 +330,8 @@ def is_curation_eligible(skill_name: str) -> bool:
     """Whether the curator may track/archive *skill_name*.
 
     Agent-created skills are always eligible. Bundled built-ins become eligible
-    only when ``curator.prune_builtins`` is enabled. Hub-installed skills are
-    NEVER eligible — they have an external upstream owner.
+    only when ``curator.prune_builtins`` is enabled.
     """
-    if is_hub_installed(skill_name):
-        return False
     if is_bundled(skill_name):
         return _prune_builtins_enabled()
     return True
@@ -525,13 +446,12 @@ def seed_record_if_missing(skill_name: str) -> None:
 def _mutate(skill_name: str, mutator, *, require_curation_eligible: bool = False) -> None:
     """Load, apply *mutator(record)* in place, save. Best-effort.
 
-    By default this records telemetry for ANY skill — bundled, hub-installed,
-    or agent-created — because usage tracking is pure observability and is
+    By default this records telemetry for any bundled or agent-created skill
+    because usage tracking is pure observability and is
     orthogonal to whether a skill is ever curated. Lifecycle mutators
     (``set_state``, ``set_pinned``, ``mark_agent_created``) pass
     ``require_curation_eligible=True`` so they never write meaningless state
-    onto a skill the curator can't manage (e.g. an ``archived`` flag on a
-    hub-installed skill).
+    onto a skill the curator can't manage.
     """
     if not skill_name:
         return
@@ -557,7 +477,7 @@ def _mutate(skill_name: str, mutator, *, require_curation_eligible: bool = False
 def bump_view(skill_name: str) -> None:
     """Bump view_count and last_viewed_at. Called from skill_view().
 
-    Tracks every skill regardless of provenance — built-ins and hub skills
+    Tracks every skill regardless of origin — built-in and local skills
     included. Usage telemetry is observability, not a curation signal.
     """
     def _apply(rec: Dict[str, Any]) -> None:
@@ -602,7 +522,7 @@ def mark_agent_created(skill_name: str) -> None:
 
 def set_state(skill_name: str, state: str) -> None:
     """Set lifecycle state. No-op if *state* is invalid or the skill isn't
-    curator-manageable (hub skills, or built-ins with pruning disabled)."""
+    curator-manageable (manually installed skills, or built-ins with pruning disabled)."""
     if state not in _VALID_STATES:
         logger.debug("set_state: invalid state %r for %s", state, skill_name)
         return
@@ -642,14 +562,12 @@ def forget(skill_name: str) -> None:
 def archive_skill(skill_name: str) -> Tuple[bool, str]:
     """Move a curator-eligible skill directory to ~/.marlow/skills/.archive/.
 
-    Returns (ok, message). Never archives hub-installed skills. Bundled
-    built-ins are only archivable when ``curator.prune_builtins`` is enabled;
+    Returns (ok, message). Bundled built-ins are only archivable when
+    ``curator.prune_builtins`` is enabled;
     when one is archived, its name is added to the suppression list so the
     update-time re-seeder leaves it archived instead of restoring it.
     """
     if not is_curation_eligible(skill_name):
-        if is_hub_installed(skill_name):
-            return False, f"skill '{skill_name}' is hub-installed; never archive"
         return False, (
             f"skill '{skill_name}' is a bundled built-in; enable "
             "curator.prune_builtins to allow pruning it"
@@ -693,19 +611,12 @@ def restore_skill(skill_name: str) -> Tuple[bool, str]:
     """Move an archived skill back to ~/.marlow/skills/. Restores to the flat
     top-level layout; original category nesting is NOT reconstructed.
 
-    Refuses to restore under a name that now collides with a hub-installed
-    skill — that would shadow the upstream version. Also refuses to restore
-    over a bundled built-in UNLESS ``curator.prune_builtins`` is enabled (in
+    Refuses to restore over a bundled built-in UNLESS
+    ``curator.prune_builtins`` is enabled (in
     which case built-ins are curator-managed and restoring is the documented
     way to lift a prune). Restoring clears any suppression entry so future
     updates may re-seed the built-in again.
     """
-    # Hub skills always have an external upstream owner — never shadow them.
-    if is_hub_installed(skill_name):
-        return False, (
-            f"skill '{skill_name}' is now hub-installed; "
-            "restore would shadow the upstream version"
-        )
     # A bundled built-in is upstream-owned UNLESS prune_builtins is on. With the
     # flag off, restoring over it would shadow the bundled version.
     if is_bundled(skill_name) and not _prune_builtins_enabled():
@@ -799,13 +710,7 @@ def agent_created_report() -> List[Dict[str, Any]]:
 
 
 def provenance(skill_name: str) -> str:
-    """Classify a skill's origin: 'hub', 'bundled', or 'agent'.
-
-    'agent' covers both agent-authored and local manually-authored skills —
-    anything not seeded from the bundled repo or installed via the hub.
-    """
-    if is_hub_installed(skill_name):
-        return "hub"
+    """Classify a skill's origin as ``bundled`` or ``agent``."""
     if is_bundled(skill_name):
         return "bundled"
     return "agent"
@@ -816,9 +721,9 @@ def usage_report() -> List[Dict[str, Any]]:
 
     Unlike ``agent_created_report()`` (which is scoped to curator-managed
     candidates), this surfaces all skills — bundled built-ins and
-    hub-installed included — so callers can answer "how often is this skill
+    locally installed included — so callers can answer "how often is this skill
     used" independent of whether it's ever curated. Rows carry a
-    ``provenance`` field ('agent' | 'bundled' | 'hub') and ``_persisted``
+    ``provenance`` field ('agent' | 'bundled') and ``_persisted``
     (whether a real ``.usage.json`` record backs the row).
     """
     base = _skills_dir()

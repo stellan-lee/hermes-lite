@@ -2,13 +2,13 @@
 
 Regression for https://github.com/NousResearch/marlow-agent/issues/17656 —
 ``read_file`` was previously only sandboxed against ``MARLOW_HOME`` itself,
-which left ``auth.json`` and ``.anthropic_oauth.json`` (plaintext provider
-keys + OAuth tokens) readable by the agent. A prompt-injection reaching
+which left ``auth.json`` (plaintext provider keys and tokens) readable by the
+agent. A prompt-injection reaching
 ``read_file`` could exfiltrate active credentials.
 
 These tests verify that ``get_read_block_error`` returns a denial message
 for the credential stores while leaving arbitrary ``MARLOW_HOME`` files
-readable, and that the existing ``skills/.hub`` deny still applies.
+readable.
 """
 
 from __future__ import annotations
@@ -57,23 +57,8 @@ def test_auth_lock_blocked(fake_home):
     assert "credential store" in err
 
 
-def test_anthropic_oauth_json_blocked(fake_home):
-    from agent.file_safety import get_read_block_error
-
-    oauth = _create(fake_home, ".anthropic_oauth.json")
-    err = get_read_block_error(str(oauth))
-    assert err is not None
-    assert "credential store" in err
 
 
-def test_google_oauth_json_blocked(fake_home):
-    """Gemini OAuth tokens live under auth/google_oauth.json — blocked."""
-    from agent.file_safety import get_read_block_error
-
-    oauth = _create(fake_home, Path("auth") / "google_oauth.json")
-    err = get_read_block_error(str(oauth))
-    assert err is not None
-    assert "credential store" in err
 
 
 def test_arbitrary_marlow_home_file_not_blocked(fake_home):
@@ -93,14 +78,6 @@ def test_subdirectory_named_auth_json_not_blocked(fake_home):
     assert get_read_block_error(str(nested)) is None
 
 
-def test_skills_hub_block_still_applies(fake_home):
-    """Regression guard: the original skills/.hub deny must keep working."""
-    from agent.file_safety import get_read_block_error
-
-    hub_file = _create(fake_home, "skills/.hub/manifest.json")
-    err = get_read_block_error(str(hub_file))
-    assert err is not None
-    assert "internal Marlow cache file" in err
 
 
 def test_path_traversal_resolves_to_blocked(fake_home, tmp_path):
@@ -159,35 +136,6 @@ def test_read_file_tool_blocks_relative_path_under_terminal_cwd(
     assert "credential store" in out["error"]
 
 
-def test_read_file_tool_blocks_nested_google_oauth_path(
-    fake_home, tmp_path, monkeypatch
-):
-    """The real read_file tool must not return Gemini OAuth token material."""
-    import json
-
-    import tools.file_tools as ft
-
-    oauth = _create(fake_home, Path("auth") / "google_oauth.json")
-    oauth.write_text(
-        json.dumps(
-            {
-                "refresh": "REFRESH_TOKEN_MARKER",
-                "access": "ACCESS_TOKEN_MARKER",
-                "email": "user@example.com",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        ft, "_get_live_tracking_cwd", lambda task_id="default": None
-    )
-
-    out = json.loads(ft.read_file_tool(str(oauth), task_id="google-oauth-test"))
-    assert "error" in out
-    assert "credential store" in out["error"]
-    assert "REFRESH_TOKEN_MARKER" not in json.dumps(out)
-    assert "ACCESS_TOKEN_MARKER" not in json.dumps(out)
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +197,7 @@ def test_mcp_tokens_dir_itself_blocked(fake_home):
 def test_identically_named_marlow_files_outside_home_not_blocked(
     fake_home, tmp_path
 ):
-    """Marlow-specific filenames (``auth.json``, ``mcp-tokens/``, ``google_oauth.json``)
+    """Marlow-specific filenames (``auth.json`` and ``mcp-tokens/``)
     outside MARLOW_HOME must remain readable — the gate is per-location for
     those, not per-filename. ``.env`` is the exception: it's blocked anywhere
     on disk (see test_project_local_env_blocked) because the basename always
@@ -265,24 +213,11 @@ def test_identically_named_marlow_files_outside_home_not_blocked(
         "auth.json outside MARLOW_HOME should NOT be blocked"
     )
 
-    google_oauth = project / "auth" / "google_oauth.json"
-    google_oauth.parent.mkdir()
-    google_oauth.write_text("not really a token", encoding="utf-8")
-    assert get_read_block_error(str(google_oauth)) is None
-
     tokens = project / "mcp-tokens"
     tokens.mkdir()
     tok_file = tokens / "token.json"
     tok_file.write_text("not really a token", encoding="utf-8")
     assert get_read_block_error(str(tok_file)) is None
-
-
-def test_non_secret_auth_subtree_file_not_blocked(fake_home):
-    """Only the known Google OAuth token path is blocked, not all auth/*."""
-    from agent.file_safety import get_read_block_error
-
-    note = _create(fake_home, Path("auth") / "notes.json")
-    assert get_read_block_error(str(note)) is None
 
 
 def test_config_yaml_not_blocked(fake_home):
@@ -323,14 +258,6 @@ def test_profile_mode_blocks_root_credentials(tmp_path, monkeypatch):
     root_env = root / ".env"
     root_env.write_text("x")
     assert "credential store" in (get_read_block_error(str(root_env)) or "")
-
-    # Root-level Google OAuth token store: blocked too
-    root_google_oauth = root / "auth" / "google_oauth.json"
-    root_google_oauth.parent.mkdir(parents=True, exist_ok=True)
-    root_google_oauth.write_text("x")
-    assert "credential store" in (
-        get_read_block_error(str(root_google_oauth)) or ""
-    )
 
     # Root-level mcp-tokens: blocked
     root_tok = root / "mcp-tokens" / "gh.json"

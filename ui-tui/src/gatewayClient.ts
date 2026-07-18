@@ -53,14 +53,13 @@ const resolvePython = (root: string) => {
 
   const hit = [
     venv && resolve(venv, 'bin/python'),
-    venv && resolve(venv, 'Scripts/python.exe'),
     resolve(root, '.venv/bin/python'),
     resolve(root, '.venv/bin/python3'),
     resolve(root, 'venv/bin/python'),
     resolve(root, 'venv/bin/python3')
   ].find(p => p && existsSync(p))
 
-  return hit || (process.platform === 'win32' ? 'python' : 'python3')
+  return hit || 'python3'
 }
 
 const asGatewayEvent = (value: unknown): GatewayEvent | null =>

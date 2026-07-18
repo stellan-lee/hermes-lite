@@ -27,9 +27,8 @@ locally and the gateway has restarted, that administrator can run
 without changing the trusted identity. `/whoami` shows the platform identity
 values needed for the local configuration.
 
-Supported interactive adapters are Telegram, Discord, Slack, Feishu, Matrix,
-Microsoft Teams, and QQBot. The configured platform must be connected when a
-request is sent.
+Supported interactive adapters are Telegram, Discord, Slack, and Feishu. The
+configured platform must be connected when a request is sent.
 
 ## Behavior
 

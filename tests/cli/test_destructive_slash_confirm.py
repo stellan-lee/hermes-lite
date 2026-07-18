@@ -215,7 +215,7 @@ def test_slash_confirm_display_fragments_include_choice_mapping():
 # Inline-skip escape hatch (issue #30768)
 #
 # Users on platforms where the prompt_toolkit modal doesn't dispatch keys
-# (currently native Windows PowerShell) need a way to bypass the confirmation
+# Non-interactive shells need a way to bypass the confirmation
 # without flipping the config gate.  ``/reset now``, ``/new --yes``, ``/clear
 # -y`` all skip the modal and return "once" immediately.
 # ---------------------------------------------------------------------------

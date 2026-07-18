@@ -1,6 +1,6 @@
 """Tests for marlow_cli.service_manager — the abstract ServiceManager
 protocol, the detect_service_manager() entry point, and the host-side
-adapter wrappers (Systemd / Launchd / Windows).
+adapter wrappers (Systemd / Launchd / s6).
 
 The s6 backend is added in Phase 3; its tests live alongside the
 implementation in this same file once that phase ships.
@@ -15,7 +15,6 @@ from marlow_cli.service_manager import (
     ServiceManager,
     ServiceManagerKind,
     SystemdServiceManager,
-    WindowsServiceManager,
     detect_service_manager,
     get_service_manager,
     validate_profile_name,
@@ -66,7 +65,7 @@ def test_detect_service_manager_returns_known_value() -> None:
     advertised literals — anything else means a new platform branch
     was added without updating ServiceManagerKind."""
     result = detect_service_manager()
-    assert result in ("systemd", "launchd", "windows", "s6", "none")
+    assert result in ("systemd", "launchd", "s6", "none")
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +155,10 @@ def test_s6_running_false_when_comm_unreadable(
 def test_s6_running_handles_missing_proc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """On macOS / Windows / WSL-without-procfs, /proc/1/comm doesn't
-    exist. Must return False, not raise."""
+    """On hosts without procfs, /proc/1/comm does not exist.
+
+    Detection must return False rather than raise.
+    """
     from marlow_cli.service_manager import _s6_running
 
     _patch_s6_paths(monkeypatch, comm=None, basedir_is_dir=False)
@@ -189,15 +190,6 @@ def test_launchd_manager_kind_and_registration_unsupported() -> None:
     with pytest.raises(NotImplementedError):
         mgr.register_profile_gateway("foo")
     assert mgr.list_profile_gateways() == []
-    assert isinstance(mgr, ServiceManager)
-
-
-def test_windows_manager_kind_and_registration_unsupported() -> None:
-    mgr = WindowsServiceManager()
-    assert mgr.kind == "windows"
-    assert mgr.supports_runtime_registration() is False
-    with pytest.raises(NotImplementedError):
-        mgr.register_profile_gateway("foo")
     assert isinstance(mgr, ServiceManager)
 
 
@@ -251,77 +243,6 @@ def test_launchd_manager_lifecycle_delegates(monkeypatch: pytest.MonkeyPatch) ->
     assert mgr.is_running("ignored") is False
 
 
-def test_windows_manager_lifecycle_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
-    called: list[str] = []
-    # Force-import the submodule so monkeypatch's attribute lookup
-    # against the `marlow_cli` package succeeds — gateway_windows is
-    # imported lazily inside the wrapper and may not yet be loaded.
-    import marlow_cli.gateway_windows  # noqa: F401
-
-    class _FakeWindowsModule:
-        @staticmethod
-        def start() -> None: called.append("start")
-        @staticmethod
-        def stop() -> None: called.append("stop")
-        @staticmethod
-        def restart() -> None: called.append("restart")
-        @staticmethod
-        def is_installed() -> bool: return True
-
-    monkeypatch.setattr("marlow_cli.gateway_windows", _FakeWindowsModule)
-    monkeypatch.setattr(
-        "marlow_cli.gateway.find_gateway_pids",
-        lambda **kw: [12345],
-    )
-    mgr = WindowsServiceManager()
-    mgr.start("ignored")
-    mgr.stop("ignored")
-    mgr.restart("ignored")
-    assert called == ["start", "stop", "restart"]
-    assert mgr.is_running("ignored") is True
-
-
-def test_windows_manager_is_running_false_when_not_installed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import marlow_cli.gateway_windows  # noqa: F401
-
-    class _FakeWindowsModule:
-        @staticmethod
-        def is_installed() -> bool: return False
-
-    monkeypatch.setattr("marlow_cli.gateway_windows", _FakeWindowsModule)
-    monkeypatch.setattr(
-        "marlow_cli.gateway.find_gateway_pids",
-        lambda **kw: [12345],  # PIDs would otherwise vote "running"
-    )
-    assert WindowsServiceManager().is_running("ignored") is False
-
-
-def test_windows_manager_install_forwards_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-    import marlow_cli.gateway_windows  # noqa: F401
-
-    class _FakeWindowsModule:
-        @staticmethod
-        def install(*, force, start_now, start_on_login, elevated_handoff) -> None:
-            captured["force"] = force
-            captured["start_now"] = start_now
-            captured["start_on_login"] = start_on_login
-            captured["elevated_handoff"] = elevated_handoff
-
-    monkeypatch.setattr("marlow_cli.gateway_windows", _FakeWindowsModule)
-    WindowsServiceManager().install(
-        force=True, start_now=True, start_on_login=False, elevated_handoff=True,
-    )
-    assert captured == {
-        "force": True,
-        "start_now": True,
-        "start_on_login": False,
-        "elevated_handoff": True,
-    }
-
-
 # ---------------------------------------------------------------------------
 # get_service_manager factory
 # ---------------------------------------------------------------------------
@@ -332,7 +253,6 @@ def test_windows_manager_install_forwards_kwargs(monkeypatch: pytest.MonkeyPatch
     [
         ("systemd", SystemdServiceManager),
         ("launchd", LaunchdServiceManager),
-        ("windows", WindowsServiceManager),
     ],
 )
 def test_get_service_manager_returns_correct_backend(

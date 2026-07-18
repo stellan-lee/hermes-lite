@@ -28,9 +28,8 @@ Behaviour (mirrors ``vision_analyze`` for consistency)
   ``provider``, ``model``, or ``base_url`` non-empty / not ``"auto"``),
   the screenshot is routed through the aux vision pipeline. Users who
   pay for a dedicated vision model usually want it used.
-* Otherwise, if the active main model+provider can carry an image inside
-  a tool-result message AND the model reports ``supports_vision=True``
-  in models.dev metadata, return ``False`` (use the multimodal path).
+* Otherwise, if the active Codex model can carry an image inside a tool-result
+  message, return ``False`` (use the multimodal path).
 * In every other case (non-vision main model, provider that does not
   accept multimodal tool results, lookup failure), route through aux
   vision so the main model receives a text description it can act on.
@@ -77,21 +76,10 @@ def _explicit_aux_vision_override(cfg: Optional[Dict[str, Any]]) -> bool:
 
 
 def _lookup_supports_vision(provider: str, model: str) -> Optional[bool]:
-    """Return models.dev ``supports_vision`` for *(provider, model)* or None."""
-    if not provider or not model:
-        return None
-    try:
-        from agent.models_dev import get_model_capabilities
-        caps = get_model_capabilities(provider, model)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug(
-            "computer_use vision_routing: caps lookup failed for %s:%s — %s",
-            provider, model, exc,
-        )
-        return None
-    if caps is None:
-        return None
-    return bool(getattr(caps, "supports_vision", False))
+    """Return retained built-in vision capability, or None when unknown."""
+    if provider == "openai-codex" and model:
+        return True
+    return None
 
 
 def _provider_accepts_multimodal_tool_result(provider: str, model: str) -> Optional[bool]:
@@ -123,8 +111,8 @@ def should_route_capture_to_aux_vision(
     """Return True iff the captured screenshot should be pre-analysed via aux vision.
 
     Args:
-      provider: active inference provider id (e.g. ``"openrouter"``,
-        ``"anthropic"``, ``"openai-codex"``). Lower-case canonical id.
+      provider: active inference provider id, such as ``"openai-codex"`` or
+        a custom OpenAI-compatible provider. Lower-case canonical id.
       model:    active main model slug as it would be sent to the provider.
       cfg:      loaded ``config.yaml`` dict (or None).
 

@@ -20,17 +20,6 @@ Usage:
     python batch_runner.py --dataset_file=data.jsonl --batch_size=10 --run_name=my_run --distribution=image_gen
 """
 
-# IMPORTANT: marlow_bootstrap must be the very first import — UTF-8 stdio
-# on Windows.  No-op on POSIX.  See marlow_bootstrap.py for full rationale.
-try:
-    import marlow_bootstrap  # noqa: F401
-except ModuleNotFoundError:
-    # Graceful fallback when marlow_bootstrap isn't registered in the venv
-    # yet — happens during partial ``marlow update`` where git-reset landed
-    # new code but ``uv pip install -e .`` didn't finish.  Missing bootstrap
-    # means UTF-8 stdio setup is skipped on Windows; POSIX is unaffected.
-    pass
-
 import json
 import logging
 import os
@@ -263,12 +252,11 @@ def _process_single_prompt(
     task_id = f"task_{prompt_index}"
     
     # Per-prompt container image override: if the dataset row has an 'image' field,
-    # register it for this task's sandbox. Works with Docker, Modal, Singularity, and Daytona.
+    # register it for this task's Docker sandbox.
     container_image = prompt_data.get("image") or prompt_data.get("docker_image")
     if container_image:
         # Verify the image is accessible before spending tokens on the agent loop.
         # For Docker: check local cache, then try pulling.
-        # For Modal: skip local check (Modal pulls server-side).
         env_type = os.getenv("TERMINAL_ENV", "local")
         if env_type == "docker":
             import subprocess as _sp
@@ -303,9 +291,6 @@ def _process_single_prompt(
         from tools.terminal_tool import register_task_env_overrides
         overrides = {
             "docker_image": container_image,
-            "modal_image": container_image,
-            "singularity_image": f"docker://{container_image}",
-            "daytona_image": container_image,
         }
         if prompt_data.get("cwd"):
             overrides["cwd"] = prompt_data["cwd"]
@@ -333,11 +318,6 @@ def _process_single_prompt(
             ephemeral_system_prompt=config.get("ephemeral_system_prompt"),
             log_prefix_chars=config.get("log_prefix_chars", 100),
             log_prefix=log_prefix,
-            providers_allowed=config.get("providers_allowed"),
-            providers_ignored=config.get("providers_ignored"),
-            providers_order=config.get("providers_order"),
-            provider_sort=config.get("provider_sort"),
-            openrouter_min_coding_score=config.get("openrouter_min_coding_score"),
             max_tokens=config.get("max_tokens"),
             reasoning_config=config.get("reasoning_config"),
             prefill_messages=config.get("prefill_messages"),
@@ -538,16 +518,11 @@ class BatchRunner:
         max_iterations: int = 10,
         base_url: str = None,
         api_key: str = None,
-        model: str = "claude-opus-4-20250514",
+        model: str = "",
         num_workers: int = 4,
         verbose: bool = False,
         ephemeral_system_prompt: str = None,
         log_prefix_chars: int = 100,
-        providers_allowed: List[str] = None,
-        providers_ignored: List[str] = None,
-        providers_order: List[str] = None,
-        provider_sort: str = None,
-        openrouter_min_coding_score: Optional[float] = None,
         max_tokens: int = None,
         reasoning_config: Dict[str, Any] = None,
         prefill_messages: List[Dict[str, Any]] = None,
@@ -569,16 +544,11 @@ class BatchRunner:
             verbose (bool): Enable verbose logging
             ephemeral_system_prompt (str): System prompt used during agent execution but NOT saved to trajectories (optional)
             log_prefix_chars (int): Number of characters to show in log previews for tool calls/responses (default: 20)
-            providers_allowed (List[str]): OpenRouter providers to allow (optional)
-            providers_ignored (List[str]): OpenRouter providers to ignore (optional)
-            providers_order (List[str]): OpenRouter providers to try in order (optional)
-            provider_sort (str): Sort providers by price/throughput/latency (optional)
             max_tokens (int): Maximum tokens for model responses (optional, uses model default if not set)
-            reasoning_config (Dict): OpenRouter reasoning config override (e.g. {"effort": "none"} to disable thinking)
+            reasoning_config (Dict): Compatible-endpoint reasoning config override.
             prefill_messages (List[Dict]): Messages to prepend as prefilled conversation context (few-shot priming).
-                NOTE: Anthropic Sonnet 4.6+ and Opus 4.6+ reject a trailing assistant-role prefill
-                (400 error).  For those models use output_config.format or structured-output
-                schemas instead.  Safe here for user-role priming and for older Claude / non-Claude models.
+                Prefer user-role priming; some compatible endpoints reject a trailing
+                assistant-role prefill.
             max_samples (int): Only process the first N samples from the dataset (optional, processes all if not set)
         """
         self.dataset_file = Path(dataset_file)
@@ -593,11 +563,6 @@ class BatchRunner:
         self.verbose = verbose
         self.ephemeral_system_prompt = ephemeral_system_prompt
         self.log_prefix_chars = log_prefix_chars
-        self.providers_allowed = providers_allowed
-        self.providers_ignored = providers_ignored
-        self.providers_order = providers_order
-        self.provider_sort = provider_sort
-        self.openrouter_min_coding_score = openrouter_min_coding_score
         self.max_tokens = max_tokens
         self.reasoning_config = reasoning_config
         self.prefill_messages = prefill_messages
@@ -891,11 +856,6 @@ class BatchRunner:
             "verbose": self.verbose,
             "ephemeral_system_prompt": self.ephemeral_system_prompt,
             "log_prefix_chars": self.log_prefix_chars,
-            "providers_allowed": self.providers_allowed,
-            "providers_ignored": self.providers_ignored,
-            "providers_order": self.providers_order,
-            "provider_sort": self.provider_sort,
-            "openrouter_min_coding_score": self.openrouter_min_coding_score,
             "max_tokens": self.max_tokens,
             "reasoning_config": self.reasoning_config,
             "prefill_messages": self.prefill_messages,
@@ -1149,9 +1109,9 @@ def main(
     batch_size: int = None,
     run_name: str = None,
     distribution: str = "default",
-    model: str = "anthropic/claude-sonnet-4.6",
+    model: str = "",
     api_key: str = None,
-    base_url: str = "https://openrouter.ai/api/v1",
+    base_url: str = None,
     max_turns: int = 10,
     num_workers: int = 4,
     resume: bool = False,
@@ -1159,10 +1119,6 @@ def main(
     list_distributions: bool = False,
     ephemeral_system_prompt: str = None,
     log_prefix_chars: int = 100,
-    providers_allowed: str = None,
-    providers_ignored: str = None,
-    providers_order: str = None,
-    provider_sort: str = None,
     max_tokens: int = None,
     reasoning_effort: str = None,
     reasoning_disabled: bool = False,
@@ -1177,7 +1133,7 @@ def main(
         batch_size (int): Number of prompts per batch
         run_name (str): Name for this run (used for output and checkpointing)
         distribution (str): Toolset distribution to use (default: "default")
-        model (str): Model name to use (default: "claude-opus-4-20250514")
+        model (str): Model name to use (empty uses the configured runtime)
         api_key (str): API key for model authentication
         base_url (str): Base URL for model API
         max_turns (int): Maximum number of tool calling iterations per prompt (default: 10)
@@ -1187,12 +1143,8 @@ def main(
         list_distributions (bool): List available toolset distributions and exit
         ephemeral_system_prompt (str): System prompt used during agent execution but NOT saved to trajectories (optional)
         log_prefix_chars (int): Number of characters to show in log previews for tool calls/responses (default: 20)
-        providers_allowed (str): Comma-separated list of OpenRouter providers to allow (e.g. "anthropic,openai")
-        providers_ignored (str): Comma-separated list of OpenRouter providers to ignore (e.g. "together,deepinfra")
-        providers_order (str): Comma-separated list of OpenRouter providers to try in order (e.g. "anthropic,openai,google")
-        provider_sort (str): Sort providers by "price", "throughput", or "latency" (OpenRouter only)
         max_tokens (int): Maximum tokens for model responses (optional, uses model default if not set)
-        reasoning_effort (str): OpenRouter reasoning effort level: "none", "minimal", "low", "medium", "high", "xhigh" (default: "medium")
+        reasoning_effort (str): Reasoning effort level for the configured runtime.
         reasoning_disabled (bool): Completely disable reasoning/thinking tokens (default: False)
         prefill_messages_file (str): Path to JSON file containing prefill messages (list of {role, content} dicts)
         max_samples (int): Only process the first N samples from the dataset (optional, processes all if not set)
@@ -1247,11 +1199,6 @@ def main(
         print("❌ Error: --run_name is required")
         return
     
-    # Parse provider preferences (comma-separated strings to lists)
-    providers_allowed_list = [p.strip() for p in providers_allowed.split(",")] if providers_allowed else None
-    providers_ignored_list = [p.strip() for p in providers_ignored.split(",")] if providers_ignored else None
-    providers_order_list = [p.strip() for p in providers_order.split(",")] if providers_order else None
-    
     # Build reasoning_config from CLI flags
     # --reasoning_disabled takes priority, then --reasoning_effort, then default (medium)
     reasoning_config = None
@@ -1297,10 +1244,6 @@ def main(
             verbose=verbose,
             ephemeral_system_prompt=ephemeral_system_prompt,
             log_prefix_chars=log_prefix_chars,
-            providers_allowed=providers_allowed_list,
-            providers_ignored=providers_ignored_list,
-            providers_order=providers_order_list,
-            provider_sort=provider_sort,
             max_tokens=max_tokens,
             reasoning_config=reasoning_config,
             prefill_messages=prefill_messages,
@@ -1318,4 +1261,3 @@ def main(
 
 if __name__ == "__main__":
     fire.Fire(main)
-

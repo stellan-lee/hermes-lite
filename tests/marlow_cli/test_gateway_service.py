@@ -17,6 +17,12 @@ from gateway.restart import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _systemd_platform(monkeypatch):
+    """This module exercises the Linux systemd service implementation."""
+    monkeypatch.setattr(gateway_cli.sys, "platform", "linux")
+
+
 class TestUserSystemdPrivateSocketPreflight:
     def test_preflight_accepts_private_socket_without_dbus_bus(self, monkeypatch):
         monkeypatch.setattr(gateway_cli, "_ensure_user_systemd_env", lambda: None)
@@ -38,6 +44,10 @@ class TestUserSystemdPrivateSocketPreflight:
 
 
 class TestSystemdServiceRefresh:
+    @pytest.fixture(autouse=True)
+    def _available_user_systemd(self, monkeypatch):
+        monkeypatch.setattr(gateway_cli, "_preflight_user_systemd", lambda: None)
+
     def test_systemd_install_repairs_outdated_unit_without_force(self, tmp_path, monkeypatch):
         unit_path = tmp_path / "marlow-gateway.service"
         unit_path.write_text("old unit\n", encoding="utf-8")
@@ -168,10 +178,8 @@ class TestSystemdServiceRefresh:
     def test_systemd_restart_timeout_prints_status_guidance(self, monkeypatch, capsys):
         """`marlow gateway restart` must not surface a raw TimeoutExpired traceback.
 
-        The dashboard spawns `marlow gateway restart` in the background; when a
-        wedged adapter websocket pushes drain past the 90s CLI timeout, the
-        dashboard would previously show a Python traceback (issue #19937
-        follow-up: the same failure mode applies to restart, not just stop).
+        When a wedged adapter websocket pushes drain past the 90s CLI timeout,
+        callers should receive useful status guidance instead of a traceback.
         """
         monkeypatch.setattr(gateway_cli, "_select_systemd_scope", lambda system=False: False)
         monkeypatch.setattr(gateway_cli, "_require_service_installed", lambda action, system=False: None)
@@ -339,21 +347,8 @@ class TestGeneratedSystemdUnits:
 
         assert "/home/test/.nvm/versions/node/v24.14.0/bin" in unit
 
-    def test_user_unit_includes_wsl_windows_interop_paths(self, monkeypatch):
-        monkeypatch.setattr(gateway_cli, "is_wsl", lambda: True)
-        monkeypatch.setenv(
-            "PATH",
-            "/usr/local/bin:/mnt/c/WINDOWS/system32:/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/",
-        )
-        monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: None)
-
-        unit = gateway_cli.generate_systemd_unit(system=False)
-
-        assert "/mnt/c/WINDOWS/system32" in unit
-        assert "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/" in unit
 
     def test_user_unit_omits_windows_interop_paths_outside_wsl(self, monkeypatch):
-        monkeypatch.setattr(gateway_cli, "is_wsl", lambda: False)
         monkeypatch.setenv("PATH", "/usr/local/bin:/mnt/c/WINDOWS/system32")
         monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: None)
 
@@ -361,20 +356,6 @@ class TestGeneratedSystemdUnits:
 
         assert "/mnt/c/WINDOWS/system32" not in unit
 
-    def test_system_unit_includes_wsl_windows_interop_paths(self, monkeypatch):
-        monkeypatch.setattr(gateway_cli, "is_wsl", lambda: True)
-        monkeypatch.setattr(
-            gateway_cli,
-            "_system_service_identity",
-            lambda run_as_user=None: ("alice", "alice", "/home/alice"),
-        )
-        monkeypatch.setattr(gateway_cli, "_marlow_home_for_target_user", lambda home: "/home/alice/.marlow")
-        monkeypatch.setenv("PATH", "/usr/local/bin:/mnt/c/WINDOWS/system32")
-        monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: None)
-
-        unit = gateway_cli.generate_systemd_unit(system=True, run_as_user="alice")
-
-        assert "/mnt/c/WINDOWS/system32" in unit
 
     def test_system_unit_avoids_recursive_execstop_and_uses_extended_stop_timeout(self, monkeypatch):
         monkeypatch.setattr(
@@ -403,7 +384,6 @@ class TestGatewayStopCleanup:
         unit_path.write_text("unit\n", encoding="utf-8")
 
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
         monkeypatch.setattr(gateway_cli, "get_systemd_unit_path", lambda system=False: unit_path)
 
@@ -429,7 +409,6 @@ class TestGatewayStopCleanup:
         unit_path.write_text("unit\n", encoding="utf-8")
 
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
         monkeypatch.setattr(gateway_cli, "get_systemd_unit_path", lambda system=False: unit_path)
 
@@ -682,15 +661,12 @@ class TestLaunchdServiceRecovery:
 class TestGatewayServiceDetection:
     def test_supports_systemd_services_requires_systemctl_binary(self, monkeypatch):
         monkeypatch.setattr(gateway_cli, "is_linux", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli.shutil, "which", lambda name: None)
 
         assert gateway_cli.supports_systemd_services() is False
 
     def test_supports_systemd_services_returns_true_when_systemctl_present(self, monkeypatch):
         monkeypatch.setattr(gateway_cli, "is_linux", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
-        monkeypatch.setattr(gateway_cli, "is_wsl", lambda: False)
         monkeypatch.setattr(gateway_cli.shutil, "which", lambda name: "/usr/bin/systemctl")
 
         assert gateway_cli.supports_systemd_services() is True
@@ -700,7 +676,6 @@ class TestGatewayServiceDetection:
         system_unit = SimpleNamespace(exists=lambda: True)
 
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
         monkeypatch.setattr(
             gateway_cli,
@@ -737,6 +712,10 @@ class TestGatewayServiceDetection:
         assert gateway_cli._is_service_running() is False
 
 class TestGatewaySystemServiceRouting:
+    @pytest.fixture(autouse=True)
+    def _available_user_systemd(self, monkeypatch):
+        monkeypatch.setattr(gateway_cli, "_preflight_user_systemd", lambda: None)
+
     def test_systemd_restart_gracefully_restarts_running_service_and_waits(self, monkeypatch, capsys):
         calls = []
 
@@ -967,7 +946,6 @@ class TestGatewaySystemServiceRouting:
         system_unit = SimpleNamespace(exists=lambda: False)
 
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
         monkeypatch.setattr(
             gateway_cli,
@@ -999,30 +977,12 @@ class TestGatewaySystemServiceRouting:
 
         assert calls == [(False, False, True)]
 
-    def test_gateway_install_reports_termux_manual_mode(self, monkeypatch, capsys):
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: True)
-        monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: False)
-        monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
-
-        try:
-            gateway_cli.gateway_command(
-                SimpleNamespace(gateway_command="install", force=False, system=False, run_as_user=None)
-            )
-        except SystemExit as exc:
-            assert exc.code == 1
-        else:
-            raise AssertionError("Expected gateway_command to exit on unsupported Termux service install")
-
-        out = capsys.readouterr().out
-        assert "not supported on Termux" in out
-        assert "Run manually: marlow gateway" in out
 
     def test_gateway_status_prefers_system_service_when_only_system_unit_exists(self, monkeypatch):
         user_unit = SimpleNamespace(exists=lambda: False)
         system_unit = SimpleNamespace(exists=lambda: True)
 
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
         monkeypatch.setattr(
             gateway_cli,
@@ -1046,7 +1006,6 @@ class TestGatewaySystemServiceRouting:
         system_unit = SimpleNamespace(exists=lambda: False)
 
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
         monkeypatch.setattr(
             gateway_cli,
@@ -1077,19 +1036,6 @@ class TestGatewaySystemServiceRouting:
         assert "Gateway process is running for this profile" in out
         assert "PID(s): 4321" in out
 
-    def test_gateway_status_on_termux_shows_manual_guidance(self, monkeypatch, capsys):
-        monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: False)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
-        monkeypatch.setattr(gateway_cli, "find_gateway_pids", lambda exclude_pids=None: [])
-        monkeypatch.setattr(gateway_cli, "_runtime_health_lines", lambda: [])
-
-        gateway_cli.gateway_command(SimpleNamespace(gateway_command="status", deep=False, system=False))
-
-        out = capsys.readouterr().out
-        assert "Gateway is not running" in out
-        assert "nohup marlow gateway" in out
-        assert "install as user service" not in out
 
     def test_gateway_restart_does_not_fallback_to_foreground_when_launchd_restart_fails(self, tmp_path, monkeypatch):
         plist_path = tmp_path / "ai.marlow.gateway.plist"
@@ -1747,10 +1693,8 @@ class TestDockerAwareGateway:
         import pytest
 
         monkeypatch.setattr(gateway_cli, "is_managed", lambda: False)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
-        monkeypatch.setattr(gateway_cli, "is_wsl", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_container", lambda: True)
 
         args = SimpleNamespace(gateway_command="install", force=False, system=False, run_as_user=None)
@@ -1767,7 +1711,6 @@ class TestDockerAwareGateway:
         import pytest
 
         monkeypatch.setattr(gateway_cli, "is_managed", lambda: False)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_container", lambda: True)
@@ -1784,10 +1727,8 @@ class TestDockerAwareGateway:
         """'marlow gateway start' inside Docker exits 0 with container guidance."""
         import pytest
 
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
-        monkeypatch.setattr(gateway_cli, "is_wsl", lambda: False)
         monkeypatch.setattr(gateway_cli, "is_container", lambda: True)
 
         args = SimpleNamespace(gateway_command="start", system=False)
@@ -2523,7 +2464,6 @@ class TestGatewayCommandCatchesSystemScopeError:
         )
         monkeypatch.setattr(gateway_cli.os, "geteuid", lambda: 1000)
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
-        monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
         monkeypatch.setattr(gateway_cli, "kill_gateway_processes", lambda **kw: 0)
 
         args = SimpleNamespace(gateway_command="start", system=True, all=False)

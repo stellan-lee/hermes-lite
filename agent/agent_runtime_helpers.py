@@ -10,13 +10,11 @@ Methods covered:
 * ``sanitize_tool_call_arguments`` — repair corrupted JSON in tool_calls
 * ``repair_message_sequence`` — enforce alternation invariants
 * ``strip_think_blocks`` — remove inline reasoning from stored content
-* ``recover_with_credential_pool`` — rotate pool entries on 429
 * ``try_recover_primary_transport`` — re-create OpenAI client after rate-limit
-* ``drop_thinking_only_and_merge_users`` — Anthropic-style cleanup
+* ``drop_thinking_only_and_merge_users`` — message-sequence cleanup
 * ``restore_primary_runtime`` — un-do fallback activation
 * ``extract_reasoning`` — pull reasoning fields out of API responses
 * ``dump_api_request_debug`` — write request body for post-mortem
-* ``anthropic_prompt_cache_policy`` — compute cache_control breakpoints
 * ``create_openai_client`` — build the per-agent OpenAI SDK client
 """
 
@@ -36,9 +34,7 @@ from typing import Any, Dict, List, Optional
 from marlow_cli.timeouts import get_provider_request_timeout
 from agent.tool_dispatch_helpers import _trajectory_normalize_msg, make_tool_result_message
 from agent.trajectory import convert_scratchpad_to_think
-from agent.credential_pool import STATUS_EXHAUSTED
-from agent.error_classifier import FailoverReason
-from utils import base_url_host_matches, base_url_hostname, env_var_enabled, atomic_json_write
+from utils import env_var_enabled, atomic_json_write
 
 logger = logging.getLogger(__name__)
 
@@ -659,186 +655,6 @@ def strip_think_blocks(agent, content: str) -> str:
 
 
 
-def recover_with_credential_pool(
-    agent,
-    *,
-    status_code: Optional[int],
-    has_retried_429: bool,
-    classified_reason: Optional[FailoverReason] = None,
-    error_context: Optional[Dict[str, Any]] = None,
-) -> tuple[bool, bool]:
-    """Attempt credential recovery via pool rotation.
-
-    Returns (recovered, has_retried_429).
-    On rate limits: first occurrence retries same credential (sets flag True).
-                    second consecutive failure rotates to next credential.
-    On billing exhaustion: immediately rotates.
-    On auth failures: attempts token refresh before rotating.
-
-    `classified_reason` lets the recovery path honor the structured error
-    classifier instead of relying only on raw HTTP codes. This matters for
-    providers that surface billing/rate-limit/auth conditions under a
-    different status code, such as Anthropic returning HTTP 400 for
-    "out of extra usage".
-    """
-    pool = agent._credential_pool
-    if pool is None:
-        return False, has_retried_429
-
-    # Defensive guard: if a fallback provider is active and its provider name
-    # doesn't match the pool's provider, the pool belongs to the PRIMARY
-    # provider.  Mutating it based on fallback errors would corrupt the
-    # primary's credential state (see #33088) and, via _swap_credential,
-    # overwrite the agent's base_url back to the primary's endpoint — every
-    # subsequent request then goes to the wrong host and 404s (see #33163).
-    # The pool should only act when the agent is still on the same provider
-    # that seeded the pool.
-    current_provider = (getattr(agent, "provider", "") or "").strip().lower()
-    pool_provider = (getattr(pool, "provider", "") or "").strip().lower()
-    if current_provider and pool_provider and current_provider != pool_provider:
-        _ra().logger.warning(
-            "Credential pool provider mismatch: pool=%s, agent=%s — "
-            "skipping pool mutation to avoid cross-provider contamination",
-            pool_provider, current_provider,
-        )
-        return False, has_retried_429
-
-    effective_reason = classified_reason
-    if effective_reason is None:
-        if status_code == 402:
-            effective_reason = FailoverReason.billing
-        elif status_code == 429:
-            effective_reason = FailoverReason.rate_limit
-        elif status_code in {401, 403}:
-            effective_reason = FailoverReason.auth
-
-    if effective_reason == FailoverReason.billing:
-        rotate_status = status_code if status_code is not None else 402
-        next_entry = pool.mark_exhausted_and_rotate(status_code=rotate_status, error_context=error_context)
-        if next_entry is not None:
-            _ra().logger.info(
-                "Credential %s (billing) — rotated to pool entry %s",
-                rotate_status,
-                getattr(next_entry, "id", "?"),
-            )
-            agent._swap_credential(next_entry)
-            return True, False
-        return False, has_retried_429
-
-    if effective_reason == FailoverReason.rate_limit:
-        # If current credential is already marked exhausted, skip retry and
-        # rotate immediately. This prevents the "cancel-between-429s" trap
-        # where has_retried_429 (a local var) gets reset on each new prompt,
-        # causing the pool to retry the same exhausted credential forever.
-        current_entry = pool.current()
-        current_last_status = getattr(current_entry, "last_status", None) if current_entry else None
-        if current_last_status == STATUS_EXHAUSTED:
-            _ra().logger.info(
-                "Credential already exhausted (last_status=%s) — rotating immediately instead of retrying",
-                current_last_status,
-            )
-            rotate_status = status_code if status_code is not None else 429
-            next_entry = pool.mark_exhausted_and_rotate(status_code=rotate_status, error_context=error_context)
-            if next_entry is not None:
-                _ra().logger.info(
-                    "Credential %s (rate limit, pre-exhausted) — rotated to pool entry %s",
-                    rotate_status,
-                    getattr(next_entry, "id", "?"),
-                )
-                agent._swap_credential(next_entry)
-                return True, False
-            return False, True
-
-        usage_limit_reached = False
-        if error_context:
-            context_reason = str(error_context.get("reason") or "").lower()
-            context_message = str(error_context.get("message") or "").lower()
-            usage_limit_reached = (
-                "usage_limit_reached" in context_reason
-                or "gousagelimit" in context_reason
-                or "usage limit reached" in context_message
-                or "usage limit has been reached" in context_message
-            )
-        if not has_retried_429 and not usage_limit_reached:
-            return False, True
-        rotate_status = status_code if status_code is not None else 429
-        next_entry = pool.mark_exhausted_and_rotate(status_code=rotate_status, error_context=error_context)
-        if next_entry is not None:
-            _ra().logger.info(
-                "Credential %s (rate limit) — rotated to pool entry %s",
-                rotate_status,
-                getattr(next_entry, "id", "?"),
-            )
-            agent._swap_credential(next_entry)
-            return True, False
-        return False, True
-
-    if effective_reason == FailoverReason.auth:
-        # Subscription/entitlement 403s look like auth failures on the wire
-        # but refresh cannot fix them — the OAuth token is already valid,
-        # the account simply lacks the entitlement.  Without this guard,
-        # ``try_refresh_current()`` keeps minting fresh tokens against the
-        # same unsubscribed account and the main agent loop spins re-issuing
-        # the same 403 until the user Ctrl+C's.
-        #
-        # Defense-in-depth for #26847: xAI's backend has been seen to 403
-        # standard SuperGrok subscribers with bodies that don't match the
-        # existing entitlement keyword set in ``_is_entitlement_failure``.
-        # Any 403 against ``xai-oauth`` is treated as entitlement here so
-        # the refresh loop can't spin in those cases either.
-        #
-        # Exception (#29344): xAI's ``[WKE=unauthenticated:...]`` suffix and
-        # the ``OAuth2 access token could not be validated`` phrasing are
-        # xAI's authoritative "this is a stale token, not entitlement"
-        # signal.  When either fires we must NOT apply the catch-all
-        # override — refresh is the recoverable path for these bodies, and
-        # blanket-classifying them as entitlement was the bug that left
-        # long-running TUI sessions stuck on stale tokens until the user
-        # exited and reopened.
-        is_entitlement = agent._is_entitlement_failure(error_context, status_code)
-        if not is_entitlement and status_code == 403 and (agent.provider or "") == "xai-oauth":
-            _disambiguator_haystack = " ".join(
-                str(error_context.get(k) or "").lower()
-                for k in ("message", "reason", "code", "error")
-                if isinstance(error_context, dict)
-            )
-            _is_xai_auth_failure = (
-                "[wke=unauthenticated:" in _disambiguator_haystack
-                or "oauth2 access token could not be validated" in _disambiguator_haystack
-            )
-            if not _is_xai_auth_failure:
-                is_entitlement = True
-        if is_entitlement:
-            _ra().logger.info(
-                "Credential %s — entitlement-shaped 403 from %s; "
-                "skipping pool refresh (account lacks subscription, "
-                "not a transient auth failure).",
-                status_code if status_code is not None else "auth",
-                agent.provider or "provider",
-            )
-            return False, has_retried_429
-        refreshed = pool.try_refresh_current()
-        if refreshed is not None:
-            _ra().logger.info(f"Credential auth failure — refreshed pool entry {getattr(refreshed, 'id', '?')}")
-            agent._swap_credential(refreshed)
-            return True, has_retried_429
-        # Refresh failed — rotate to next credential instead of giving up.
-        # The failed entry is already marked exhausted by try_refresh_current().
-        rotate_status = status_code if status_code is not None else 401
-        next_entry = pool.mark_exhausted_and_rotate(status_code=rotate_status, error_context=error_context)
-        if next_entry is not None:
-            _ra().logger.info(
-                "Credential %s (auth refresh failed) — rotated to pool entry %s",
-                rotate_status,
-                getattr(next_entry, "id", "?"),
-            )
-            agent._swap_credential(next_entry)
-            return True, False
-
-    return False, has_retried_429
-
-
-
 def try_recover_primary_transport(
     agent, api_error: Exception, *, retry_count: int, max_retries: int,
 ) -> bool:
@@ -846,13 +662,9 @@ def try_recover_primary_transport(
 
     After ``max_retries`` exhaust, rebuild the primary client (clearing
     stale connection pools) and give it one more attempt before falling
-    back.  This is most useful for direct endpoints (custom, Z.AI,
-    Anthropic, OpenAI, local models) where a TCP-level hiccup does not
+    back.  This is most useful for custom and local endpoints where a
+    TCP-level hiccup does not
     mean the provider is down.
-
-    Skipped for proxy/aggregator providers (OpenRouter, Nous) which
-    already manage connection pools and retries server-side — if our
-    retries through them are exhausted, one more rebuilt client won't help.
     """
     if agent._fallback_activated:
         return False
@@ -860,13 +672,6 @@ def try_recover_primary_transport(
     # Only for transient transport errors
     error_type = type(api_error).__name__
     if error_type not in _TRANSIENT_TRANSPORT_ERRORS:
-        return False
-
-    # Skip for aggregator providers — they manage their own retry infra
-    if agent._is_openrouter_url():
-        return False
-    provider_lower = (agent.provider or "").strip().lower()
-    if provider_lower in {"nous", "nous-research"}:
         return False
 
     try:
@@ -890,22 +695,11 @@ def try_recover_primary_transport(
             agent._transport_cache.clear()
         agent.api_key = rt["api_key"]
 
-        if agent.api_mode == "anthropic_messages":
-            from agent.anthropic_adapter import build_anthropic_client
-            agent._anthropic_api_key = rt["anthropic_api_key"]
-            agent._anthropic_base_url = rt["anthropic_base_url"]
-            agent._anthropic_client = build_anthropic_client(
-                rt["anthropic_api_key"], rt["anthropic_base_url"],
-                timeout=get_provider_request_timeout(agent.provider, agent.model),
-            )
-            agent._is_anthropic_oauth = rt["is_anthropic_oauth"]
-            agent.client = None
-        else:
-            agent.client = agent._create_openai_client(
-                dict(rt["client_kwargs"]),
-                reason="primary_recovery",
-                shared=True,
-            )
+        agent.client = agent._create_openai_client(
+            dict(rt["client_kwargs"]),
+            reason="primary_recovery",
+            shared=True,
+        )
 
         wait_time = min(3 + retry_count, 8)
         agent._vprint(
@@ -1045,31 +839,12 @@ def restore_primary_runtime(agent) -> bool:
             agent._transport_cache.clear()
         agent.api_key = rt["api_key"]
         agent._client_kwargs = dict(rt["client_kwargs"])
-        agent._use_prompt_caching = rt["use_prompt_caching"]
-        # Default to native layout when the restored snapshot predates the
-        # native-vs-proxy split (older sessions saved before this PR).
-        agent._use_native_cache_layout = rt.get(
-            "use_native_cache_layout",
-            agent.api_mode == "anthropic_messages" and agent.provider == "anthropic",
-        )
-
         # ── Rebuild client for the primary provider ──
-        if agent.api_mode == "anthropic_messages":
-            from agent.anthropic_adapter import build_anthropic_client
-            agent._anthropic_api_key = rt["anthropic_api_key"]
-            agent._anthropic_base_url = rt["anthropic_base_url"]
-            agent._anthropic_client = build_anthropic_client(
-                rt["anthropic_api_key"], rt["anthropic_base_url"],
-                timeout=get_provider_request_timeout(agent.provider, agent.model),
-            )
-            agent._is_anthropic_oauth = rt["is_anthropic_oauth"]
-            agent.client = None
-        else:
-            agent.client = agent._create_openai_client(
-                dict(rt["client_kwargs"]),
-                reason="restore_primary",
-                shared=True,
-            )
+        agent.client = agent._create_openai_client(
+            dict(rt["client_kwargs"]),
+            reason="restore_primary",
+            shared=True,
+        )
 
         # ── Restore context engine state ──
         cc = agent.context_compressor
@@ -1293,112 +1068,6 @@ def dump_api_request_debug(
 
 
 
-def anthropic_prompt_cache_policy(
-    agent,
-    *,
-    provider: Optional[str] = None,
-    base_url: Optional[str] = None,
-    api_mode: Optional[str] = None,
-    model: Optional[str] = None,
-) -> tuple[bool, bool]:
-    """Decide whether to apply Anthropic prompt caching and which layout to use.
-
-    Returns ``(should_cache, use_native_layout)``:
-      * ``should_cache`` — inject ``cache_control`` breakpoints for this
-        request (applies to OpenRouter Claude, native Anthropic, and
-        third-party gateways that speak the native Anthropic protocol).
-      * ``use_native_layout`` — place markers on the *inner* content
-        blocks (native Anthropic accepts and requires this layout);
-        when False markers go on the message envelope (OpenRouter and
-        OpenAI-wire proxies expect the looser layout).
-
-    Third-party providers using the native Anthropic transport
-    (``api_mode == 'anthropic_messages'`` + Claude-named model) get
-    caching with the native layout so they benefit from the same
-    cost reduction as direct Anthropic callers, provided their
-    gateway implements the Anthropic cache_control contract
-    (MiniMax, Zhipu GLM, LiteLLM's Anthropic proxy mode all do).
-
-    Qwen / Alibaba-family models on OpenCode, OpenCode Go, and direct
-    Alibaba (DashScope) also honour Anthropic-style ``cache_control``
-    markers on OpenAI-wire chat completions. Upstream pi-mono #3392 /
-    pi #3393 documented this for opencode-go Qwen. Without markers
-    these providers serve zero cache hits, re-billing the full prompt
-    on every turn.
-    """
-    eff_provider = (provider if provider is not None else agent.provider) or ""
-    eff_base_url = base_url if base_url is not None else (agent.base_url or "")
-    eff_api_mode = api_mode if api_mode is not None else (agent.api_mode or "")
-    eff_model = (model if model is not None else agent.model) or ""
-
-    model_lower = eff_model.lower()
-    provider_lower = eff_provider.lower()
-    is_claude = "claude" in model_lower
-    is_openrouter = base_url_host_matches(eff_base_url, "openrouter.ai")
-    # Nous Portal proxies to OpenRouter behind the scenes — identical
-    # OpenAI-wire envelope cache_control semantics. Treat it as an
-    # OpenRouter-equivalent endpoint for caching layout purposes.
-    is_nous_portal = "nousresearch" in eff_base_url.lower()
-    is_anthropic_wire = eff_api_mode == "anthropic_messages"
-    is_native_anthropic = (
-        is_anthropic_wire
-        and (eff_provider == "anthropic" or base_url_hostname(eff_base_url) == "api.anthropic.com")
-    )
-
-    if is_native_anthropic:
-        return True, True
-    if (is_openrouter or is_nous_portal) and is_claude:
-        return True, False
-    # Nous Portal Qwen (e.g. qwen3.6-plus) takes the same envelope-layout
-    # cache_control path as Portal Claude. Portal proxies to OpenRouter
-    # and the upstream Qwen route accepts cache_control markers; without
-    # this branch the alibaba-family check below only matches
-    # provider=opencode/alibaba and Portal traffic falls through to
-    # (False, False), serving 0% cache hits and re-billing the full
-    # prompt on every turn.
-    if is_nous_portal and "qwen" in model_lower:
-        return True, False
-    if is_anthropic_wire and is_claude:
-        # Third-party Anthropic-compatible gateway.
-        return True, True
-
-    # MiniMax on its Anthropic-compatible endpoint serves its own
-    # model family (MiniMax-M2.7, M2.5, M2.1, M2) with documented
-    # cache_control support (0.1× read pricing, 5-minute TTL).  The
-    # blanket is_claude gate above excludes these — opt them in
-    # explicitly via provider id or host match so users on
-    # provider=minimax / minimax-cn (or custom endpoints pointing at
-    # api.minimax.io/anthropic / api.minimaxi.com/anthropic) get the
-    # same cost reduction as Claude traffic.
-    # Docs: https://platform.minimax.io/docs/api-reference/anthropic-api-compatible-cache
-    if is_anthropic_wire:
-        is_minimax_provider = provider_lower in {"minimax", "minimax-cn"}
-        is_minimax_host = (
-            base_url_host_matches(eff_base_url, "api.minimax.io")
-            or base_url_host_matches(eff_base_url, "api.minimaxi.com")
-        )
-        if is_minimax_provider or is_minimax_host:
-            return True, True
-
-    # Qwen/Alibaba on OpenCode (Zen/Go) and native DashScope: OpenAI-wire
-    # transport that accepts Anthropic-style cache_control markers and
-    # rewards them with real cache hits.  Without this branch
-    # qwen3.6-plus on opencode-go reports 0% cached tokens and burns
-    # through the subscription on every turn.
-    model_is_qwen = "qwen" in model_lower
-    provider_is_alibaba_family = provider_lower in {
-        "opencode", "opencode-zen", "opencode-go", "alibaba",
-    }
-    if provider_is_alibaba_family and model_is_qwen:
-        # Envelope layout (native_anthropic=False): markers on inner
-        # content parts, not top-level tool messages.  Matches
-        # pi-mono's "alibaba" cacheControlFormat.
-        return True, False
-
-    return False, False
-
-
-
 def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: bool) -> Any:
     from agent.auxiliary_client import _validate_base_url, _validate_proxy_env_urls
     # Treat client_kwargs as read-only. Callers pass agent._client_kwargs (or shallow
@@ -1412,54 +1081,6 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     client_kwargs = dict(client_kwargs)
     _validate_proxy_env_urls()
     _validate_base_url(client_kwargs.get("base_url"))
-    if agent.provider == "copilot-acp" or str(client_kwargs.get("base_url", "")).startswith("acp://copilot"):
-        from agent.copilot_acp_client import CopilotACPClient
-
-        client = CopilotACPClient(**client_kwargs)
-        _ra().logger.info(
-            "Copilot ACP client created (%s, shared=%s) %s",
-            reason,
-            shared,
-            agent._client_log_context(),
-        )
-        return client
-    if agent.provider == "google-gemini-cli" or str(client_kwargs.get("base_url", "")).startswith("cloudcode-pa://"):
-        from agent.gemini_cloudcode_adapter import GeminiCloudCodeClient
-
-        # Strip OpenAI-specific kwargs the Gemini client doesn't accept
-        safe_kwargs = {
-            k: v for k, v in client_kwargs.items()
-            if k in {"api_key", "base_url", "default_headers", "project_id", "timeout"}
-        }
-        client = GeminiCloudCodeClient(**safe_kwargs)
-        _ra().logger.info(
-            "Gemini Cloud Code Assist client created (%s, shared=%s) %s",
-            reason,
-            shared,
-            agent._client_log_context(),
-        )
-        return client
-    if agent.provider == "gemini":
-        from agent.gemini_native_adapter import GeminiNativeClient, is_native_gemini_base_url
-
-        base_url = str(client_kwargs.get("base_url", "") or "")
-        if is_native_gemini_base_url(base_url):
-            safe_kwargs = {
-                k: v for k, v in client_kwargs.items()
-                if k in {"api_key", "base_url", "default_headers", "timeout", "http_client"}
-            }
-            if "http_client" not in safe_kwargs:
-                keepalive_http = agent._build_keepalive_http_client(base_url)
-                if keepalive_http is not None:
-                    safe_kwargs["http_client"] = keepalive_http
-            client = GeminiNativeClient(**safe_kwargs)
-            _ra().logger.info(
-                "Gemini native client created (%s, shared=%s) %s",
-                reason,
-                shared,
-                agent._client_log_context(),
-            )
-            return client
     # Inject TCP keepalives so the kernel detects dead provider connections
     # instead of letting them sit silently in CLOSE-WAIT (#10324).  Without
     # this, a peer that drops mid-stream leaves the socket in a state where
@@ -1472,7 +1093,7 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # never back into ``agent._client_kwargs``.  Each ``_create_openai_client``
     # invocation therefore gets its OWN fresh ``httpx.Client`` whose
     # lifetime is tied to the OpenAI client it is passed to.  When the
-    # OpenAI client is closed (rebuild, teardown, credential rotation),
+    # OpenAI client is closed (rebuild, teardown),
     # the paired ``httpx.Client`` closes with it, and the next call
     # constructs a fresh one — no stale closed transport can be reused.
     # Tests in ``tests/run_agent/test_create_openai_client_reuse.py`` and
@@ -1513,24 +1134,11 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     if not api_mode:
         api_mode = determine_api_mode(new_provider, base_url)
 
-    # Defense-in-depth: ensure OpenCode base_url doesn't carry a trailing
-    # /v1 into the anthropic_messages client, which would cause the SDK to
-    # hit /v1/v1/messages.  `model_switch.switch_model()` already strips
-    # this, but we guard here so any direct callers (future code paths,
-    # tests) can't reintroduce the double-/v1 404 bug.
-    if (
-        api_mode == "anthropic_messages"
-        and new_provider in {"opencode-zen", "opencode-go"}
-        and isinstance(base_url, str)
-        and base_url
-    ):
-        base_url = re.sub(r"/v1/?$", "", base_url)
-
     old_model = agent.model
     old_provider = agent.provider
 
     # ── Snapshot all fields the swap+rebuild can mutate ──
-    # If the rebuild raises (bad API key, network error, build_anthropic_client
+    # If the rebuild raises (bad API key, network error, client construction
     # failure, etc.) we restore these atomically so the agent isn't left with a
     # new model/provider name paired with the OLD client — that mismatch causes
     # HTTP 400s like "claude-sonnet-4-6 is not supported on openai-codex" on the
@@ -1550,10 +1158,6 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
             "api_mode",
             "api_key",
             "client",
-            "_anthropic_client",
-            "_anthropic_api_key",
-            "_anthropic_base_url",
-            "_is_anthropic_oauth",
             "_config_context_length",
         )
     }
@@ -1584,59 +1188,20 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         if api_key:
             agent.api_key = api_key
 
-        # ── Build new client ──
-        if api_mode == "anthropic_messages":
-            from agent.anthropic_adapter import (
-                build_anthropic_client,
-                resolve_anthropic_token,
-                _is_oauth_token,
-            )
-            # Only fall back to ANTHROPIC_TOKEN when the provider is actually Anthropic.
-            # Other anthropic_messages providers (MiniMax, Alibaba, etc.) must use their own
-            # API key — falling back would send Anthropic credentials to third-party endpoints.
-            _is_native_anthropic = new_provider == "anthropic"
-            effective_key = (api_key or agent.api_key or resolve_anthropic_token() or "") if _is_native_anthropic else (api_key or agent.api_key or "")
-
-            # MiniMax OAuth: swap static string for a per-request callable token
-            # provider so the rebuilt client survives 15-min token expiry. See
-            # the matching block in agent_init.py for the full rationale.
-            if new_provider == "minimax-oauth" and isinstance(effective_key, str) and effective_key:
-                try:
-                    from marlow_cli.auth import build_minimax_oauth_token_provider
-                    effective_key = build_minimax_oauth_token_provider()
-                except Exception as _mm_exc:  # noqa: BLE001
-                    import logging as _logging
-                    _logging.getLogger(__name__).warning(
-                        "MiniMax OAuth: failed to install per-request token provider "
-                        "on switch (%s); using static bearer.",
-                        _mm_exc,
-                    )
-
-            agent.api_key = effective_key
-            agent._anthropic_api_key = effective_key
-            agent._anthropic_base_url = base_url or getattr(agent, "_anthropic_base_url", None)
-            agent._anthropic_client = build_anthropic_client(
-                effective_key, agent._anthropic_base_url,
-                timeout=get_provider_request_timeout(agent.provider, agent.model),
-            )
-            agent._is_anthropic_oauth = _is_oauth_token(effective_key) if (_is_native_anthropic and isinstance(effective_key, str)) else False
-            agent.client = None
-            agent._client_kwargs = {}
-        else:
-            effective_key = api_key or agent.api_key
-            effective_base = base_url or agent.base_url
-            agent._client_kwargs = {
-                "api_key": effective_key,
-                "base_url": effective_base,
-            }
-            _sm_timeout = get_provider_request_timeout(agent.provider, agent.model)
-            if _sm_timeout is not None:
-                agent._client_kwargs["timeout"] = _sm_timeout
-            agent.client = agent._create_openai_client(
-                dict(agent._client_kwargs),
-                reason="switch_model",
-                shared=True,
-            )
+        effective_key = api_key or agent.api_key
+        effective_base = base_url or agent.base_url
+        agent._client_kwargs = {
+            "api_key": effective_key,
+            "base_url": effective_base,
+        }
+        _sm_timeout = get_provider_request_timeout(agent.provider, agent.model)
+        if _sm_timeout is not None:
+            agent._client_kwargs["timeout"] = _sm_timeout
+        agent.client = agent._create_openai_client(
+            dict(agent._client_kwargs),
+            reason="switch_model",
+            shared=True,
+        )
     except Exception:
         # Rollback every mutated field to the pre-swap snapshot so the agent
         # is left consistent (old model + old provider + old client) and the
@@ -1653,16 +1218,6 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
                 pass
         raise
 
-    # ── Re-evaluate prompt caching ──
-    agent._use_prompt_caching, agent._use_native_cache_layout = (
-        agent._anthropic_prompt_cache_policy(
-            provider=new_provider,
-            base_url=agent.base_url,
-            api_mode=api_mode,
-            model=new_model,
-        )
-    )
-
     # ── LM Studio: preload before probing context length ──
     agent._ensure_lmstudio_runtime_loaded()
 
@@ -1674,16 +1229,12 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         # custom provider mid-session (closes #15779).
         _sm_custom_providers = None
         try:
-            from marlow_cli.config import load_config, get_compatible_custom_providers
+            from marlow_cli.config import load_config, load_custom_provider_entries
             _sm_cfg = load_config()
-            _sm_custom_providers = get_compatible_custom_providers(_sm_cfg)
+            _sm_custom_providers = load_custom_provider_entries(_sm_cfg)
         except Exception:
             _sm_custom_providers = None
-        # ``agent.api_key`` may be a callable (Azure Foundry Entra ID
-        # token provider). ``get_model_context_length`` expects a
-        # string for its live-probe paths; for Foundry the context
-        # length normally resolves via config or static catalogs and
-        # never hits a probe, but coerce to empty string defensively.
+        # ``get_model_context_length`` expects a string for live probes.
         _ctx_api_key = agent.api_key if isinstance(agent.api_key, str) else ""
         new_context_length = get_model_context_length(
             agent.model,
@@ -1714,8 +1265,6 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         "api_mode": agent.api_mode,
         "api_key": getattr(agent, "api_key", ""),
         "client_kwargs": dict(agent._client_kwargs),
-        "use_prompt_caching": agent._use_prompt_caching,
-        "use_native_cache_layout": agent._use_native_cache_layout,
         "compressor_model": getattr(_cc, "model", agent.model) if _cc else agent.model,
         "compressor_base_url": getattr(_cc, "base_url", agent.base_url) if _cc else agent.base_url,
         "compressor_api_key": getattr(_cc, "api_key", "") if _cc else "",
@@ -1724,24 +1273,11 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
         "compressor_api_mode": getattr(_cc, "api_mode", agent.api_mode) if _cc else agent.api_mode,
         "compressor_threshold_tokens": _cc.threshold_tokens if _cc else 0,
     }
-    if api_mode == "anthropic_messages":
-        agent._primary_runtime.update({
-            "anthropic_api_key": agent._anthropic_api_key,
-            "anthropic_base_url": agent._anthropic_base_url,
-            "is_anthropic_oauth": agent._is_anthropic_oauth,
-        })
-
     # ── Reset fallback state ──
     agent._fallback_activated = False
     agent._fallback_index = 0
 
-    # When the user deliberately swaps primary providers (e.g. openrouter
-    # → anthropic), drop any fallback entries that target the OLD primary
-    # or the NEW one.  The chain was seeded from config at agent init for
-    # the original provider — without pruning, a failed turn on the new
-    # primary silently re-activates the provider the user just rejected,
-    # which is exactly what was reported during TUI v2 blitz testing
-    # ("switched to anthropic, tui keeps trying openrouter").
+    # Drop fallback entries that target either the old or new primary.
     old_norm = (old_provider or "").strip().lower()
     new_norm = (new_provider or "").strip().lower()
     fallback_chain = list(getattr(agent, "_fallback_chain", []) or [])
@@ -1751,7 +1287,6 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
             if (entry.get("provider") or "").strip().lower() not in {old_norm, new_norm}
         ]
     agent._fallback_chain = fallback_chain
-    agent._fallback_model = fallback_chain[0] if fallback_chain else None
 
     logger.info(
         "Model switched in-place: %s (%s) -> %s (%s)",
@@ -2498,13 +2033,11 @@ __all__ = [
     "sanitize_tool_call_arguments",
     "repair_message_sequence",
     "strip_think_blocks",
-    "recover_with_credential_pool",
     "try_recover_primary_transport",
     "drop_thinking_only_and_merge_users",
     "restore_primary_runtime",
     "extract_reasoning",
     "dump_api_request_debug",
-    "anthropic_prompt_cache_policy",
     "create_openai_client",
     "switch_model",
     "invoke_tool",

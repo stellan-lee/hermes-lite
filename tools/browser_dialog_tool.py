@@ -5,9 +5,8 @@ This tool is response-only — the agent first reads ``pending_dialogs`` from
 accept or dismiss.
 
 Gated on the same ``_browser_cdp_check`` as ``browser_cdp`` so it only
-appears when a CDP endpoint is reachable (Browserbase with a
-``connectUrl``, local Chromium-family browser via ``/browser connect``, or
-``browser.cdp_url`` set in config).
+appears when a local Chromium-family browser is attached via
+``/browser connect`` or ``browser.cdp_url`` is set in config.
 
 See ``website/docs/developer-guide/browser-supervisor.md`` for the full
 design.
@@ -40,10 +39,8 @@ BROWSER_DIALOG_SCHEMA: Dict[str, Any] = {
         "happens when a second dialog fires while the first is still open), "
         "pass ``dialog_id`` from the snapshot to disambiguate.\n\n"
         "**Availability:** only present when a CDP-capable backend is "
-        "attached — Browserbase sessions, local Chromium-family browser via "
-        "``/browser connect``, or ``browser.cdp_url`` in config.yaml. "
-        "Not available on Camofox (REST-only) or the default Playwright "
-        "local browser (CDP port is hidden)."
+        "attached — a local Chromium-family browser via ``/browser connect`` "
+        "or ``browser.cdp_url`` in config.yaml."
     ),
     "parameters": {
         "type": "object",
@@ -93,9 +90,8 @@ def browser_dialog(
             {
                 "success": False,
                 "error": (
-                    "No CDP supervisor is attached to this task. Either the "
-                    "browser backend doesn't expose CDP (Camofox, default "
-                    "Playwright) or no browser session has been started yet. "
+                    "No CDP supervisor is attached to this task. No browser "
+                    "session has been started yet. "
                     "Call browser_navigate or /browser connect first."
                 ),
             }
@@ -121,9 +117,8 @@ def _browser_dialog_check() -> bool:
     """Gate: same as ``browser_cdp`` — only offered when CDP is reachable.
 
     Kept identical so the two tools appear and disappear together. The
-    supervisor itself is started lazily by ``browser_navigate`` /
-    ``/browser connect`` / Browserbase session creation, so a reachable
-    CDP URL is enough to commit to showing the tool.
+    supervisor itself is started lazily by ``browser_navigate`` or
+    ``/browser connect``, so a reachable CDP URL is enough to show the tool.
     """
     try:
         from tools.browser_cdp_tool import _browser_cdp_check  # type: ignore[import-not-found]

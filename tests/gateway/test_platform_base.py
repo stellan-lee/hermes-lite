@@ -167,27 +167,6 @@ class TestExtractImages:
         assert images[0][0] == "https://example.com/img.webp"
         assert images[0][1] == ""
 
-    def test_fal_media_cdn(self):
-        content = "![gen](https://fal.media/files/abc123/output.png)"
-        images, _ = BasePlatformAdapter.extract_images(content)
-        assert len(images) == 1
-        assert images[0][0] == "https://fal.media/files/abc123/output.png"
-        assert images[0][1] == "gen"
-
-    def test_fal_cdn_url(self):
-        content = "![](https://fal-cdn.example.com/result)"
-        images, _ = BasePlatformAdapter.extract_images(content)
-        assert len(images) == 1
-        assert images[0][0] == "https://fal-cdn.example.com/result"
-        assert images[0][1] == ""
-
-    def test_replicate_delivery(self):
-        content = "![](https://replicate.delivery/pbxt/abc/output)"
-        images, _ = BasePlatformAdapter.extract_images(content)
-        assert len(images) == 1
-        assert images[0][0] == "https://replicate.delivery/pbxt/abc/output"
-        assert images[0][1] == ""
-
     def test_non_image_ext_not_extracted(self):
         """Markdown image with non-image extension should not be extracted."""
         content = "![doc](https://example.com/report.pdf)"
@@ -243,12 +222,12 @@ class TestExtractImages:
         """Regression: non-image markdown links must not be silently removed
         when the response also contains real images."""
         content = (
-            "Here is the image: ![photo](https://fal.media/cat.png)\n"
+            "Here is the image: ![photo](https://example.com/cat.png)\n"
             "And a doc: ![report](https://example.com/report.pdf)"
         )
         images, cleaned = BasePlatformAdapter.extract_images(content)
         assert len(images) == 1
-        assert images[0][0] == "https://fal.media/cat.png"
+        assert images[0][0] == "https://example.com/cat.png"
         # The PDF link must survive in cleaned content
         assert "![report](https://example.com/report.pdf)" in cleaned
 

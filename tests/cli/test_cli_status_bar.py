@@ -523,9 +523,9 @@ class TestCLIStatusBar:
 
 
 class TestCLIUsageReport:
-    def test_show_usage_includes_estimated_cost(self, capsys):
+    def test_show_usage_marks_codex_cost_as_included(self, capsys):
         cli_obj = _attach_agent(
-            _make_cli(),
+            _make_cli(model="gpt-5.4"),
             prompt_tokens=10_230,
             completion_tokens=2_220,
             total_tokens=12_450,
@@ -534,6 +534,7 @@ class TestCLIUsageReport:
             context_length=200_000,
             compressions=1,
         )
+        cli_obj.agent.provider = "openai-codex"
         cli_obj.verbose = False
 
         cli_obj._show_usage()
@@ -543,8 +544,7 @@ class TestCLIUsageReport:
         assert "Cost status:" in output
         assert "Cost source:" in output
         assert "Total cost:" in output
-        assert "$" in output
-        assert "0.064" in output
+        assert "included" in output.lower()
         assert "Session duration:" in output
         assert "Compressions:" in output
 

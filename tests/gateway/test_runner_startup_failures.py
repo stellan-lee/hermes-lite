@@ -69,7 +69,7 @@ async def test_runner_stays_alive_for_retryable_startup_errors(monkeypatch, tmp_
     degraded mode so the reconnect watcher can recover the platform when
     the underlying problem clears.  Previously this returned False from
     ``start()`` and exited the process, which converted a single broken
-    platform (e.g. unpaired WhatsApp, DNS blip on Telegram) into a
+    platform (e.g. a Slack auth failure or Telegram DNS blip) into a
     systemd restart loop and killed cron jobs in the meantime.
     """
     monkeypatch.setenv("MARLOW_HOME", str(tmp_path))

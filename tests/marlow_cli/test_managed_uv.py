@@ -27,16 +27,9 @@ def _make_executable(path: Path) -> None:
 
 class TestManagedUvPath:
     def test_posix(self, tmp_path):
-        with patch("marlow_cli.managed_uv.get_marlow_home", return_value=tmp_path), \
-             patch("marlow_cli.managed_uv.platform.system", return_value="Linux"):
+        with patch("marlow_cli.managed_uv.get_marlow_home", return_value=tmp_path):
             from marlow_cli.managed_uv import managed_uv_path
             assert managed_uv_path() == tmp_path / "bin" / "uv"
-
-    def test_windows(self, tmp_path):
-        with patch("marlow_cli.managed_uv.get_marlow_home", return_value=tmp_path), \
-             patch("marlow_cli.managed_uv.platform.system", return_value="Windows"):
-            from marlow_cli.managed_uv import managed_uv_path
-            assert managed_uv_path() == tmp_path / "bin" / "uv.exe"
 
 
 # ---------------------------------------------------------------------------
@@ -193,13 +186,3 @@ class TestInstallUvInternals:
             mock_posix.assert_called_once()
             call_env = mock_posix.call_args[0][0]
             assert call_env["UV_UNMANAGED_INSTALL"] == str(tmp_path / "bin")
-
-    def test_windows_sets_uv_install_dir(self, tmp_path):
-        target = tmp_path / "bin" / "uv.exe"
-        with patch("marlow_cli.managed_uv.platform.system", return_value="Windows"), \
-             patch("marlow_cli.managed_uv._install_uv_windows") as mock_windows:
-            from marlow_cli.managed_uv import _install_uv
-            _install_uv(target)
-            mock_windows.assert_called_once()
-            call_env = mock_windows.call_args[0][0]
-            assert call_env["UV_INSTALL_DIR"] == str(tmp_path / "bin")

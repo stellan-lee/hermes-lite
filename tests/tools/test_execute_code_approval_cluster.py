@@ -250,20 +250,19 @@ def test_env_scrub_marlow_allowlist_and_secret_blocks():
         "MARLOW_HOME": "/h", "MARLOW_PROFILE": "p",
         "MARLOW_CONFIG": "/c.yaml", "MARLOW_ENV": "/e",
         # other MARLOW_* → dropped (broad prefix removed)
-        "MARLOW_BASE_URL": "https://x", "MARLOW_INTERACTIVE": "1",
-        "MARLOW_PROXY_URL": "https://proxy.internal",
+        "MARLOW_UNUSED_FLAG": "x", "MARLOW_INTERACTIVE": "1",
         # secret substrings (incl. new DSN/WEBHOOK) → dropped
         "SENTRY_DSN": "https://a@s.io/1", "SLACK_WEBHOOK": "https://h/x",
         "OPENAI_API_KEY": "sk", "GITHUB_TOKEN": "ghp",
         # safe prefix → kept; uncategorized → dropped
         "PATH": "/usr/bin", "RANDOM_X": "y",
     }
-    out = _scrub_child_env(env, is_passthrough=lambda _: False, is_windows=False)
+    out = _scrub_child_env(env, is_passthrough=lambda _: False)
 
     for kept in ("MARLOW_HOME", "MARLOW_PROFILE", "MARLOW_CONFIG", "MARLOW_ENV", "PATH"):
         assert kept in out, f"{kept} should be kept"
     for dropped in (
-        "MARLOW_BASE_URL", "MARLOW_INTERACTIVE", "MARLOW_PROXY_URL",
+        "MARLOW_UNUSED_FLAG", "MARLOW_INTERACTIVE",
         "SENTRY_DSN", "SLACK_WEBHOOK", "OPENAI_API_KEY", "GITHUB_TOKEN",
         "RANDOM_X",
     ):
@@ -276,8 +275,7 @@ def test_env_scrub_passthrough_overrides_secret_block():
     from tools.code_execution_tool import _scrub_child_env
 
     env = {"MY_SERVICE_DSN": "value"}
-    out = _scrub_child_env(env, is_passthrough=lambda k: k == "MY_SERVICE_DSN",
-                           is_windows=False)
+    out = _scrub_child_env(env, is_passthrough=lambda k: k == "MY_SERVICE_DSN")
     assert out.get("MY_SERVICE_DSN") == "value"
 
 
@@ -325,19 +323,18 @@ def test_env_scrub_logs_dropped_marlow_vars(caplog):
 
     env = {
         "MARLOW_HOME": "/h",          # allowlisted → kept, not logged
-        "MARLOW_BASE_URL": "https://x",   # dropped → logged
-        "MARLOW_PROXY_URL": "https://proxy.internal",  # dropped → logged
+        "MARLOW_UNUSED_FLAG": "x",   # dropped → logged
         "MARLOW_API_KEY": "sk",       # secret → dropped silently (not logged)
         "PATH": "/usr/bin",           # safe prefix → kept
     }
     with caplog.at_level(logging.DEBUG, logger="tools.code_execution_tool"):
-        out = _scrub_child_env(env, is_passthrough=lambda _: False, is_windows=False)
+        out = _scrub_child_env(env, is_passthrough=lambda _: False)
 
     assert "MARLOW_HOME" in out and "PATH" in out
-    assert "MARLOW_BASE_URL" not in out and "MARLOW_PROXY_URL" not in out
+    assert "MARLOW_UNUSED_FLAG" not in out
 
     msgs = "\n".join(r.getMessage() for r in caplog.records)
-    assert "MARLOW_BASE_URL" in msgs and "MARLOW_PROXY_URL" in msgs
+    assert "MARLOW_UNUSED_FLAG" in msgs
     assert "env_passthrough" in msgs
     # Secret vars are dropped but must NOT be named in the diagnostic log.
     assert "MARLOW_API_KEY" not in msgs
@@ -353,6 +350,5 @@ def test_env_scrub_no_log_when_nothing_dropped(caplog):
         _scrub_child_env(
             {"MARLOW_HOME": "/h", "PATH": "/usr/bin"},
             is_passthrough=lambda _: False,
-            is_windows=False,
         )
     assert "dropped" not in "\n".join(r.getMessage() for r in caplog.records)

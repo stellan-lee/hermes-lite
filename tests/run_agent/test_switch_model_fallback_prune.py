@@ -1,11 +1,4 @@
-"""Regression test for TUI v2 blitz bug: explicit /model --provider switch
-silently fell back to the old primary provider on the next turn because the
-fallback chain — seeded from config at agent __init__ — kept entries for the
-provider the user just moved away from.
-
-Reported: "switched from openrouter provider to anthropic api key via marlow
-model and the tui keeps trying openrouter".
-"""
+"""Regression coverage for fallback pruning after an explicit model switch."""
 
 from unittest.mock import MagicMock, patch
 
@@ -14,91 +7,72 @@ from run_agent import AIAgent
 
 def _make_agent(chain):
     agent = AIAgent.__new__(AIAgent)
-
-    agent.provider = "openrouter"
-    agent.model = "x-ai/grok-4"
-    agent.base_url = "https://openrouter.ai/api/v1"
-    agent.api_key = "or-key"
-    agent.api_mode = "chat_completions"
+    agent.provider = "openai-codex"
+    agent.model = "gpt-5.4"
+    agent.base_url = "https://chatgpt.com/backend-api/codex"
+    agent.api_key = "codex-key"
+    agent.api_mode = "codex_responses"
     agent.client = MagicMock()
-    agent._client_kwargs = {"api_key": "or-key", "base_url": "https://openrouter.ai/api/v1"}
+    agent._client_kwargs = {"api_key": "codex-key", "base_url": agent.base_url}
     agent.context_compressor = None
-    agent._anthropic_api_key = ""
-    agent._anthropic_base_url = None
-    agent._anthropic_client = None
-    agent._is_anthropic_oauth = False
     agent._cached_system_prompt = "cached"
     agent._primary_runtime = {}
     agent._fallback_activated = False
     agent._fallback_index = 0
     agent._fallback_chain = list(chain)
-    agent._fallback_model = chain[0] if chain else None
-
+    agent._config_context_length = None
+    agent._transport_cache = {}
+    agent._create_openai_client = lambda *_a, **_kw: MagicMock()
     return agent
 
 
-def _switch_to_anthropic(agent):
-    with (
-        patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
-        patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="sk-ant-xyz"),
-        patch("agent.anthropic_adapter._is_oauth_token", return_value=False),
-        patch("marlow_cli.timeouts.get_provider_request_timeout", return_value=None),
-    ):
+def _switch_to_custom(agent):
+    with patch("marlow_cli.timeouts.get_provider_request_timeout", return_value=None):
         agent.switch_model(
-            new_model="claude-sonnet-4-5",
-            new_provider="anthropic",
-            api_key="sk-ant-xyz",
-            base_url="https://api.anthropic.com",
-            api_mode="anthropic_messages",
+            new_model="local-model",
+            new_provider="custom",
+            api_key="local-key",
+            base_url="http://localhost:1234/v1",
+            api_mode="chat_completions",
         )
 
 
-def test_switch_drops_old_primary_from_fallback_chain():
+def test_switch_drops_old_and_new_primary_from_fallback_chain():
     agent = _make_agent([
-        {"provider": "openrouter", "model": "x-ai/grok-4"},
-        {"provider": "nous", "model": "hermes-4"},
+        {"provider": "openai-codex", "model": "gpt-5.4"},
+        {"provider": "custom", "model": "local-model"},
+        {"provider": "custom", "model": "backup-model"},
     ])
 
-    _switch_to_anthropic(agent)
+    _switch_to_custom(agent)
 
-    providers = [entry["provider"] for entry in agent._fallback_chain]
-
-    assert "openrouter" not in providers, "old primary must be pruned"
-    assert "anthropic" not in providers, "new primary is redundant in the chain"
-    assert providers == ["nous"]
-    assert agent._fallback_model == {"provider": "nous", "model": "hermes-4"}
+    assert agent._fallback_chain == []
 
 
 def test_switch_with_empty_chain_stays_empty():
     agent = _make_agent([])
-
-    _switch_to_anthropic(agent)
-
+    _switch_to_custom(agent)
     assert agent._fallback_chain == []
-    assert agent._fallback_model is None
 
 
 def test_switch_initializes_missing_fallback_attrs():
     agent = _make_agent([])
     del agent._fallback_chain
-    del agent._fallback_model
-
-    _switch_to_anthropic(agent)
-
+    _switch_to_custom(agent)
     assert agent._fallback_chain == []
-    assert agent._fallback_model is None
 
 
 def test_switch_within_same_provider_preserves_chain():
-    chain = [{"provider": "openrouter", "model": "x-ai/grok-4"}]
+    chain = [{"provider": "openai-codex", "model": "gpt-5.3-codex"}]
     agent = _make_agent(chain)
 
     with patch("marlow_cli.timeouts.get_provider_request_timeout", return_value=None):
         agent.switch_model(
-            new_model="openai/gpt-5",
-            new_provider="openrouter",
-            api_key="or-key",
-            base_url="https://openrouter.ai/api/v1",
+            new_model="gpt-5.3-codex",
+            new_provider="openai-codex",
+            api_key="codex-key",
+            base_url="https://chatgpt.com/backend-api/codex",
+            api_mode="codex_responses",
         )
 
     assert agent._fallback_chain == chain

@@ -30,7 +30,7 @@ Example config::
         headers:
           Authorization: "Bearer sk-..."
         timeout: 180
-      searxng:
+      remote_search:
         url: "http://localhost:8000/sse"
         transport: sse       # use SSE transport instead of Streamable HTTP
         timeout: 180
@@ -39,7 +39,7 @@ Example config::
         args: ["-y", "analysis-server"]
         sampling:                    # server-initiated LLM requests
           enabled: true              # default: true
-          model: "gemini-3-flash"    # override model (optional)
+          model: "gpt-5.3-codex"     # override model (optional)
           max_tokens_cap: 4096       # max tokens per request
           timeout: 30                # LLM call timeout (seconds)
           max_rpm: 10                # max requests per minute
@@ -1418,9 +1418,8 @@ class MCPServerTask:
                     for _pid in new_pids:
                         try:
                             new_pgids[_pid] = os.getpgid(_pid)
-                        except (AttributeError, ProcessLookupError, OSError):
-                            # AttributeError: Windows (os.getpgid is POSIX-only)
-                            # ProcessLookupError: child raced and already exited
+                        except (ProcessLookupError, OSError):
+                            # Child may race and already be exited.
                             pass
                     with _lock:
                         for _pid in new_pids:
@@ -1450,8 +1449,6 @@ class MCPServerTask:
                     for _pid in new_pids:
                         _stdio_pids.pop(_pid, None)
                     for pid in new_pids:
-                        # ``os.kill(pid, 0)`` is NOT a no-op on Windows
-                        # (bpo-14484). Use the cross-platform check.
                         pid_alive = _pid_exists(pid)
                         pgroup_alive = False
                         pgid = _stdio_pgids.get(pid)
@@ -1611,7 +1608,7 @@ class MCPServerTask:
             # connection after the first slow stretch. 300s matches the
             # Streamable HTTP code path's httpx read timeout below. Original
             # observation from @amiller in PR #5981 (Router Teamwork,
-            # Supermemory on Cloudflare Workers idle-disconnect at ~60s).
+            # Some remote MCP servers idle-disconnect at roughly 60 seconds).
             _sse_kwargs: dict = {
                 "url": url,
                 "headers": headers or None,
@@ -2393,8 +2390,7 @@ _orphan_stdio_pids: set = set()
 # grandchildren reparent to init/systemd-user but keep the original PGID, so
 # ``killpg(pgid, sig)`` still reaches them.  Tracked separately from
 # ``_stdio_pids`` so we retain the PGID even after the direct child has
-# exited and been removed from the active map.  Empty on Windows
-# (``os.getpgid`` is POSIX-only).
+# exited and been removed from the active map.
 _stdio_pgids: Dict[int, int] = {}  # pid -> pgid
 
 
@@ -3564,7 +3560,7 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
         if _was_interrupted:
             _set_interrupt(True)
 
-    # Log a summary so ACP callers get visibility into what was registered.
+    # Log a summary so callers can see what was registered.
     with _lock:
         connected = [n for n in new_servers if n in _servers]
         new_tool_count = sum(
@@ -3817,7 +3813,7 @@ def _kill_orphaned_mcp_children(include_active: bool = False) -> None:
     one is tracked, so reparented grandchildren in the same process group
     (e.g. ``claude mcp serve`` spawned by a stdio MCP wrapper that exited
     first) are reaped alongside the direct child.  Falls back to ``os.kill``
-    on Windows and when no pgid is recorded.
+    when no pgid is recorded.
 
     With ``include_active=True`` also kills every PID in ``_stdio_pids`` —
     used only at final shutdown, after the MCP event loop has stopped and no
@@ -3874,8 +3870,7 @@ def _kill_orphaned_mcp_children(include_active: bool = False) -> None:
 
     # Phase 3: SIGKILL any survivors
     _sigkill = getattr(_signal, "SIGKILL", _signal.SIGTERM)
-    # ``os.kill(pid, 0)`` is NOT a no-op on Windows. Use the cross-platform
-    # existence check before escalating to SIGKILL.
+    # Check existence before escalating to SIGKILL.
     from gateway.status import _pid_exists
     for pid, server_name in pids.items():
         if not _pid_exists(pid):

@@ -442,7 +442,7 @@ class TestSetupWizardDeploymentShape:
             "86701400",        # telegram uid
             "491827364",       # discord snowflake
             "",                # slack (skip)
-            "",                # matrix (skip)
+            "",                # feishu (skip)
             "",                # runtime peer prefix (skip)
         ]
         host = self._run_setup(monkeypatch, tmp_path, answers=answers)
@@ -490,7 +490,7 @@ class TestSetupWizardDeploymentShape:
             "86701400",        # telegram uid
             "",                # discord (skip)
             "",                # slack (skip)
-            "",                # matrix (skip)
+            "",                # feishu (skip)
             "",                # runtime prefix (skip)
         ]
         host = self._run_setup(monkeypatch, tmp_path, answers=answers, initial_cfg=initial_cfg)

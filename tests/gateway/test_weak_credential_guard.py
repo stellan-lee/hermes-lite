@@ -6,15 +6,8 @@ against platform APIs.
 """
 
 import logging
-
 import pytest
-
 from gateway.config import PlatformConfig, Platform, _validate_gateway_config
-
-
-# ---------------------------------------------------------------------------
-# Helper: create a minimal GatewayConfig with one enabled platform
-# ---------------------------------------------------------------------------
 
 
 def _make_gateway_config(platform, token, enabled=True, **extra_kwargs):
@@ -31,11 +24,6 @@ def _validate_and_return(config):
     """Call _validate_gateway_config and return the config (mutated in place)."""
     _validate_gateway_config(config)
     return config
-
-
-# ---------------------------------------------------------------------------
-# Unit tests: platform token placeholder rejection
-# ---------------------------------------------------------------------------
 
 
 class TestPlatformTokenPlaceholderGuard:
@@ -62,10 +50,10 @@ class TestPlatformTokenPlaceholderGuard:
         assert config.platforms[Platform.SLACK].enabled is False
 
     def test_rejects_placeholder(self, caplog):
-        config = _make_gateway_config(Platform.MATRIX, "placeholder")
+        config = _make_gateway_config(Platform.DISCORD, "placeholder")
         with caplog.at_level(logging.ERROR):
             _validate_and_return(config)
-        assert config.platforms[Platform.MATRIX].enabled is False
+        assert config.platforms[Platform.DISCORD].enabled is False
 
     def test_accepts_real_token(self, caplog):
         """A real-looking bot token should pass validation."""
@@ -82,8 +70,6 @@ class TestPlatformTokenPlaceholderGuard:
         config = _make_gateway_config(Platform.TELEGRAM, "")
         with caplog.at_level(logging.WARNING):
             _validate_and_return(config)
-        # Empty token doesn't trigger placeholder rejection — enabled stays True
-        # (the existing empty-token warning is separate)
         assert config.platforms[Platform.TELEGRAM].enabled is True
 
     def test_disabled_platform_not_checked(self, caplog):
@@ -99,43 +85,3 @@ class TestPlatformTokenPlaceholderGuard:
         with caplog.at_level(logging.ERROR):
             _validate_and_return(config)
         assert config.platforms[Platform.TELEGRAM].enabled is False
-
-
-# ---------------------------------------------------------------------------
-# Integration test: API server placeholder key on network-accessible host
-# ---------------------------------------------------------------------------
-
-
-class TestAPIServerPlaceholderKeyGuard:
-    """Verify that the API server rejects placeholder keys on network hosts."""
-
-    @pytest.mark.asyncio
-    async def test_refuses_wildcard_with_placeholder_key(self):
-        from gateway.platforms.api_server import APIServerAdapter
-
-        adapter = APIServerAdapter(
-            PlatformConfig(enabled=True, extra={"host": "0.0.0.0", "key": "changeme"})
-        )
-        result = await adapter.connect()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_refuses_wildcard_with_asterisk_key(self):
-        from gateway.platforms.api_server import APIServerAdapter
-
-        adapter = APIServerAdapter(
-            PlatformConfig(enabled=True, extra={"host": "0.0.0.0", "key": "***"})
-        )
-        result = await adapter.connect()
-        assert result is False
-
-    def test_allows_loopback_with_placeholder_key(self):
-        """Loopback with a placeholder key is fine — not network-exposed."""
-        from gateway.platforms.api_server import APIServerAdapter
-        from gateway.platforms.base import is_network_accessible
-
-        adapter = APIServerAdapter(
-            PlatformConfig(enabled=True, extra={"host": "127.0.0.1", "key": "changeme"})
-        )
-        # On loopback the placeholder guard doesn't fire
-        assert is_network_accessible(adapter._host) is False

@@ -560,8 +560,7 @@ def test_redirect_respects_no_supervise_env(
 ) -> None:
     """`MARLOW_GATEWAY_NO_SUPERVISE=1` (env var) must skip the redirect.
 
-    Truthiness mirrors the dashboard service's own env var parsing —
-    1/true/yes are all accepted, case-insensitively.
+    The accepted truthy values are 1/true/yes, case-insensitively.
     """
     from marlow_cli import gateway as gw
 

@@ -1,7 +1,7 @@
 """
 Tests for Slack mention gating (require_mention / free_response_channels).
 
-Follows the same pattern as test_whatsapp_group_gating.py.
+Exercises the shared retained-platform group-gating pattern.
 """
 
 import sys

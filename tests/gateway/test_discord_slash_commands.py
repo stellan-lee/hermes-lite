@@ -78,6 +78,20 @@ _ensure_discord_mock()
 from plugins.platforms.discord.adapter import DiscordAdapter  # noqa: E402
 
 
+class _DiscordTestDMChannel:
+    pass
+
+
+class _DiscordTestThread:
+    pass
+
+
+import discord as _discord_runtime
+
+_discord_runtime.DMChannel = _DiscordTestDMChannel
+_discord_runtime.Thread = _DiscordTestThread
+
+
 class FakeTree:
     def __init__(self):
         self.commands = {}
@@ -994,4 +1008,3 @@ def test_register_skill_command_autocomplete_filters_by_name_and_description(ada
     # (covered in other tests). The autocomplete filter itself is exercised
     # via direct function call in the real-discord integration path.
     assert skill_cmd.callback is not None
-

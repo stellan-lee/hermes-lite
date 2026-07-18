@@ -117,7 +117,7 @@ def test_three_sequential_chats_across_client_rebuild():
 
     We also deliberately trigger ``_replace_primary_openai_client`` between
     turn 2 and turn 3 — that is the real rebuild entrypoint (401 refresh,
-    credential rotation, model switch) and is the path that actually
+    model switch) and is the path that actually
     stored the closed transport into ``self._client_kwargs`` in #10933.
     """
     agent = _make_live_agent()
@@ -129,7 +129,7 @@ def test_three_sequential_chats_across_client_rebuild():
     _assert_healthy_reply(r2, "turn 2")
 
     # Force a client rebuild through the real path — mimics 401 refresh /
-    # credential rotation / model switch lifecycle.
+    # model-switch lifecycle.
     rebuilt = agent._replace_primary_openai_client(reason="regression_test_rebuild")
     assert rebuilt, "rebuild via _replace_primary_openai_client returned False"
 

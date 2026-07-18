@@ -16,7 +16,7 @@ def _minimal_terminal_config(cwd="/default"):
 
 
 def test_foreground_command_uses_registered_task_cwd_for_existing_environment(monkeypatch):
-    """ACP can update task cwd after the local env exists; foreground must honor it."""
+    """A client can update cwd after env creation; foreground must honor it."""
     calls = []
 
     class FakeEnv:
@@ -26,10 +26,10 @@ def test_foreground_command_uses_registered_task_cwd_for_existing_environment(mo
             calls.append((command, kwargs))
             return {"output": "ok", "returncode": 0}
 
-    task_id = "acp-session-1"
+    task_id = "client-session-1"
     monkeypatch.setattr(terminal_tool, "_active_environments", {task_id: FakeEnv()})
     monkeypatch.setattr(terminal_tool, "_last_activity", {})
-    monkeypatch.setattr(terminal_tool, "_task_env_overrides", {task_id: {"cwd": "/workspace/acp"}})
+    monkeypatch.setattr(terminal_tool, "_task_env_overrides", {task_id: {"cwd": "/workspace/client"}})
     monkeypatch.setattr(terminal_tool, "_get_env_config", lambda: _minimal_terminal_config())
     monkeypatch.setattr(
         terminal_tool,
@@ -40,7 +40,7 @@ def test_foreground_command_uses_registered_task_cwd_for_existing_environment(mo
     result = json.loads(terminal_tool.terminal_tool(command="pwd", task_id=task_id))
 
     assert result["exit_code"] == 0
-    assert calls == [("pwd", {"timeout": 60, "cwd": "/workspace/acp"})]
+    assert calls == [("pwd", {"timeout": 60, "cwd": "/workspace/client"})]
 
 
 def test_explicit_workdir_still_wins_over_registered_task_cwd(monkeypatch):
@@ -53,10 +53,10 @@ def test_explicit_workdir_still_wins_over_registered_task_cwd(monkeypatch):
             calls.append(kwargs)
             return {"output": "ok", "returncode": 0}
 
-    task_id = "acp-session-1"
+    task_id = "client-session-1"
     monkeypatch.setattr(terminal_tool, "_active_environments", {task_id: FakeEnv()})
     monkeypatch.setattr(terminal_tool, "_last_activity", {})
-    monkeypatch.setattr(terminal_tool, "_task_env_overrides", {task_id: {"cwd": "/workspace/acp"}})
+    monkeypatch.setattr(terminal_tool, "_task_env_overrides", {task_id: {"cwd": "/workspace/client"}})
     monkeypatch.setattr(terminal_tool, "_get_env_config", lambda: _minimal_terminal_config())
     monkeypatch.setattr(
         terminal_tool,
@@ -160,21 +160,21 @@ def test_background_command_prefers_live_env_cwd_over_init_time_cwd(monkeypatch)
 
 
 def test_registering_cwd_override_updates_live_env_cwd(monkeypatch):
-    """An ACP ``update_cwd`` (re-)registered mid-session must win over a
+    """A client ``cwd`` override registered mid-session must win over a
     previously ``cd``-ed live ``env.cwd``.
 
     Preferring live ``env.cwd`` (so session-local ``cd`` survives) means a
     freshly registered ``cwd`` override would otherwise sit *below* the
     already-set ``env.cwd`` and be silently ignored. ``register_task_env_overrides``
-    syncs the new cwd onto the live cached env so an explicit ACP project-root
-    change takes effect, as the editor client expects.
+    syncs the new cwd onto the live cached env so an explicit project-root
+    change takes effect.
     """
 
     class FakeEnv:
         env = {}
         cwd = "/workspace/old"
 
-    task_id = "acp-session-update"
+    task_id = "client-session-update"
     fake_env = FakeEnv()
     monkeypatch.setattr(terminal_tool, "_active_environments", {task_id: fake_env})
     monkeypatch.setattr(terminal_tool, "_task_env_overrides", {})
@@ -197,13 +197,13 @@ def test_registering_cwd_override_noop_when_no_live_env(monkeypatch):
     monkeypatch.setattr(terminal_tool, "_task_env_overrides", {})
 
     # Should not raise even though no env is cached yet.
-    terminal_tool.register_task_env_overrides("acp-session-pending", {"cwd": "/workspace/new"})
+    terminal_tool.register_task_env_overrides("client-session-pending", {"cwd": "/workspace/new"})
 
-    assert terminal_tool._task_env_overrides["acp-session-pending"] == {"cwd": "/workspace/new"}
+    assert terminal_tool._task_env_overrides["client-session-pending"] == {"cwd": "/workspace/new"}
 
 
 def test_registering_non_cwd_override_leaves_live_env_cwd_untouched(monkeypatch):
-    """A non-cwd override (e.g. a per-task Modal image) must not disturb the
+    """A non-cwd override (for example, a Docker image) must not disturb the
     live env's cwd."""
 
     class FakeEnv:
@@ -215,6 +215,6 @@ def test_registering_non_cwd_override_leaves_live_env_cwd_untouched(monkeypatch)
     monkeypatch.setattr(terminal_tool, "_active_environments", {task_id: fake_env})
     monkeypatch.setattr(terminal_tool, "_task_env_overrides", {})
 
-    terminal_tool.register_task_env_overrides(task_id, {"modal_image": "custom:latest"})
+    terminal_tool.register_task_env_overrides(task_id, {"docker_image": "custom:latest"})
 
     assert fake_env.cwd == "/workspace/keep"

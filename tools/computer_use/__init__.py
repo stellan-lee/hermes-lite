@@ -25,11 +25,9 @@ Wiring
 * `capture.py`    — screenshot post-processing (PNG coercion, sizing, SOM
                     overlay if the backend did not).
 
-The outer integration points (multimodal tool-result plumbing, screenshot
-eviction in the Anthropic adapter, image-aware token estimation, the
-COMPUTER_USE_GUIDANCE prompt block, approval hook, and the skill) live
-alongside this package. See agent/anthropic_adapter.py and
-agent/prompt_builder.py for the salvaged hunks from PR #4562.
+The outer integration points (multimodal tool-result plumbing, image-aware
+token estimation, the COMPUTER_USE_GUIDANCE prompt block, approval hook, and
+the skill) live alongside this package. See agent/prompt_builder.py.
 """
 
 from __future__ import annotations

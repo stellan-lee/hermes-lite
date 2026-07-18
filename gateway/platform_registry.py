@@ -14,18 +14,18 @@ Usage (plugin side):
     from gateway.platform_registry import platform_registry, PlatformEntry
 
     platform_registry.register(PlatformEntry(
-        name="irc",
-        label="IRC",
-        adapter_factory=lambda cfg: IRCAdapter(cfg),
+        name="custom_chat",
+        label="Custom Chat",
+        adapter_factory=lambda cfg: CustomChatAdapter(cfg),
         check_fn=check_requirements,
         validate_config=lambda cfg: bool(cfg.extra.get("server")),
-        required_env=["IRC_SERVER"],
-        install_hint="pip install irc",
+        required_env=["CUSTOM_CHAT_TOKEN"],
+        install_hint="pip install custom-chat-adapter",
     ))
 
 Usage (gateway side):
 
-    adapter = platform_registry.create_adapter("irc", platform_config)
+    adapter = platform_registry.create_adapter("custom_chat", platform_config)
 """
 
 import logging
@@ -39,10 +39,10 @@ logger = logging.getLogger(__name__)
 class PlatformEntry:
     """Metadata and factory for a single platform adapter."""
 
-    # Identifier used in config.yaml (e.g. "irc", "viber").
+    # Identifier used in config.yaml (e.g. "custom_chat").
     name: str
 
-    # Human-readable label (e.g. "IRC", "Viber").
+    # Human-readable label (e.g. "Custom Chat").
     label: str
 
     # Factory callable: receives a PlatformConfig, returns an adapter instance.
@@ -84,9 +84,9 @@ class PlatformEntry:
     plugin_name: str = ""
 
     # ── Auth env var names (for _is_user_authorized integration) ──
-    # E.g. "IRC_ALLOWED_USERS" — checked for comma-separated user IDs.
+    # E.g. "CUSTOM_CHAT_ALLOWED_USERS" — comma-separated user IDs.
     allowed_users_env: str = ""
-    # E.g. "IRC_ALLOW_ALL_USERS" — if truthy, all users authorized.
+    # E.g. "CUSTOM_CHAT_ALLOW_ALL_USERS" — if truthy, all users authorized.
     allow_all_env: str = ""
 
     # ── Message limits ──
@@ -106,7 +106,7 @@ class PlatformEntry:
     allow_update_command: bool = True
 
     # ── LLM guidance ──
-    # Platform hint injected into the system prompt (e.g. "You are on IRC.
+    # Platform hint injected into the system prompt (e.g. "You are on Custom Chat.
     # Do not use markdown.").  Empty string = no hint.
     platform_hint: str = ""
 

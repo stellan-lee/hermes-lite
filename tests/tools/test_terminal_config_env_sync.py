@@ -100,11 +100,6 @@ def _save_config_env_sync_keys() -> set[str]:
 # Keys present in cli.py env_mappings but intentionally absent from
 # gateway/run.py or set_config_value.  Each entry must be justified.
 _CLI_ONLY_OK = frozenset({
-    # `env_type` is a legacy YAML key alias for `backend` that cli.py
-    # accepts for backwards-compat with older cli-config.yaml.  The
-    # gateway path normalizes on the canonical `backend` key, which is
-    # also in the map and handles the same bridging.  See cli.py ~line 515.
-    "env_type",
     # sudo_password is not a terminal-backend option — it's a credential
     # used across backends, bridged to $SUDO_PASSWORD (not TERMINAL_*).
     # Treating it as terminal-only would be misleading.
@@ -131,13 +126,6 @@ def test_cli_and_gateway_env_maps_agree():
     """
     cli_keys = _cli_env_map_keys() - _CLI_ONLY_OK
     gw_keys = _gateway_env_map_keys()
-
-    # Normalize the legacy `env_type` alias: cli.py accepts both `env_type`
-    # and `backend` as source keys for TERMINAL_ENV; gateway only accepts
-    # `backend`.  Since cli.py copies `backend` → `env_type` before the
-    # lookup, they're equivalent.  Remove `backend` from the gateway side
-    # to avoid a spurious "backend missing from cli" failure.
-    gw_keys = gw_keys - {"backend"}
 
     missing_in_gateway = cli_keys - gw_keys
     missing_in_cli = gw_keys - cli_keys

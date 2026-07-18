@@ -161,12 +161,12 @@ class TestMemoryManager:
         """Only one non-builtin provider is allowed."""
         mgr = MemoryManager()
         builtin = FakeMemoryProvider("builtin")
-        ext1 = FakeMemoryProvider("mem0")
-        ext2 = FakeMemoryProvider("hindsight")
+        ext1 = FakeMemoryProvider("external_one")
+        ext2 = FakeMemoryProvider("external_two")
         mgr.add_provider(builtin)
         mgr.add_provider(ext1)
         mgr.add_provider(ext2)  # should be rejected
-        assert [p.name for p in mgr.providers] == ["builtin", "mem0"]
+        assert [p.name for p in mgr.providers] == ["builtin", "external_one"]
         assert len(mgr.providers) == 2
 
     def test_system_prompt_merges_blocks(self):
@@ -583,14 +583,14 @@ class TestSequentialDispatchRouting:
     def test_handle_tool_call_routes_to_provider(self):
         """handle_tool_call dispatches to the correct provider's handler."""
         mgr = MemoryManager()
-        provider = FakeMemoryProvider("hindsight", tools=[
-            {"name": "hindsight_recall", "description": "Recall", "parameters": {}},
-            {"name": "hindsight_retain", "description": "Retain", "parameters": {}},
+        provider = FakeMemoryProvider("external", tools=[
+            {"name": "external_recall", "description": "Recall", "parameters": {}},
+            {"name": "external_retain", "description": "Retain", "parameters": {}},
         ])
         mgr.add_provider(provider)
 
-        result = json.loads(mgr.handle_tool_call("hindsight_recall", {"query": "alice"}))
-        assert result["handled"] == "hindsight_recall"
+        result = json.loads(mgr.handle_tool_call("external_recall", {"query": "alice"}))
+        assert result["handled"] == "external_recall"
         assert result["args"] == {"query": "alice"}
 
     def test_handle_tool_call_unknown_returns_error(self):
@@ -610,8 +610,8 @@ class TestSequentialDispatchRouting:
         builtin = FakeMemoryProvider("builtin", tools=[
             {"name": "builtin_tool", "description": "Builtin", "parameters": {}},
         ])
-        external = FakeMemoryProvider("hindsight", tools=[
-            {"name": "hindsight_recall", "description": "Recall", "parameters": {}},
+        external = FakeMemoryProvider("external", tools=[
+            {"name": "external_recall", "description": "Recall", "parameters": {}},
         ])
         mgr.add_provider(builtin)
         mgr.add_provider(external)
@@ -619,8 +619,8 @@ class TestSequentialDispatchRouting:
         r1 = json.loads(mgr.handle_tool_call("builtin_tool", {}))
         assert r1["handled"] == "builtin_tool"
 
-        r2 = json.loads(mgr.handle_tool_call("hindsight_recall", {"query": "test"}))
-        assert r2["handled"] == "hindsight_recall"
+        r2 = json.loads(mgr.handle_tool_call("external_recall", {"query": "test"}))
+        assert r2["handled"] == "external_recall"
 
     def test_tool_names_include_all_providers(self):
         """get_all_tool_names returns tools from all registered providers."""
@@ -649,7 +649,7 @@ class TestSetupFieldFiltering:
     memory setup wizard in marlow_cli/memory_setup.py.
 
     These features are generic — any memory plugin can use them in
-    get_config_schema(). Currently used by the hindsight plugin.
+    get_config_schema().
     """
 
     def _filter_fields(self, schema, provider_config):
@@ -815,7 +815,9 @@ class TestMemoryContextFencing:
         assert "</memory-context>" not in result
         assert "<memory-context>" not in result
         assert "fact one" in result
-        assert "fact two" in result
+        # An unmatched opening fence fails closed so provider-controlled
+        # trailing content cannot escape the internal-context boundary.
+        assert "fact two" not in result
 
     def test_sanitize_context_case_insensitive(self):
         from agent.memory_manager import sanitize_context
@@ -855,7 +857,7 @@ class TestCommitMemorySessionRouting:
     def test_on_session_end_fans_out(self):
         mgr = MemoryManager()
         builtin = _CommitRecorder("builtin")
-        external = _CommitRecorder("openviking")
+        external = _CommitRecorder("external")
         mgr.add_provider(builtin)
         mgr.add_provider(external)
 
@@ -968,10 +970,10 @@ class TestOnMemoryWriteBridge:
     def test_memory_manager_tool_injection_deduplicates(self):
         """Memory manager tools already in self.tools (from plugin registry)
         must not be appended again.  Duplicate function names cause 400 errors
-        on providers that enforce unique names (e.g. Xiaomi MiMo via Nous Portal).
+        on providers that enforce unique names (e.g. a provider enforcing unique names).
 
         Regression test for: duplicate mnemosyne_recall / mnemosyne_remember /
-        mnemosyne_stats in tools array → 400 from Nous Portal.
+        mnemosyne_stats in tools array → 400 from the compatible endpoint.
         """
         mgr = MemoryManager()
         p = FakeMemoryProvider("ext", tools=[

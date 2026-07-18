@@ -108,5 +108,4 @@ All three scripts use the same template: load watermark, fetch, diff, save, emit
 1. **Printing a "no new items" header every tick.** Callers rely on empty stdout = silent. If you print anything on an empty delta, you spam the channel. The shipped scripts handle this; custom scripts must too.
 2. **Expecting the first run to emit items.** It won't — first run records a baseline. If you need an initial digest, delete the state file after the first run or add a `--prime-with-latest N` flag in your own script.
 3. **Unbounded watermark growth.** The shared helper caps at 500 IDs. Raise it for high-churn feeds; lower it on constrained filesystems.
-4. **Putting the state dir where the agent's sandbox can't write.** `$MARLOW_HOME/watcher-state/` is always writable. Docker/Modal backends may not see arbitrary host paths.
-
+4. **Putting the state dir where the agent's sandbox can't write.** `$MARLOW_HOME/watcher-state/` is always writable. Docker or SSH backends may not see arbitrary host paths.

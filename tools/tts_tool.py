@@ -23,7 +23,7 @@ Custom command providers:
 
 Output formats:
 - Opus (.ogg) for Telegram voice bubbles (requires ffmpeg for Edge TTS)
-- MP3 (.mp3) for everything else (CLI, Discord, WhatsApp)
+- MP3 (.mp3) for everything else (CLI and chat platforms)
 
 Configuration is loaded from ~/.marlow/config.yaml under the 'tts:' key.
 The user chooses the provider and voice; the model just sends text.
@@ -50,7 +50,6 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Callable, Dict, Any, Optional
-from urllib.parse import urljoin
 
 from marlow_constants import display_marlow_home
 
@@ -68,18 +67,12 @@ def get_env_value(name, default=None):
         return os.getenv(name, default)
     value = _get_env_value(name)
     return default if value is None else value
-from tools.managed_tool_gateway import resolve_managed_tool_gateway
-from tools.tool_backend_helpers import (
-    managed_nous_tools_enabled,
-    nous_tool_gateway_unavailable_message,
-    prefers_gateway,
-    resolve_openai_audio_api_key,
-)
+from tools.tool_backend_helpers import resolve_openai_audio_api_key
 from tools.xai_http import marlow_xai_user_agent
 
 # ---------------------------------------------------------------------------
 # Lazy imports -- providers are imported only when actually used to avoid
-# crashing in headless environments (SSH, Docker, WSL, no PortAudio).
+# crashing in headless environments (SSH, Docker, no PortAudio).
 # ---------------------------------------------------------------------------
 
 def _import_edge_tts():
@@ -646,8 +639,6 @@ def _quote_command_tts_placeholder(value: str, quote_context: Optional[str]) -> 
             .replace("$", r"\$")
             .replace("`", r"\`")
         )
-    if os.name == "nt":
-        return subprocess.list2cmdline([value])
     return shlex.quote(value)
 
 
@@ -684,18 +675,6 @@ def _render_command_tts_template(
 def _terminate_command_tts_process_tree(proc: subprocess.Popen) -> None:
     """Best-effort termination of a shell process and all of its children."""
     if proc.poll() is not None:
-        return
-
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
-        except Exception:
-            proc.kill()
         return
 
     import psutil
@@ -740,10 +719,7 @@ def _run_command_tts(command: str, timeout: float) -> subprocess.CompletedProces
         "stderr": subprocess.PIPE,
         "text": True,
     }
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        popen_kwargs["start_new_session"] = True
+    popen_kwargs["start_new_session"] = True
 
     proc = subprocess.Popen(command, **popen_kwargs)
     try:
@@ -2207,35 +2183,16 @@ def check_tts_requirements() -> bool:
 
 
 def _resolve_openai_audio_client_config() -> tuple[str, str]:
-    """Return direct OpenAI audio config or a managed gateway fallback.
-
-    When ``tts.use_gateway`` is set in config, the Tool Gateway is preferred
-    even if direct OpenAI credentials are present.
-    """
+    """Return direct OpenAI audio configuration."""
     direct_api_key = resolve_openai_audio_api_key()
-    if direct_api_key and not prefers_gateway("tts"):
+    if direct_api_key:
         return direct_api_key, DEFAULT_OPENAI_BASE_URL
-
-    managed_gateway = resolve_managed_tool_gateway("openai-audio")
-    if managed_gateway is None:
-        message = "Neither VOICE_TOOLS_OPENAI_KEY nor OPENAI_API_KEY is set"
-        if managed_nous_tools_enabled() or prefers_gateway("tts"):
-            message += (
-                ". "
-                + nous_tool_gateway_unavailable_message(
-                    "managed OpenAI audio for TTS",
-                )
-            )
-        raise ValueError(message)
-
-    return managed_gateway.nous_user_token, urljoin(
-        f"{managed_gateway.gateway_origin.rstrip('/')}/", "v1"
-    )
+    raise ValueError("Neither VOICE_TOOLS_OPENAI_KEY nor OPENAI_API_KEY is set")
 
 
 def _has_openai_audio_backend() -> bool:
-    """Return True when OpenAI audio can use direct credentials or the managed gateway."""
-    return bool(resolve_openai_audio_api_key() or resolve_managed_tool_gateway("openai-audio"))
+    """Return True when direct OpenAI audio credentials are configured."""
+    return bool(resolve_openai_audio_api_key())
 
 
 # ===========================================================================

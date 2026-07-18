@@ -23,47 +23,20 @@ _env_path = get_env_path()
 load_marlow_dotenv(marlow_home=_env_path.parent, project_env=PROJECT_ROOT / ".env")
 
 from marlow_cli.colors import Colors, color
-from marlow_cli.models import _MARLOW_USER_AGENT
-from marlow_constants import OPENROUTER_MODELS_URL
-from utils import base_url_host_matches
-
-
 _PROVIDER_ENV_HINTS = (
-    "OPENROUTER_API_KEY",
     "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_TOKEN",
     "OPENAI_BASE_URL",
-    "NOUS_API_KEY",
-    "GLM_API_KEY",
-    "ZAI_API_KEY",
-    "Z_AI_API_KEY",
-    "KIMI_API_KEY",
-    "KIMI_CN_API_KEY",
-    "GMI_API_KEY",
-    "MINIMAX_API_KEY",
-    "MINIMAX_CN_API_KEY",
-    "KILOCODE_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "DASHSCOPE_API_KEY",
-    "HF_TOKEN",
-    "OPENCODE_ZEN_API_KEY",
-    "OPENCODE_GO_API_KEY",
-    "XIAOMI_API_KEY",
-    "TOKENHUB_API_KEY",
+    "CUSTOM_BASE_URL",
+    "LM_BASE_URL",
+    "LM_API_KEY",
 )
 
 
-from marlow_constants import is_termux as _is_termux
-
-
 def _python_install_cmd() -> str:
-    return "python -m pip install" if _is_termux() else "uv pip install"
+    return "uv pip install"
 
 
 def _system_package_install_cmd(pkg: str) -> str:
-    if _is_termux():
-        return f"pkg install {pkg}"
     if sys.platform == "darwin":
         return f"brew install {pkg}"
     return f"sudo apt install {pkg}"
@@ -75,26 +48,6 @@ def _safe_which(cmd: str) -> str | None:
         return shutil.which(cmd)
     except Exception:
         return None
-
-
-def _termux_browser_setup_steps(node_installed: bool) -> list[str]:
-    steps: list[str] = []
-    step = 1
-    if not node_installed:
-        steps.append(f"{step}) pkg install nodejs")
-        step += 1
-    steps.append(f"{step}) npm install -g agent-browser")
-    steps.append(f"{step + 1}) agent-browser install")
-    return steps
-
-
-def _termux_install_all_fallback_notes() -> list[str]:
-    return [
-        "Termux install profile: use .[termux-all] for broad compatibility (installer default on Termux).",
-        "Matrix E2EE extra is excluded on Termux (python-olm currently fails to build).",
-        "Local faster-whisper extra is excluded on Termux (ctranslate2/av build path unavailable).",
-        "STT fallback: use Groq Whisper (set GROQ_API_KEY) or OpenAI Whisper (set VOICE_TOOLS_OPENAI_KEY).",
-    ]
 
 
 def _has_provider_env_config(content: str) -> bool:
@@ -130,36 +83,6 @@ def _apply_doctor_tool_availability_overrides(available: list[str], unavailable:
             continue
         updated_unavailable.append(item)
     return updated_available, updated_unavailable
-
-
-def _has_healthy_oauth_fallback_for_apikey_provider(provider_label: str) -> bool:
-    """Return True when a direct API-key probe failure is non-blocking.
-
-    Some provider families support both a direct API-key path and a separate
-    OAuth runtime path. When the OAuth path is already healthy, doctor should
-    still show a failed API-key connectivity row, but it should not promote
-    that direct-key problem into the final blocking summary.
-    """
-    normalized = (provider_label or "").strip().lower()
-    if normalized in {"google / gemini", "gemini"}:
-        try:
-            from marlow_cli.auth import get_gemini_oauth_auth_status
-            return bool((get_gemini_oauth_auth_status() or {}).get("logged_in"))
-        except Exception:
-            return False
-    if normalized == "minimax":
-        try:
-            from marlow_cli.auth import get_minimax_oauth_auth_status
-            return bool((get_minimax_oauth_auth_status() or {}).get("logged_in"))
-        except Exception:
-            return False
-    if normalized == "xai":
-        try:
-            from marlow_cli.auth import get_xai_oauth_auth_status
-            return bool((get_xai_oauth_auth_status() or {}).get("logged_in"))
-        except Exception:
-            return False
-    return False
 
 
 def check_ok(text: str, detail: str = ""):
@@ -249,7 +172,7 @@ def _check_s6_supervision(issues: list[str]) -> None:
     container so host runs aren't cluttered with irrelevant output.
 
     Reports:
-      - Whether the main-marlow and dashboard static services are up
+      - Whether the main Marlow service is up
       - How many per-profile gateway slots are registered (via
         ``S6ServiceManager.list_profile_gateways()``) and how many are
         currently supervised as ``up``
@@ -271,7 +194,7 @@ def _check_s6_supervision(issues: list[str]) -> None:
 
     # Static services. They live under /run/service/ via s6-rc symlinks,
     # so the same s6-svstat probe works.
-    for static in ("main-marlow", "dashboard"):
+    for static in ("main-marlow",):
         if mgr.is_running(static):
             check_ok(f"{static}: up")
         else:
@@ -332,100 +255,6 @@ def _check_gateway_service_linger(issues: list[str]) -> None:
     else:
         check_warn("Could not verify systemd linger", f"({linger_detail})")
 
-
-_APIKEY_PROVIDERS_CACHE: list | None = None
-
-
-def _build_apikey_providers_list() -> list:
-    """Build the API-key provider health-check list once and cache it.
-
-    Tuple format: (name, env_vars, default_url, base_env, supports_models_endpoint)
-    Base list augmented with any ProviderProfile with auth_type="api_key" not
-    already present — adding plugins/model-providers/<name>/ is sufficient to get into doctor.
-    """
-    _static = [
-        ("Z.AI / GLM",      ("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"), "https://api.z.ai/api/paas/v4/models", "GLM_BASE_URL", True),
-        ("Kimi / Moonshot",  ("KIMI_API_KEY",),                              "https://api.moonshot.ai/v1/models",   "KIMI_BASE_URL", True),
-        ("StepFun Step Plan", ("STEPFUN_API_KEY",),                          "https://api.stepfun.ai/step_plan/v1/models", "STEPFUN_BASE_URL", True),
-        ("Kimi / Moonshot (China)", ("KIMI_CN_API_KEY",),                    "https://api.moonshot.cn/v1/models",   None, True),
-        ("Arcee AI",         ("ARCEEAI_API_KEY",),                           "https://api.arcee.ai/api/v1/models",  "ARCEE_BASE_URL", True),
-        ("GMI Cloud",        ("GMI_API_KEY",),                               "https://api.gmi-serving.com/v1/models", "GMI_BASE_URL", True),
-        ("DeepSeek",         ("DEEPSEEK_API_KEY",),                          "https://api.deepseek.com/v1/models",  "DEEPSEEK_BASE_URL", True),
-        ("Hugging Face",     ("HF_TOKEN",),                                  "https://router.huggingface.co/v1/models", "HF_BASE_URL", True),
-        ("NVIDIA NIM",       ("NVIDIA_API_KEY",),                            "https://integrate.api.nvidia.com/v1/models", "NVIDIA_BASE_URL", True),
-        ("Alibaba/DashScope", ("DASHSCOPE_API_KEY",),                        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models", "DASHSCOPE_BASE_URL", True),
-        # MiniMax global: /v1 endpoint supports /models.
-        ("MiniMax",          ("MINIMAX_API_KEY",),                           "https://api.minimax.io/v1/models",    "MINIMAX_BASE_URL", True),
-        # MiniMax CN: /v1 endpoint does NOT support /models (returns 404).
-        ("MiniMax (China)",  ("MINIMAX_CN_API_KEY",),                        "https://api.minimaxi.com/v1/models",  "MINIMAX_CN_BASE_URL", False),
-        ("Kilo Code",        ("KILOCODE_API_KEY",),                          "https://api.kilo.ai/api/gateway/models", "KILOCODE_BASE_URL", True),
-        ("OpenCode Zen",     ("OPENCODE_ZEN_API_KEY",),                      "https://opencode.ai/zen/v1/models",  "OPENCODE_ZEN_BASE_URL", True),
-        # OpenCode Go has no shared /models endpoint; skip the health check.
-        ("OpenCode Go",      ("OPENCODE_GO_API_KEY",),                       None,                                  "OPENCODE_GO_BASE_URL", False),
-    ]
-    _known_names = {t[0] for t in _static}
-    # Also index by profile canonical name so profiles without display_name
-    # don't create duplicate entries for providers already in the static list.
-    _known_canonical: set[str] = set()
-    _name_to_canonical = {
-        "Z.AI / GLM": "zai", "Kimi / Moonshot": "kimi-coding",
-        "StepFun Step Plan": "stepfun", "Kimi / Moonshot (China)": "kimi-coding-cn",
-        "Arcee AI": "arcee", "GMI Cloud": "gmi", "DeepSeek": "deepseek",
-        "Hugging Face": "huggingface", "NVIDIA NIM": "nvidia",
-        "Alibaba/DashScope": "alibaba", "MiniMax": "minimax",
-        "MiniMax (China)": "minimax-cn",
-        "Kilo Code": "kilocode", "OpenCode Zen": "opencode-zen",
-        "OpenCode Go": "opencode-go",
-    }
-    for _label, _canonical in _name_to_canonical.items():
-        _known_canonical.add(_canonical)
-    # Providers that already have a dedicated health check above the generic
-    # API-key loop (with custom headers/auth). Skip their pluggable profiles
-    # here so the generic Bearer-auth loop doesn't run a duplicate, broken
-    # check (e.g. Anthropic native API requires x-api-key, not Bearer).
-    _dedicated_canonical = {"anthropic", "openrouter", "bedrock"}
-    _known_canonical.update(_dedicated_canonical)
-    try:
-        from providers import list_providers
-        from providers.base import ProviderProfile as _PP
-        try:
-            from marlow_cli.providers import normalize_provider as _normalize_provider
-        except Exception:  # pragma: no cover - normalization is best-effort
-            def _normalize_provider(_name: str) -> str:
-                return (_name or "").strip().lower()
-        for _pp in list_providers():
-            if not isinstance(_pp, _PP) or _pp.auth_type != "api_key" or not _pp.env_vars:
-                continue
-            _label = _pp.display_name or _pp.name
-            if _label in _known_names or _pp.name in _known_canonical:
-                continue
-            _candidates = {_normalize_provider(_pp.name)}
-            for _alias in (_pp.aliases or ()):
-                _candidates.add(_normalize_provider(_alias))
-            if _candidates & _dedicated_canonical:
-                continue
-            # Separate API-key vars from base-URL override vars — the health-check
-            # loop sends the first found value as Authorization: Bearer, so a URL
-            # string must never be picked.
-            _key_vars = tuple(
-                v for v in _pp.env_vars
-                if not v.endswith("_BASE_URL") and not v.endswith("_URL")
-            )
-            _base_var = next(
-                (v for v in _pp.env_vars if v.endswith("_BASE_URL") or v.endswith("_URL")),
-                None,
-            )
-            if not _key_vars:
-                continue
-            _models_url = (
-                (_pp.models_url or (_pp.base_url.rstrip("/") + "/models"))
-                if _pp.base_url else None
-            )
-            _hc = getattr(_pp, "supports_health_check", True)
-            _static.append((_label, _key_vars, _models_url, _base_var, _hc))
-    except Exception:
-        pass
-    return _static
 
 
 def run_doctor(args):
@@ -625,171 +454,40 @@ def run_doctor(args):
     if config_path.exists():
         check_ok(f"{_DHH}/config.yaml exists")
 
-        # Validate model.provider and model.default values
+        # Validate the retained Codex and compatible-endpoint provider ids.
         try:
             import yaml as _yaml
+
             cfg = _yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
             model_section = cfg.get("model") or {}
-            provider_raw = (model_section.get("provider") or "").strip()
+            if isinstance(model_section, str):
+                model_section = {"default": model_section}
+            provider_raw = str(model_section.get("provider") or "").strip()
             provider = provider_raw.lower()
-            default_model = (model_section.get("default") or model_section.get("model") or "").strip()
-
-            known_providers: set = set()
-            try:
-                from marlow_cli.auth import (
-                    PROVIDER_REGISTRY,
-                    resolve_provider as _resolve_auth_provider,
-                )
-                known_providers = set(PROVIDER_REGISTRY.keys()) | {"openrouter", "custom", "auto"}
-            except Exception:
-                _resolve_auth_provider = None
-                pass
-            try:
-                from marlow_cli.config import get_compatible_custom_providers as _compatible_custom_providers
-                from marlow_cli.providers import (
-                    normalize_provider as _normalize_catalog_provider,
-                    resolve_provider_full as _resolve_provider_full,
-                )
-            except Exception:
-                _compatible_custom_providers = None
-                _normalize_catalog_provider = None
-                _resolve_provider_full = None
-
-            custom_providers = []
-            if _compatible_custom_providers is not None:
-                try:
-                    custom_providers = _compatible_custom_providers(cfg)
-                except Exception:
-                    custom_providers = []
-
+            known_providers = {
+                "auto", "custom", "local", "lmstudio", "openai-codex",
+            }
             user_providers = cfg.get("providers")
             if isinstance(user_providers, dict):
-                known_providers.update(str(name).strip().lower() for name in user_providers if str(name).strip())
-            for entry in custom_providers:
-                if not isinstance(entry, dict):
-                    continue
-                name = str(entry.get("name") or "").strip()
-                if name:
-                    known_providers.add("custom:" + name.lower().replace(" ", "-"))
-
-            valid_provider_ids = set(known_providers)
-            provider_ids_to_accept = {provider} if provider else set()
-            if _normalize_catalog_provider is not None:
-                for known_provider in known_providers:
-                    try:
-                        valid_provider_ids.add(_normalize_catalog_provider(known_provider))
-                    except Exception:
-                        continue
-
-            runtime_provider = provider
-            if (
-                provider
-                and _resolve_auth_provider is not None
-                and provider not in {"auto", "custom"}
-            ):
-                try:
-                    runtime_provider = _resolve_auth_provider(provider)
-                    provider_ids_to_accept.add(runtime_provider)
-                except Exception:
-                    runtime_provider = provider
-
-            catalog_provider = provider
-            if (
-                provider
-                and _resolve_provider_full is not None
-                and provider not in {"auto", "custom"}
-            ):
-                provider_def = _resolve_provider_full(provider, user_providers, custom_providers)
-                catalog_provider = provider_def.id if provider_def is not None else None
-                if catalog_provider is not None:
-                    provider_ids_to_accept.add(catalog_provider)
-
-            if provider and provider != "auto":
-                if catalog_provider is None or (
-                    known_providers
-                    and not (provider_ids_to_accept & valid_provider_ids)
-                ):
-                    known_list = ", ".join(sorted(known_providers)) if known_providers else "(unavailable)"
-                    _fail_and_issue(
-                        f"model.provider '{provider_raw}' is not a recognised provider",
-                        f"(known: {known_list})",
-                        (
-                            f"model.provider '{provider_raw}' is unknown. "
-                            f"Valid providers: {known_list}. "
-                            f"Fix: run 'marlow config set model.provider <valid_provider>'"
-                        ),
-                        issues,
-                    )
-
-            # Warn if model is set to a provider-prefixed name on a provider that doesn't use them
-            provider_for_policy = runtime_provider or catalog_provider
-            providers_accepting_vendor_slugs = {
-                "openrouter",
-                "custom",
-                "auto",
-                "kilocode",
-                "opencode-zen",
-                "huggingface",
-                "lmstudio",
-            }
-            if (
-                default_model
-                and "/" in default_model
-                and provider_for_policy
-                and provider_for_policy not in providers_accepting_vendor_slugs
-            ):
-                check_warn(
-                    f"model.default '{default_model}' uses a vendor/model slug but provider is '{provider_raw}'",
-                    "(vendor-prefixed slugs belong to aggregators like openrouter)",
+                known_providers.update(
+                    str(name).strip().lower() for name in user_providers
                 )
-                issues.append(
-                    f"model.default '{default_model}' is vendor-prefixed but model.provider is '{provider_raw}'. "
-                    "Either set model.provider to 'openrouter', or drop the vendor prefix."
+            from marlow_cli.config import load_custom_provider_entries
+
+            for entry in load_custom_provider_entries(cfg):
+                if isinstance(entry, dict) and entry.get("name"):
+                    slug = str(entry["name"]).strip().lower().replace(" ", "-")
+                    known_providers.add(f"custom:{slug}")
+            if provider and provider not in known_providers:
+                known_list = ", ".join(sorted(known_providers))
+                _fail_and_issue(
+                    f"model.provider '{provider_raw}' is not a recognised provider",
+                    f"(known: {known_list})",
+                    "Set model.provider to Codex or a configured compatible endpoint.",
+                    issues,
                 )
-
-            # Check credentials for the configured provider.
-            # Limit to API-key providers in PROVIDER_REGISTRY — other provider
-            # types (OAuth, SDK, anthropic/custom/auto) have their own env-var
-            # checks elsewhere in doctor, and get_auth_status() returns a bare
-            # {logged_in: False} for anything it doesn't explicitly dispatch,
-            # which would produce false positives.
-            if runtime_provider and runtime_provider not in ("auto", "custom"):
-                try:
-                    if runtime_provider == "openrouter":
-                        from marlow_cli.config import get_env_value
-
-                        configured = bool(
-                            str(get_env_value("OPENROUTER_API_KEY") or "").strip()
-                            or str(get_env_value("OPENAI_API_KEY") or "").strip()
-                        )
-                    else:
-                        from marlow_cli.auth import PROVIDER_REGISTRY, get_auth_status
-
-                        pconfig = PROVIDER_REGISTRY.get(runtime_provider)
-                        configured = True
-                        if pconfig and getattr(pconfig, "auth_type", "") == "api_key":
-                            status = get_auth_status(runtime_provider) or {}
-                            configured = bool(
-                                status.get("configured")
-                                or status.get("logged_in")
-                                or status.get("api_key")
-                            )
-                    if not configured:
-                        _fail_and_issue(
-                            f"model.provider '{runtime_provider}' is set but no API key is configured",
-                            "(check ~/.marlow/.env or run 'marlow setup')",
-                            (
-                                f"No credentials found for provider '{runtime_provider}'. "
-                                f"Run 'marlow setup' or set the provider's API key in {_DHH}/.env, "
-                                f"or switch providers with 'marlow config set model.provider <name>'"
-                            ),
-                            issues,
-                        )
-                except Exception:
-                    pass
-
-        except Exception as e:
-            check_warn("Could not validate model/provider config", f"({e})")
+        except Exception as exc:
+            check_warn("Could not validate model/provider config", f"({exc})")
     else:
         fallback_config = PROJECT_ROOT / 'cli-config.yaml'
         if fallback_config.exists():
@@ -873,7 +571,7 @@ def run_doctor(args):
         except Exception:
             pass
 
-        # Validate config structure (catches malformed custom_providers, etc.)
+        # Validate config structure before checking runtime credentials.
         try:
             from marlow_cli.config import validate_config_structure
             config_issues = validate_config_structure()
@@ -891,47 +589,10 @@ def run_doctor(args):
         except Exception:
             pass
 
-    _section("xAI Model Retirement (May 15, 2026)")
-
-    try:
-        from marlow_cli.config import load_config
-        from marlow_cli.xai_retirement import (
-            MIGRATION_GUIDE_URL,
-            find_retired_xai_refs,
-            format_issue,
-        )
-
-        _xai_cfg = load_config()
-        retired_refs = find_retired_xai_refs(_xai_cfg)
-        if not retired_refs:
-            check_ok("No retired xAI models in config")
-        else:
-            for ref in retired_refs:
-                check_warn(format_issue(ref))
-            check_info(f"Migration guide: {MIGRATION_GUIDE_URL}")
-            manual_issues.append(
-                f"Update {len(retired_refs)} retired xAI model reference(s) "
-                f"in config.yaml — see {MIGRATION_GUIDE_URL}"
-            )
-    except Exception as _xai_check_err:
-        check_warn("xAI retirement check skipped", f"({_xai_check_err})")
 
     _section("Auth Providers")
-
     try:
-        from marlow_cli.auth import (
-            get_nous_auth_status,
-            get_codex_auth_status,
-            get_gemini_oauth_auth_status,
-            get_minimax_oauth_auth_status,
-        )
-
-        nous_status = get_nous_auth_status()
-        if nous_status.get("logged_in"):
-            check_ok("Nous Portal auth", "(logged in)")
-        else:
-            check_warn("Nous Portal auth", "(not logged in)")
-
+        from marlow_cli.auth import get_codex_auth_status
         codex_status = get_codex_auth_status()
         if codex_status.get("logged_in"):
             check_ok("OpenAI Codex auth", "(logged in)")
@@ -939,53 +600,10 @@ def run_doctor(args):
             check_warn("OpenAI Codex auth", "(not logged in)")
             if codex_status.get("error"):
                 check_info(codex_status["error"])
-            # Native OAuth uses Marlow' own device-code flow — the Codex CLI is
-            # only needed to import existing tokens from ~/.codex/auth.json.
-            # Attach the hint to the Codex auth row so it doesn't read as
-            # remediation for whichever provider happens to print next (#27975).
             if not _safe_which("codex"):
-                check_info(
-                    "codex CLI not installed "
-                    "(optional — only required to import tokens "
-                    "from an existing Codex CLI login)"
-                )
-
-        gemini_status = get_gemini_oauth_auth_status()
-        if gemini_status.get("logged_in"):
-            email = gemini_status.get("email") or ""
-            project = gemini_status.get("project_id") or ""
-            pieces = []
-            if email:
-                pieces.append(email)
-            if project:
-                pieces.append(f"project={project}")
-            suffix = f" ({', '.join(pieces)})" if pieces else ""
-            check_ok("Google Gemini OAuth", f"(logged in{suffix})")
-        else:
-            check_warn("Google Gemini OAuth", "(not logged in)")
-
-        minimax_status = get_minimax_oauth_auth_status()
-        if minimax_status.get("logged_in"):
-            region = minimax_status.get("region", "global")
-            check_ok("MiniMax OAuth", f"(logged in, region={region})")
-        else:
-            check_warn("MiniMax OAuth", "(not logged in)")
-    except Exception as e:
-        check_warn("Auth provider status", f"(could not check: {e})")
-
-    # xAI OAuth — separate try/except so an import failure here cannot
-    # disrupt the already-printed Nous/Codex/Gemini/MiniMax rows above.
-    try:
-        from marlow_cli.auth import get_xai_oauth_auth_status
-        xai_oauth_status = get_xai_oauth_auth_status() or {}
-        if xai_oauth_status.get("logged_in"):
-            check_ok("xAI OAuth", "(logged in)")
-        else:
-            check_warn("xAI OAuth", "(not logged in)")
-            if xai_oauth_status.get("error"):
-                check_info(xai_oauth_status["error"])
-    except Exception:
-        pass
+                check_info("codex CLI not installed (optional; only needed to import an existing login)")
+    except Exception as exc:
+        check_warn("OpenAI Codex auth", f"(could not check: {exc})")
 
     _section("Directory Structure")
     marlow_home = MARLOW_HOME
@@ -1100,7 +718,7 @@ def run_doctor(args):
     _check_gateway_service_linger(issues)
     _check_s6_supervision(issues)
 
-    if sys.platform != "win32":
+    if os.name == "posix":
         _section("Command Installation")
         # Determine the venv entry point location
         _venv_bin = None
@@ -1111,14 +729,8 @@ def run_doctor(args):
                 break
 
         # Determine the expected command link directory (mirrors install.sh logic)
-        _prefix = os.environ.get("PREFIX", "")
-        _is_termux_env = bool(os.environ.get("TERMUX_VERSION")) or "com.termux/files/usr" in _prefix
-        if _is_termux_env and _prefix:
-            _cmd_link_dir = Path(_prefix) / "bin"
-            _cmd_link_display = "$PREFIX/bin"
-        else:
-            _cmd_link_dir = Path.home() / ".local" / "bin"
-            _cmd_link_display = "~/.local/bin"
+        _cmd_link_dir = Path.home() / ".local" / "bin"
+        _cmd_link_display = "~/.local/bin"
         _cmd_link = _cmd_link_dir / "marlow"
 
         if _venv_bin is None:
@@ -1231,8 +843,6 @@ def run_doctor(args):
             )
     elif _safe_which("docker"):
         check_ok("docker", "(optional)")
-    elif _is_termux():
-        check_info("Docker backend is not available inside Termux (expected on Android)")
     elif running_in_container:
         pass  # already explained above
     else:
@@ -1274,29 +884,6 @@ def run_doctor(args):
                 issues,
             )
     
-    # Daytona (if using daytona backend)
-    if terminal_env == "daytona":
-        daytona_key = os.getenv("DAYTONA_API_KEY")
-        if daytona_key:
-            check_ok("Daytona API key", "(configured)")
-        else:
-            _fail_and_issue(
-                "DAYTONA_API_KEY not set",
-                "(required for TERMINAL_ENV=daytona)",
-                "Set DAYTONA_API_KEY environment variable",
-                issues,
-            )
-        try:
-            from daytona import Daytona  # noqa: F401 — SDK presence check
-            check_ok("daytona SDK", "(installed)")
-        except ImportError:
-            _fail_and_issue(
-                "daytona SDK not installed",
-                "(pip install daytona)",
-                "Install daytona SDK: pip install daytona",
-                issues,
-            )
-
     # Node.js + agent-browser (for browser automation tools)
     if _safe_which("node"):
         check_ok("Node.js")
@@ -1309,12 +896,6 @@ def run_doctor(args):
         elif shutil.which("agent-browser"):
             check_ok("agent-browser", "(browser automation)")
             agent_browser_ok = True
-        elif _is_termux():
-            check_info("agent-browser is not installed (expected in the tested Termux path)")
-            check_info("Install it manually later with: npm install -g agent-browser && agent-browser install")
-            check_info("Termux browser setup:")
-            for step in _termux_browser_setup_steps(node_installed=True):
-                check_info(step)
         else:
             check_warn("agent-browser not installed", "(run: npm install)")
 
@@ -1322,16 +903,13 @@ def run_doctor(args):
         # agent-browser is found but no Playwright-managed Chromium is on disk
         # (tools/browser_tool.py::check_browser_requirements filters them out
         # before the agent ever sees them).  Reuse the exact predicate it uses
-        # so the two checks cannot diverge.  Skip on Termux (not a tested
-        # path).
-        if agent_browser_ok and not _is_termux():
+        # so the two checks cannot diverge.
+        if agent_browser_ok:
             try:
                 # Lazy import: browser_tool is a ~150KB module we don't want
                 # to eagerly load in every `marlow doctor` invocation.
                 from tools.browser_tool import (
                     _chromium_installed,
-                    _is_camofox_mode,
-                    _get_cloud_provider,
                     _get_cdp_override,
                     _using_lightpanda_engine,
                 )
@@ -1340,13 +918,9 @@ def run_doctor(args):
                 # surfaced elsewhere; don't crash doctor.
                 pass
             else:
-                # Only warn about Chromium if the installed engine actually
-                # requires it: Camofox, CDP override, a cloud provider, or
-                # Lightpanda all bypass the local Chromium requirement.
+                # CDP and Lightpanda use an externally supplied browser engine.
                 skip_chromium_check = (
-                    _is_camofox_mode()
-                    or bool(_get_cdp_override())
-                    or _get_cloud_provider() is not None
+                    bool(_get_cdp_override())
                     or _using_lightpanda_engine()
                 )
                 if not skip_chromium_check:
@@ -1357,38 +931,21 @@ def run_doctor(args):
                             "Playwright Chromium not installed",
                             "(browser_* tools will be hidden from the agent)",
                         )
-                        if sys.platform == "win32":
-                            check_info(
-                                f"Install with: cd {PROJECT_ROOT} && "
-                                "npx playwright install chromium"
-                            )
-                        else:
-                            check_info(
-                                f"Install with: cd {PROJECT_ROOT} && "
-                                "npx playwright install --with-deps chromium"
-                            )
-    elif _is_termux():
-        check_info("Node.js not found (browser tools are optional in the tested Termux path)")
-        check_info("Install Node.js on Termux with: pkg install nodejs")
-        check_info("Termux browser setup:")
-        for step in _termux_browser_setup_steps(node_installed=False):
-            check_info(step)
+                        check_info(
+                            f"Install with: cd {PROJECT_ROOT} && "
+                            "npx playwright install --with-deps chromium"
+                        )
     else:
         check_warn("Node.js not found", "(optional, needed for browser tools)")
     
     # npm audit for all Node.js packages
     _npm_bin = _safe_which("npm")
     if _npm_bin:
-        npm_dirs = [
-            (PROJECT_ROOT, "Browser tools (agent-browser)"),
-            (PROJECT_ROOT / "scripts" / "whatsapp-bridge", "WhatsApp bridge"),
-        ]
+        npm_dirs = [(PROJECT_ROOT, "Browser tools (agent-browser)")]
         for npm_dir, label in npm_dirs:
             if not (npm_dir / "node_modules").exists():
                 continue
             try:
-                # Use resolved absolute path so Windows can execute
-                # npm.cmd (CreateProcessW can't run bare .cmd names).
                 audit_result = subprocess.run(
                     [_npm_bin, "audit", "--json"],
                     cwd=str(npm_dir),
@@ -1421,441 +978,6 @@ def run_doctor(args):
             except Exception:
                 pass
 
-    if _is_termux():
-        check_info("Termux compatibility fallbacks:")
-        for note in _termux_install_all_fallback_notes():
-            check_info(note)
-
-    _section("API Connectivity")
-    # Refactor: every connectivity probe below is HTTP-bound and fully
-    # independent. Running them in series spent ~5s wall on a typical
-    # workstation (2s of that was boto3's IMDS lookup for AWS credentials,
-    # which times out unless you're actually on EC2). Threading them with
-    # a small executor pool collapses the section to roughly the slowest
-    # single probe — about 2s — without changing the output format.
-    #
-    # Each ``_probe_*`` helper is a pure function: takes its inputs,
-    # makes one HTTP/SDK call, returns a ``_ConnectivityResult`` carrying
-    # the line(s) to print and any issue strings to append. No globals,
-    # no shared mutable state, no printing inside the workers.
-    import concurrent.futures as _futures
-    from collections import namedtuple as _namedtuple
-
-    _ConnectivityResult = _namedtuple(
-        "_ConnectivityResult", ["label", "lines", "issues"]
-    )
-    _probes: list = []  # list of (label, callable) submitted in display order
-
-    def _probe_openrouter() -> _ConnectivityResult:
-        key = os.getenv("OPENROUTER_API_KEY")
-        if not key:
-            return _ConnectivityResult(
-                "OpenRouter API",
-                [(color("⚠", Colors.YELLOW), "OpenRouter API",
-                  color("(not configured)", Colors.DIM))],
-                [],
-            )
-        try:
-            import httpx
-            r = httpx.get(
-                OPENROUTER_MODELS_URL,
-                headers={"Authorization": f"Bearer {key}"},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                return _ConnectivityResult(
-                    "OpenRouter API",
-                    [(color("✓", Colors.GREEN), "OpenRouter API", "")],
-                    [],
-                )
-            if r.status_code == 401:
-                return _ConnectivityResult(
-                    "OpenRouter API",
-                    [(color("✗", Colors.RED), "OpenRouter API",
-                      color("(invalid API key)", Colors.DIM))],
-                    ["Check OPENROUTER_API_KEY in .env"],
-                )
-            if r.status_code == 402:
-                return _ConnectivityResult(
-                    "OpenRouter API",
-                    [(color("✗", Colors.RED), "OpenRouter API",
-                      color("(out of credits — payment required)", Colors.DIM))],
-                    ["OpenRouter account has insufficient credits. "
-                     "Fix: run 'marlow config set model.provider <provider>' "
-                     "to switch providers, or fund your OpenRouter account "
-                     "at https://openrouter.ai/settings/credits"],
-                )
-            if r.status_code == 429:
-                return _ConnectivityResult(
-                    "OpenRouter API",
-                    [(color("✗", Colors.RED), "OpenRouter API",
-                      color("(rate limited)", Colors.DIM))],
-                    ["OpenRouter rate limit hit — consider switching to "
-                     "a different provider or waiting"],
-                )
-            return _ConnectivityResult(
-                "OpenRouter API",
-                [(color("✗", Colors.RED), "OpenRouter API",
-                  color(f"(HTTP {r.status_code})", Colors.DIM))],
-                [],
-            )
-        except Exception as e:
-            return _ConnectivityResult(
-                "OpenRouter API",
-                [(color("✗", Colors.RED), "OpenRouter API",
-                  color(f"({e})", Colors.DIM))],
-                ["Check network connectivity"],
-            )
-
-    def _probe_anthropic() -> _ConnectivityResult:
-        from marlow_cli.auth import get_anthropic_key
-        key = get_anthropic_key()
-        if not key:
-            return _ConnectivityResult("Anthropic API", [], [])
-        try:
-            import httpx
-            from agent.anthropic_adapter import (
-                _is_oauth_token,
-                _COMMON_BETAS,
-                _OAUTH_ONLY_BETAS,
-                _CONTEXT_1M_BETA,
-            )
-            headers = {"anthropic-version": "2023-06-01"}
-            is_oauth = _is_oauth_token(key)
-            if is_oauth:
-                headers["Authorization"] = f"Bearer {key}"
-                headers["anthropic-beta"] = ",".join(_COMMON_BETAS + _OAUTH_ONLY_BETAS)
-            else:
-                headers["x-api-key"] = key
-            r = httpx.get(
-                "https://api.anthropic.com/v1/models",
-                headers=headers, timeout=10,
-            )
-            # Reactive recovery: OAuth subscriptions without 1M context reject the
-            # request with 400 "long context beta is not yet available for this
-            # subscription". Retry once with that beta stripped so the doctor
-            # check doesn't falsely report Anthropic as unreachable.
-            if (
-                is_oauth
-                and r.status_code == 400
-                and "long context beta" in r.text.lower()
-                and "not yet available" in r.text.lower()
-            ):
-                headers["anthropic-beta"] = ",".join(
-                    [b for b in _COMMON_BETAS if b != _CONTEXT_1M_BETA]
-                    + list(_OAUTH_ONLY_BETAS)
-                )
-                r = httpx.get(
-                    "https://api.anthropic.com/v1/models",
-                    headers=headers, timeout=10,
-                )
-            if r.status_code == 200:
-                return _ConnectivityResult(
-                    "Anthropic API",
-                    [(color("✓", Colors.GREEN), "Anthropic API", "")],
-                    [],
-                )
-            if r.status_code == 401:
-                return _ConnectivityResult(
-                    "Anthropic API",
-                    [(color("✗", Colors.RED), "Anthropic API",
-                      color("(invalid API key)", Colors.DIM))],
-                    [],
-                )
-            return _ConnectivityResult(
-                "Anthropic API",
-                [(color("⚠", Colors.YELLOW), "Anthropic API",
-                  color("(couldn't verify)", Colors.DIM))],
-                [],
-            )
-        except Exception as e:
-            return _ConnectivityResult(
-                "Anthropic API",
-                [(color("⚠", Colors.YELLOW), "Anthropic API",
-                  color(f"({e})", Colors.DIM))],
-                [],
-            )
-
-    def _probe_apikey_provider(pname, env_vars, default_url, base_env,
-                               supports_health_check) -> _ConnectivityResult:
-        key = ""
-        for ev in env_vars:
-            key = os.getenv(ev, "")
-            if key:
-                break
-        if not key:
-            return _ConnectivityResult(pname, [], [])
-        label = pname.ljust(20)
-        if not supports_health_check:
-            return _ConnectivityResult(
-                pname,
-                [(color("✓", Colors.GREEN), label,
-                  color("(key configured)", Colors.DIM))],
-                [],
-            )
-        try:
-            import httpx
-            base = os.getenv(base_env, "") if base_env else ""
-            # Auto-detect Kimi Code keys (sk-kimi-) → api.kimi.com/coding/v1
-            # (OpenAI-compat surface, which exposes /models for health check).
-            if not base and key.startswith("sk-kimi-"):
-                base = "https://api.kimi.com/coding/v1"
-            # Anthropic-compat endpoints (/anthropic, api.kimi.com/coding
-            # with no /v1) don't support /models. Rewrite to OpenAI-compat
-            # /v1 surface for health checks.
-            if base and base.rstrip("/").endswith("/anthropic"):
-                from agent.auxiliary_client import _to_openai_base_url
-                base = _to_openai_base_url(base)
-            if base_url_host_matches(base, "api.kimi.com") and base.rstrip("/").endswith("/coding"):
-                base = base.rstrip("/") + "/v1"
-            url = (base.rstrip("/") + "/models") if base else default_url
-            headers = {
-                "Authorization": f"Bearer {key}",
-                "User-Agent": _MARLOW_USER_AGENT,
-            }
-            if base_url_host_matches(base, "api.kimi.com"):
-                headers["User-Agent"] = "claude-code/0.1.0"
-            # Google's Generative Language API (generativelanguage.googleapis.com)
-            # rejects ``Authorization: Bearer <api-key>`` with 401
-            # ``ACCESS_TOKEN_TYPE_UNSUPPORTED`` — that header is reserved for
-            # OAuth 2 access tokens, not plain API keys. Plain keys use
-            # ``x-goog-api-key`` (or ``?key=``). Without this, a perfectly valid
-            # GOOGLE_API_KEY/GEMINI_API_KEY always shows red in ``marlow doctor``.
-            if url and base_url_host_matches(url, "generativelanguage.googleapis.com"):
-                headers.pop("Authorization", None)
-                headers["x-goog-api-key"] = key
-            r = httpx.get(url, headers=headers, timeout=10)
-            if (
-                pname == "Alibaba/DashScope"
-                and not base
-                and r.status_code == 401
-            ):
-                r = httpx.get(
-                    "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
-                    headers=headers, timeout=10,
-                )
-            if r.status_code == 200:
-                return _ConnectivityResult(
-                    pname,
-                    [(color("✓", Colors.GREEN), label, "")],
-                    [],
-                )
-            if r.status_code == 401:
-                return _ConnectivityResult(
-                    pname,
-                    [(color("✗", Colors.RED), label,
-                      color("(invalid API key)", Colors.DIM))],
-                    [f"Check {env_vars[0]} in .env"],
-                )
-            return _ConnectivityResult(
-                pname,
-                [(color("⚠", Colors.YELLOW), label,
-                  color(f"(HTTP {r.status_code})", Colors.DIM))],
-                [],
-            )
-        except Exception as e:
-            return _ConnectivityResult(
-                pname,
-                [(color("⚠", Colors.YELLOW), label,
-                  color(f"({e})", Colors.DIM))],
-                [],
-            )
-
-    def _probe_bedrock() -> _ConnectivityResult:
-        try:
-            from agent.bedrock_adapter import (
-                has_aws_credentials,
-                resolve_aws_auth_env_var,
-                resolve_bedrock_region,
-            )
-        except ImportError:
-            return _ConnectivityResult("AWS Bedrock", [], [])
-        if not has_aws_credentials():
-            return _ConnectivityResult("AWS Bedrock", [], [])
-        auth_var = resolve_aws_auth_env_var()
-        region = resolve_bedrock_region()
-        label = "AWS Bedrock".ljust(20)
-        try:
-            import boto3
-            from botocore.config import Config as _BotoConfig
-            # Trim retries on the actual Bedrock API call so a transient
-            # failure doesn't pad the doctor run by 30+ seconds.
-            cfg = _BotoConfig(
-                connect_timeout=5,
-                read_timeout=10,
-                retries={"max_attempts": 1},
-            )
-            client = boto3.client("bedrock", region_name=region, config=cfg)
-            resp = client.list_foundation_models()
-            n = len(resp.get("modelSummaries", []))
-            return _ConnectivityResult(
-                "AWS Bedrock",
-                [(color("✓", Colors.GREEN), label,
-                  color(f"({auth_var}, {region}, {n} models)", Colors.DIM))],
-                [],
-            )
-        except ImportError:
-            return _ConnectivityResult(
-                "AWS Bedrock",
-                [(color("⚠", Colors.YELLOW), label,
-                  color(f"(boto3 not installed — {sys.executable} -m pip install boto3)",
-                        Colors.DIM))],
-                [f"Install boto3 for Bedrock: {sys.executable} -m pip install boto3"],
-            )
-        except Exception as e:
-            err_name = type(e).__name__
-            return _ConnectivityResult(
-                "AWS Bedrock",
-                [(color("⚠", Colors.YELLOW), label,
-                  color(f"({err_name}: {e})", Colors.DIM))],
-                [f"AWS Bedrock: {err_name} — check IAM permissions for "
-                 f"bedrock:ListFoundationModels"],
-            )
-
-    def _probe_azure_entra() -> _ConnectivityResult:
-        """Probe Azure Foundry Entra ID auth, parallel to ``_probe_bedrock``.
-
-        Skipped unless the active config has ``model.provider:
-        azure-foundry`` AND ``model.auth_mode: entra_id`` — we don't probe
-        the token-service / CLI chain for users on plain API-key Azure.
-
-        Bounded by a 10s timeout (via
-        :func:`agent.azure_identity_adapter.describe_active_credential`)
-        so a slow token service can't pad the doctor run.
-        """
-        label = "Azure Foundry (Entra ID)".ljust(28)
-        try:
-            from marlow_cli.config import load_config
-            cfg = load_config()
-            model_cfg = cfg.get("model") if isinstance(cfg, dict) else {}
-            if not isinstance(model_cfg, dict):
-                return _ConnectivityResult("Azure Foundry (Entra ID)", [], [])
-            cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
-            auth_mode = str(model_cfg.get("auth_mode") or "").strip().lower()
-            if cfg_provider != "azure-foundry" or auth_mode != "entra_id":
-                return _ConnectivityResult("Azure Foundry (Entra ID)", [], [])
-        except Exception:
-            return _ConnectivityResult("Azure Foundry (Entra ID)", [], [])
-
-        try:
-            from agent.azure_identity_adapter import (
-                EntraIdentityConfig,
-                SCOPE_AI_AZURE_DEFAULT,
-                describe_active_credential,
-                has_azure_identity_installed,
-            )
-        except Exception as exc:
-            return _ConnectivityResult(
-                "Azure Foundry (Entra ID)",
-                [(color("⚠", Colors.YELLOW), label,
-                  color(f"(adapter import failed: {exc})", Colors.DIM))],
-                [f"Azure Foundry adapter import failed: {exc}"],
-            )
-
-        if not has_azure_identity_installed():
-            return _ConnectivityResult(
-                "Azure Foundry (Entra ID)",
-                [(color("⚠", Colors.YELLOW), label,
-                  color("(azure-identity not installed)", Colors.DIM))],
-                [f"Install azure-identity: {sys.executable} -m pip install azure-identity"],
-            )
-
-        base_url = str(model_cfg.get("base_url") or "").strip()
-        entra_cfg = model_cfg.get("entra") or {}
-        if not isinstance(entra_cfg, dict):
-            entra_cfg = {}
-        scope = (
-            str(entra_cfg.get("scope") or "").strip()
-            or SCOPE_AI_AZURE_DEFAULT
-        )
-        config = EntraIdentityConfig(
-            scope=scope,
-        )
-        info = describe_active_credential(config=config, timeout_seconds=10.0)
-        if info.get("ok"):
-            env_sources = info.get("env_sources") or []
-            tag = ", ".join(env_sources) if env_sources else "default credential chain"
-            return _ConnectivityResult(
-                "Azure Foundry (Entra ID)",
-                [(color("✓", Colors.GREEN), label,
-                  color(f"({tag}, scope={scope})", Colors.DIM))],
-                [],
-            )
-        err = info.get("error") or "credential chain exhausted"
-        hint = info.get("hint") or (
-            "Run `az login`, set AZURE_TENANT_ID/AZURE_CLIENT_ID/"
-            "AZURE_CLIENT_SECRET, or attach a managed identity to this VM."
-        )
-        return _ConnectivityResult(
-            "Azure Foundry (Entra ID)",
-            [(color("⚠", Colors.YELLOW), label,
-              color(f"({err})", Colors.DIM))],
-            [f"Azure Foundry Entra: {err}. {hint}"],
-        )
-
-    # Build the probe submission list in display order
-    _probes.append(("OpenRouter API", _probe_openrouter))
-    _probes.append(("Anthropic API", _probe_anthropic))
-
-    global _APIKEY_PROVIDERS_CACHE
-    if _APIKEY_PROVIDERS_CACHE is None:
-        _APIKEY_PROVIDERS_CACHE = _build_apikey_providers_list()
-    for _entry in _APIKEY_PROVIDERS_CACHE:
-        _pname, _env_vars, _default_url, _base_env, _supports = _entry
-        # Capture loop vars by binding default args — without this, all closures
-        # would share the final iteration's values and every probe would hit
-        # the last provider's URL.
-        _probes.append((_pname, lambda p=_pname, e=_env_vars, u=_default_url,
-                                       b=_base_env, s=_supports:
-                                _probe_apikey_provider(p, e, u, b, s)))
-
-    _probes.append(("AWS Bedrock", _probe_bedrock))
-    _probes.append(("Azure Foundry (Entra ID)", _probe_azure_entra))
-
-    # Print a single status line so users see something happening, then
-    # fan out. ``\r`` clears it once the first real result line lands.
-    print(f"  {color(f'Running {len(_probes)} connectivity checks in parallel…', Colors.DIM)}",
-          end="", flush=True)
-
-    # Disable boto3's EC2 instance-metadata-service probe for the duration
-    # of the parallel block. boto's default credential chain tries
-    # 169.254.169.254 with a multi-second timeout when we're not on EC2,
-    # which dominated the section's wall time before this fix
-    # (~2s on a developer laptop, even with the rest parallelized).
-    # Set on the parent thread before submitting work so the env-var
-    # mutation never races with another worker. has_aws_credentials() in
-    # the bedrock probe already gates on real env-var creds, so IMDS is
-    # never the legitimate source for `marlow doctor`.
-    _imds_prev = os.environ.get("AWS_EC2_METADATA_DISABLED")
-    os.environ["AWS_EC2_METADATA_DISABLED"] = "true"
-    try:
-        # 8 workers is plenty — each probe is a single HTTP call plus a TLS
-        # handshake. More than that wastes thread-startup cost and risks
-        # noisy output if anything ever printed from inside a worker.
-        with _futures.ThreadPoolExecutor(max_workers=8,
-                                         thread_name_prefix="doctor-probe") as _ex:
-            _futures_in_order = [_ex.submit(_fn) for _, _fn in _probes]
-            _results = [_f.result() for _f in _futures_in_order]
-    finally:
-        if _imds_prev is None:
-            os.environ.pop("AWS_EC2_METADATA_DISABLED", None)
-        else:
-            os.environ["AWS_EC2_METADATA_DISABLED"] = _imds_prev
-
-    # Clear the "Running …" line and print all results in submission order.
-    print("\r" + " " * 70 + "\r", end="")
-    for _r in _results:
-        for _glyph, _label, _detail in _r.lines:
-            if _detail:
-                print(f"  {_glyph} {_label} {_detail}")
-            else:
-                print(f"  {_glyph} {_label}")
-        _issues_to_add = list(_r.issues)
-        if _issues_to_add and _has_healthy_oauth_fallback_for_apikey_provider(_r.label):
-            _issues_to_add = []
-        for _issue in _issues_to_add:
-            issues.append(_issue)
-
     _section("Tool Availability")
     try:
         # Add project root to path for imports
@@ -1884,47 +1006,6 @@ def run_doctor(args):
     except Exception as e:
         check_warn("Could not check tool availability", f"({e})")
     
-    _section("Skills Hub")
-    hub_dir = MARLOW_HOME / "skills" / ".hub"
-    if hub_dir.exists():
-        check_ok("Skills Hub directory exists")
-        lock_file = hub_dir / "lock.json"
-        if lock_file.exists():
-            try:
-                import json
-                lock_data = json.loads(lock_file.read_text())
-                count = len(lock_data.get("installed", {}))
-                check_ok(f"Lock file OK ({count} hub-installed skill(s))")
-            except Exception:
-                check_warn("Lock file", "(corrupted or unreadable)")
-        quarantine = hub_dir / "quarantine"
-        q_count = sum(1 for d in quarantine.iterdir() if d.is_dir()) if quarantine.exists() else 0
-        if q_count > 0:
-            check_warn(f"{q_count} skill(s) in quarantine", "(pending review)")
-    else:
-        check_warn("Skills Hub directory not initialized", "(run: marlow skills list)")
-
-    from marlow_cli.config import get_env_value
-
-    def _gh_authenticated() -> bool:
-        """Check if gh CLI is authenticated via token file or device flow."""
-        try:
-            result = subprocess.run(
-                ["gh", "auth", "status", "--json", "authenticated"],
-                capture_output=True, timeout=10,
-            )
-            return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
-
-    github_token = get_env_value("GITHUB_TOKEN") or get_env_value("GH_TOKEN")
-    if github_token:
-        check_ok("GitHub token configured (authenticated API access)")
-    elif _gh_authenticated():
-        check_ok("GitHub authenticated via gh CLI", "(full API access — no GITHUB_TOKEN needed)")
-    else:
-        check_warn("No GITHUB_TOKEN", f"(60 req/hr rate limit — set in {_DHH}/.env for better rates)")
-
     _section("Memory Provider")
     _active_memory_provider = ""
     try:
@@ -1976,43 +1057,23 @@ def run_doctor(args):
             )
         except Exception as _e:
             check_warn("Honcho check failed", str(_e))
-    elif _active_memory_provider == "mem0":
-        try:
-            from plugins.memory.mem0 import _load_config as _load_mem0_config
-            mem0_cfg = _load_mem0_config()
-            mem0_key = mem0_cfg.get("api_key", "")
-            if mem0_key:
-                check_ok("Mem0 API key configured")
-                check_info(f"user_id={mem0_cfg.get('user_id', '?')}  agent_id={mem0_cfg.get('agent_id', '?')}")
-            else:
-                _fail_and_issue(
-                    "Mem0 API key not set",
-                    "(set MEM0_API_KEY in .env or run marlow memory setup)",
-                    "Mem0 is set as memory provider but API key is missing",
-                    issues,
-                )
-        except ImportError:
-            _fail_and_issue(
-                "Mem0 plugin not loadable",
-                "pip install mem0ai",
-                "Mem0 is set as memory provider but mem0ai is not installed",
-                issues,
-            )
-        except Exception as _e:
-            check_warn("Mem0 check failed", str(_e))
-    else:
-        # Generic check for other memory providers (openviking, hindsight, etc.)
+    elif _active_memory_provider == "holographic":
         try:
             from plugins.memory import load_memory_provider
             _provider = load_memory_provider(_active_memory_provider)
             if _provider and _provider.is_available():
-                check_ok(f"{_active_memory_provider} provider active")
+                check_ok("Holographic memory provider active")
             elif _provider:
-                check_warn(f"{_active_memory_provider} configured but not available", "run: marlow memory status")
+                check_warn("Holographic memory configured but not available", "run: marlow memory status")
             else:
-                check_warn(f"{_active_memory_provider} plugin not found", "run: marlow memory setup")
+                check_warn("Holographic memory plugin not found", "run: marlow memory setup")
         except Exception as _e:
-            check_warn(f"{_active_memory_provider} check failed", str(_e))
+            check_warn("Holographic memory check failed", str(_e))
+    else:
+        check_warn(
+            f"Unsupported memory provider '{_active_memory_provider}'",
+            "choose holographic or honcho",
+        )
 
     try:
         from marlow_cli.profiles import list_profiles, _get_wrapper_dir, profile_exists

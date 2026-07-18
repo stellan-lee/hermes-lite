@@ -14,11 +14,10 @@ def test_write_file_with_nested_lint_error_counts_as_landed():
     assert file_mutation_result_landed("write_file", result) is True
 
 
-def test_patch_with_nested_lsp_diagnostics_counts_as_landed():
+def test_successful_patch_with_diff_counts_as_landed():
     result = json.dumps({
         "success": True,
         "diff": "--- a/tmp.py\n+++ b/tmp.py\n",
-        "lsp_diagnostics": "<diagnostics>ERROR [1:1] type mismatch</diagnostics>",
     })
 
     assert file_mutation_result_landed("patch", result) is True

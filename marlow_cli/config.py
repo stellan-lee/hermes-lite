@@ -15,7 +15,6 @@ This module provides:
 import copy
 import logging
 import os
-import platform
 import re
 import stat
 import subprocess
@@ -72,7 +71,6 @@ def _warn_config_parse_failure(config_path: Path, exc: Exception) -> None:
     except Exception:
         pass
 
-_IS_WINDOWS = platform.system() == "Windows"
 _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Env var names that influence how the next subprocess executes —
@@ -88,8 +86,8 @@ _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 #   from one of these on every restart.
 # * ``NODE_OPTIONS`` / ``NODE_PATH`` — Node interpreter; affects npm,
 #   ``marlow update``, the TUI build.
-# * ``PATH`` — too broad to allow. The dashboard never needs to rewrite
-#   the operator's PATH; if a tool can't be found, the fix is to add an
+# * ``PATH`` — too broad to allow. Configuration writers never need to
+#   rewrite the operator's PATH; if a tool can't be found, add an
 #   absolute path in the integration config, not to mutate PATH globally.
 # * ``GIT_SSH_COMMAND`` / ``GIT_EXEC_PATH`` — git rewrites that fire
 #   on every plugin install / ``marlow update``.
@@ -101,17 +99,17 @@ _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # * ``MARLOW_HOME`` / ``MARLOW_PROFILE`` / ``MARLOW_CONFIG`` /
 #   ``MARLOW_ENV`` — Marlow runtime location flags. Writing these into
 #   ``.env`` would relocate state in ways the user did not request from
-#   the dashboard. ``config.yaml`` is the supported surface for these.
+#   an env writer. ``config.yaml`` is the supported surface for these.
 #
 # IMPORTANT: ``MARLOW_*`` overall is NOT blocked. Many legitimate
-# integration credentials follow that prefix (MARLOW_GEMINI_CLIENT_ID,
-# MARLOW_LANGFUSE_PUBLIC_KEY, MARLOW_QWEN_BASE_URL, ...). The
+# integration credentials follow that prefix (for example,
+# MARLOW_LANGFUSE_PUBLIC_KEY). The
 # denylist is name-by-name on purpose so the gate stays narrow and
 # doesn't accidentally break provider setup wizards.
 #
 # This is enforced on *write* only — values already in ``.env`` (set
 # by the operator out-of-band, or pre-existing) keep working. The
-# point is that the dashboard's writable surface cannot escalate by
+# point is that the writable configuration surface cannot escalate by
 # planting them.
 _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     # Loader / linker
@@ -127,9 +125,9 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     "PATH", "SHELL", "BROWSER", "EDITOR", "VISUAL", "PAGER",
     # Git
     "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_SHELL",
-    # Marlow runtime location — never via dashboard env writer.
-    # NOT a MARLOW_* blanket: integration credentials (MARLOW_GEMINI_*,
-    # MARLOW_LANGFUSE_*, MARLOW_QWEN_*, ...) ARE allowed.
+    # Marlow runtime location — never via the env writer.
+    # NOT a MARLOW_* blanket: integration credentials such as
+    # MARLOW_LANGFUSE_* are allowed.
     "MARLOW_HOME", "MARLOW_PROFILE", "MARLOW_CONFIG", "MARLOW_ENV",
 })
 
@@ -175,41 +173,12 @@ _CONFIG_LOCK = threading.RLock()
 # (managed by setup/provider flows directly).
 _EXTRA_ENV_KEYS = frozenset({
     "OPENAI_API_KEY", "OPENAI_BASE_URL",
-    "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN",
     "DISCORD_HOME_CHANNEL", "DISCORD_HOME_CHANNEL_NAME",
     "TELEGRAM_HOME_CHANNEL", "TELEGRAM_HOME_CHANNEL_NAME",
     "SLACK_HOME_CHANNEL", "SLACK_HOME_CHANNEL_NAME",
-    "SIGNAL_ACCOUNT", "SIGNAL_HTTP_URL",
-    "SIGNAL_ALLOWED_USERS", "SIGNAL_GROUP_ALLOWED_USERS",
-    "SIGNAL_HOME_CHANNEL", "SIGNAL_HOME_CHANNEL_NAME",
-    "SMS_HOME_CHANNEL", "SMS_HOME_CHANNEL_NAME",
-    "DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET",
-    "DINGTALK_HOME_CHANNEL", "DINGTALK_HOME_CHANNEL_NAME",
-    "FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_ENCRYPT_KEY", "FEISHU_VERIFICATION_TOKEN",
+    "FEISHU_APP_ID", "FEISHU_APP_SECRET",
     "FEISHU_HOME_CHANNEL", "FEISHU_HOME_CHANNEL_NAME",
-    "YUANBAO_HOME_CHANNEL", "YUANBAO_HOME_CHANNEL_NAME",
-    "WECOM_BOT_ID", "WECOM_SECRET",
-    "WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET", "WECOM_CALLBACK_AGENT_ID",
-    "WECOM_CALLBACK_TOKEN", "WECOM_CALLBACK_ENCODING_AES_KEY",
-    "WECOM_CALLBACK_HOST", "WECOM_CALLBACK_PORT",
-    "WECOM_HOME_CHANNEL", "WECOM_HOME_CHANNEL_NAME",
-    "WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN", "WEIXIN_BASE_URL", "WEIXIN_CDN_BASE_URL",
-    "WEIXIN_HOME_CHANNEL", "WEIXIN_HOME_CHANNEL_NAME", "WEIXIN_DM_POLICY", "WEIXIN_GROUP_POLICY",
-    "WEIXIN_ALLOWED_USERS", "WEIXIN_GROUP_ALLOWED_USERS", "WEIXIN_ALLOW_ALL_USERS",
-    "BLUEBUBBLES_SERVER_URL", "BLUEBUBBLES_PASSWORD",
-    "BLUEBUBBLES_HOME_CHANNEL", "BLUEBUBBLES_HOME_CHANNEL_NAME",
-    "QQ_APP_ID", "QQ_CLIENT_SECRET", "QQBOT_HOME_CHANNEL", "QQBOT_HOME_CHANNEL_NAME",
-    "QQ_HOME_CHANNEL", "QQ_HOME_CHANNEL_NAME",  # legacy aliases (pre-rename, still read for back-compat)
-    "QQ_ALLOWED_USERS", "QQ_GROUP_ALLOWED_USERS", "QQ_ALLOW_ALL_USERS", "QQ_MARKDOWN_SUPPORT",
-    "QQ_STT_API_KEY", "QQ_STT_BASE_URL", "QQ_STT_MODEL",
-    "IRC_SERVER", "IRC_PORT", "IRC_NICKNAME", "IRC_CHANNEL",
-    "IRC_USE_TLS", "IRC_SERVER_PASSWORD", "IRC_NICKSERV_PASSWORD",
     "TERMINAL_ENV", "TERMINAL_SSH_KEY", "TERMINAL_SSH_PORT",
-    "WHATSAPP_MODE", "WHATSAPP_ENABLED",
-    "MATTERMOST_HOME_CHANNEL", "MATTERMOST_HOME_CHANNEL_NAME", "MATTERMOST_REPLY_MODE",
-    "MATRIX_PASSWORD", "MATRIX_ENCRYPTION", "MATRIX_DEVICE_ID", "MATRIX_HOME_ROOM",
-    "MATRIX_REQUIRE_MENTION", "MATRIX_FREE_RESPONSE_ROOMS", "MATRIX_AUTO_THREAD", "MATRIX_DM_AUTO_THREAD",
-    "MATRIX_RECOVERY_KEY",
     # Langfuse observability plugin — optional tuning keys + standard SDK vars.
     # Activation is via plugins.enabled (opt-in through `marlow plugins enable
     # observability/langfuse` or `marlow tools → Langfuse`); credentials gate
@@ -230,15 +199,12 @@ from marlow_cli.default_soul import DEFAULT_SOUL_MD
 
 
 # =============================================================================
-# Managed mode (NixOS declarative config)
+# Package-manager-owned installations
 # =============================================================================
 
-_MANAGED_TRUE_VALUES = ("true", "1", "yes")
 _MANAGED_SYSTEM_NAMES = {
     "brew": "Homebrew",
     "homebrew": "Homebrew",
-    "nix": "NixOS",
-    "nixos": "NixOS",
 }
 
 
@@ -246,28 +212,16 @@ def get_managed_system() -> Optional[str]:
     """Return the package manager owning this install, if any."""
     raw = os.getenv("MARLOW_MANAGED", "").strip()
     if raw:
-        normalized = raw.lower()
-        if normalized in _MANAGED_TRUE_VALUES:
-            return "NixOS"
-        return _MANAGED_SYSTEM_NAMES.get(normalized, raw)
-
-    managed_marker = get_marlow_home() / ".managed"
-    if managed_marker.exists():
-        return "NixOS"
+        return _MANAGED_SYSTEM_NAMES.get(raw.lower())
     return None
 
 
 def is_managed() -> bool:
     """Check if Marlow is running in package-manager-managed mode.
 
-    Two signals: the MARLOW_MANAGED env var (set by the systemd service),
-    or a .managed marker file in MARLOW_HOME (set by the NixOS activation
-    script, so interactive shells also see it).
+    The ``MARLOW_MANAGED`` environment variable names the package manager.
     """
     return get_managed_system() is not None
-
-
-_NIX_UPDATE_MSG = "Update your Nix flake input and rebuild (e.g. nix flake update, nixos-rebuild, or home-manager switch)"
 
 
 def get_managed_update_command() -> Optional[str]:
@@ -275,17 +229,15 @@ def get_managed_update_command() -> Optional[str]:
     managed_system = get_managed_system()
     if managed_system == "Homebrew":
         return "brew upgrade marlow-agent"
-    if managed_system == "NixOS":
-        return _NIX_UPDATE_MSG
     return None
 
 
 def detect_install_method(project_root: Optional[Path] = None) -> str:
-    """Detect how Marlow was installed: 'docker', 'nixos', 'homebrew', 'git', or 'pip'.
+    """Detect how Marlow was installed: docker, Homebrew, git, or pip.
 
     Resolution order:
     1. Stamped ``~/.marlow/.install_method`` file (written by installers)
-    2. MARLOW_MANAGED env / .managed marker (NixOS, Homebrew)
+    2. MARLOW_MANAGED environment variable (Homebrew)
     3. .git directory presence -> 'git'
     4. Fallback -> 'pip'
 
@@ -360,8 +312,6 @@ def is_uv_tool_install() -> bool:
 
 def recommended_update_command_for_method(method: str) -> str:
     """Return the update command or guidance for a given install method."""
-    if method == "nixos":
-        return _NIX_UPDATE_MSG
     if method == "homebrew":
         return "brew upgrade marlow-agent"
     if method == "docker":
@@ -442,15 +392,6 @@ def format_managed_message(action: str = "modify this Marlow installation") -> s
     managed_system = get_managed_system() or "a package manager"
     raw = os.getenv("MARLOW_MANAGED", "").strip().lower()
 
-    if managed_system == "NixOS":
-        env_hint = "true" if raw in _MANAGED_TRUE_VALUES else raw or "true"
-        return (
-            f"Cannot {action}: this Marlow installation is managed by NixOS "
-            f"(MARLOW_MANAGED={env_hint}).\n"
-            "Edit services.marlow-agent.settings in your configuration.nix and run:\n"
-            "  sudo nixos-rebuild switch"
-        )
-
     if managed_system == "Homebrew":
         env_hint = raw or "homebrew"
         return (
@@ -468,55 +409,6 @@ def format_managed_message(action: str = "modify this Marlow installation") -> s
 def managed_error(action: str = "modify configuration"):
     """Print user-friendly error for managed mode."""
     print(format_managed_message(action), file=sys.stderr)
-
-
-# =============================================================================
-# Container-aware CLI (NixOS container mode)
-# =============================================================================
-
-def get_container_exec_info() -> Optional[dict]:
-    """Read container mode metadata from MARLOW_HOME/.container-mode.
-
-    Returns a dict with keys: backend, container_name, exec_user, marlow_bin
-    or None if container mode is not active, we're already inside the
-    container, or MARLOW_DEV=1 is set.
-
-    The .container-mode file is written by the NixOS activation script when
-    container.enable = true. It tells the host CLI to exec into the container
-    instead of running locally.
-    """
-    if os.environ.get("MARLOW_DEV") == "1":
-        return None
-
-    from marlow_constants import is_container
-    if is_container():
-        return None
-
-    container_mode_file = get_marlow_home() / ".container-mode"
-
-    try:
-        info = {}
-        with open(container_mode_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    key, _, value = line.partition("=")
-                    info[key.strip()] = value.strip()
-    except FileNotFoundError:
-        return None
-    # All other exceptions (PermissionError, malformed data, etc.) propagate
-
-    backend = info.get("backend", "docker")
-    container_name = info.get("container_name", "marlow-agent")
-    exec_user = info.get("exec_user", "marlow")
-    marlow_bin = info.get("marlow_bin", "/data/current-package/bin/marlow")
-
-    return {
-        "backend": backend,
-        "container_name": container_name,
-        "exec_user": exec_user,
-        "marlow_bin": marlow_bin,
-    }
 
 
 # =============================================================================
@@ -551,11 +443,8 @@ def _resolve_marlow_uid_gid() -> tuple[Optional[int], Optional[int]]:
     with ``PermissionError [Errno 13]``. See #34107.
 
     Returns ``(uid, gid)`` parsed from the env vars, or ``(None, None)``
-    when either is missing/invalid. Returns ``(None, None)`` on Windows
-    too (where chown is a no-op anyway).
+    when either is missing or invalid.
     """
-    if sys.platform == "win32":
-        return None, None
     uid_str = os.environ.get("MARLOW_UID", "").strip()
     gid_str = os.environ.get("MARLOW_GID", "").strip()
     try:
@@ -575,7 +464,6 @@ def _chown_to_marlow_uid(path) -> None:
     No-op when:
       - Either env var is unset/invalid
       - The current process isn't root (chown will EPERM — silently ignored)
-      - On Windows (chown semantics don't apply)
 
     Used by :func:`_secure_dir` to keep ownership consistent across all
     directories created by :func:`ensure_marlow_home` on Docker deployments.
@@ -599,11 +487,7 @@ def _chown_to_marlow_uid(path) -> None:
 
 
 def _secure_dir(path):
-    """Set directory to owner-only access (0700 by default). No-op on Windows.
-
-    Skipped in managed mode — the NixOS module sets group-readable
-    permissions (0750) so interactive users in the marlow group can
-    share state with the gateway service.
+    """Set directory to owner-only access (0700 by default).
 
     The mode can be overridden via the MARLOW_HOME_MODE environment variable
     (e.g. MARLOW_HOME_MODE=0701) for deployments where a web server (nginx,
@@ -616,8 +500,6 @@ def _secure_dir(path):
     created at runtime don't land as root:root and block subsequent
     uid-mapped workers).
     """
-    if is_managed():
-        return
     try:
         mode_str = os.environ.get("MARLOW_HOME_MODE", "").strip()
         mode = int(mode_str, 8) if mode_str else 0o700
@@ -635,8 +517,8 @@ def _is_container() -> bool:
 
     When Marlow runs in a container with volume-mounted config files, forcing
     0o600 permissions breaks multi-process setups where the gateway and
-    dashboard run as different UIDs or the volume mount requires broader
-    permissions.
+    gateway workers run as different UIDs or the volume mount requires
+    broader permissions.
     """
     # Explicit opt-out
     if os.environ.get("MARLOW_CONTAINER") or os.environ.get("MARLOW_SKIP_CHMOD"):
@@ -656,15 +538,12 @@ def _is_container() -> bool:
 
 
 def _secure_file(path):
-    """Set file to owner-only read/write (0600). No-op on Windows.
-
-    Skipped in managed mode — the NixOS activation script sets
-    group-readable permissions (0640) on config files.
+    """Set file to owner-only read/write (0600).
 
     Skipped in containers — Docker/Podman volume mounts often need broader
     permissions.  Set MARLOW_SKIP_CHMOD=1 to force-skip on other systems.
     """
-    if is_managed() or _is_container():
+    if _is_container():
         return
     try:
         if os.path.exists(str(path)):
@@ -683,51 +562,17 @@ def _ensure_default_soul_md(home: Path) -> None:
 
 
 def ensure_marlow_home():
-    """Ensure ~/.marlow directory structure exists with secure permissions.
-
-    In managed mode (NixOS), dirs are created by the activation script with
-    setgid + group-writable (2770). We skip mkdir and set umask(0o007) so
-    any files created (e.g. SOUL.md) are group-writable (0660).
-    """
+    """Ensure ~/.marlow directory structure exists with secure permissions."""
     home = get_marlow_home()
-    if is_managed():
-        old_umask = os.umask(0o007)
-        try:
-            _ensure_marlow_home_managed(home)
-        finally:
-            os.umask(old_umask)
-    else:
-        home.mkdir(parents=True, exist_ok=True)
-        _secure_dir(home)
-        for subdir in (
-            "cron", "sessions", "logs", "logs/curator", "memories",
-            "pairing", "hooks", "image_cache", "audio_cache", "skills",
-        ):
-            d = home / subdir
-            d.mkdir(parents=True, exist_ok=True)
-            _secure_dir(d)
-        _ensure_default_soul_md(home)
-
-
-def _ensure_marlow_home_managed(home: Path):
-    """Managed-mode variant: verify dirs exist (activation creates them), seed SOUL.md."""
-    if not home.is_dir():
-        raise RuntimeError(
-            f"MARLOW_HOME {home} does not exist. "
-            "Run 'sudo nixos-rebuild switch' first."
-        )
-    for subdir in ("cron", "sessions", "logs", "memories"):
+    home.mkdir(parents=True, exist_ok=True)
+    _secure_dir(home)
+    for subdir in (
+        "cron", "sessions", "logs", "logs/curator", "memories",
+        "pairing", "hooks", "image_cache", "audio_cache", "skills",
+    ):
         d = home / subdir
-        if not d.is_dir():
-            raise RuntimeError(
-                f"{d} does not exist. "
-                "Run 'sudo nixos-rebuild switch' first."
-            )
-    # Curator reports dir is a sub-path of logs/; create it if missing.
-    # In managed mode the activation script may not know about this subdir,
-    # so we mkdir it ourselves (it's inside an already-secured logs/ dir).
-    (home / "logs" / "curator").mkdir(parents=True, exist_ok=True)
-    # Inside umask(0o007) scope — SOUL.md will be created as 0660
+        d.mkdir(parents=True, exist_ok=True)
+        _secure_dir(d)
     _ensure_default_soul_md(home)
 
 
@@ -739,7 +584,6 @@ DEFAULT_CONFIG = {
     "model": "",
     "providers": {},
     "fallback_providers": [],
-    "credential_pool_strategies": {},
     "toolsets": ["marlow-cli"],
     "agent": {
         "max_turns": 90,
@@ -767,12 +611,11 @@ DEFAULT_CONFIG = {
         # on flaky primaries; raise it if you prefer to tolerate longer
         # provider hiccups on a single provider.
         "api_max_retries": 3,
-        "service_tier": "",
         # Tool-use enforcement: injects system prompt guidance that tells the
         # model to actually call tools instead of describing intended actions.
         # Values: "auto" (default — applies to gpt/codex models), true/false
         # (force on/off for all models), or a list of model-name substrings
-        # to match (e.g. ["gpt", "codex", "gemini", "qwen"]).
+        # to match (e.g. ["gpt", "codex", "local-model"]).
         "tool_use_enforcement": "auto",
         # Universal "finish the job" guidance — short prompt block applied to
         # all models that targets two cross-family failure modes: (1) stopping
@@ -785,7 +628,7 @@ DEFAULT_CONFIG = {
         # (e.g. python3 has no pip module, pip→python version mismatch, PEP
         # 668 enforcement without uv).  Costs zero tokens when the env is
         # clean (probe emits nothing).  Skipped for remote terminal backends
-        # (docker/modal/ssh — they have their own probe).  Set False to
+        # (Docker/SSH — they have their own probe). Set False to
         # disable entirely.
         "environment_probe": True,
         # Embedder-supplied environment description appended to the system
@@ -854,7 +697,6 @@ DEFAULT_CONFIG = {
     
     "terminal": {
         "backend": "local",
-        "modal_mode": "auto",
         "cwd": ".",  # Use current directory
         "timeout": 180,
         # Environment variables to pass through to sandboxed execution
@@ -895,10 +737,7 @@ DEFAULT_CONFIG = {
         # runs as a systemd service without access to the user's shell environment.
         # Example: {"SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock"}
         "docker_env": {},
-        "singularity_image": "docker://nikolaik/python-nodejs:python3.11-nodejs20",
-        "modal_image": "nikolaik/python-nodejs:python3.11-nodejs20",
-        "daytona_image": "nikolaik/python-nodejs:python3.11-nodejs20",
-        # Container resource limits (docker, singularity, modal, daytona — ignored for local/ssh)
+        # Container resource limits (Docker only; ignored for local/SSH)
         "container_cpu": 1,
         "container_memory": 5120,       # MB (default 5GB)
         "container_disk": 51200,        # MB (default 50GB)
@@ -935,7 +774,7 @@ DEFAULT_CONFIG = {
 
     "web": {
         "backend": "",           # shared fallback — applies to both search and extract
-        "search_backend": "",    # per-capability override for web_search (e.g. "searxng")
+        "search_backend": "",    # per-capability override for web_search (e.g. "brave")
         "extract_backend": "",   # per-capability override for web_extract (e.g. "native")
     },
 
@@ -943,7 +782,6 @@ DEFAULT_CONFIG = {
         "inactivity_timeout": 120,
         "command_timeout": 30,  # Timeout for browser commands in seconds (screenshot, navigate, etc.)
         "record_sessions": False,  # Auto-record browser sessions as WebM videos
-        "allow_private_urls": False,  # Allow navigating to private/internal IPs (localhost, 192.168.x.x, etc.)
         # Browser engine for local mode.  Passed as ``--engine <value>`` to
         # agent-browser v0.25.3+.
         # "auto"       — use Chrome (default, don't pass --engine at all)
@@ -951,31 +789,12 @@ DEFAULT_CONFIG = {
         # "chrome"     — explicitly request Chrome
         # Also settable via AGENT_BROWSER_ENGINE env var.
         "engine": "auto",
-        "auto_local_for_private_urls": True,  # When a cloud provider is set, auto-spawn local Chromium for LAN/localhost URLs instead of sending them to the cloud
         "cdp_url": "",  # Optional persistent CDP endpoint for attaching to an existing Chromium/Chrome
         # CDP supervisor — dialog + frame detection via a persistent WebSocket.
-        # Active only when a CDP-capable backend is attached (Browserbase or
-        # local Chrome via /browser connect). See
+        # Active when Chrome is attached via /browser connect. See
         # website/docs/developer-guide/browser-supervisor.md.
         "dialog_policy": "must_respond",  # must_respond | auto_dismiss | auto_accept
         "dialog_timeout_s": 300,  # Safety auto-dismiss after N seconds under must_respond
-        "camofox": {
-            # When true, Marlow sends a stable profile-scoped userId to Camofox
-            # so the server maps it to a persistent Firefox profile automatically.
-            # When false (default), each session gets a random userId (ephemeral).
-            "managed_persistence": False,
-            # Optional externally managed Camofox identity. Useful when another
-            # app owns the visible browser and Marlow should operate in it.
-            "user_id": "",
-            "session_key": "",
-            # Rehydrate tab_id from Camofox before creating a new tab.
-            "adopt_existing_tab": False,
-            # Docker Camofox opens page URLs from inside the container. Enable
-            # this to rewrite loopback page URLs (localhost/127.0.0.1/::1) to a
-            # host alias while leaving CAMOFOX_URL itself unchanged.
-            "rewrite_loopback_urls": False,
-            "loopback_host_alias": "host.docker.internal",
-        },
     },
 
     # Filesystem checkpoints — automatic snapshots before destructive file ops.
@@ -1087,85 +906,20 @@ DEFAULT_CONFIG = {
                                       # pre-compaction turns for search/recovery.
     },
 
-    # Anthropic prompt caching (Claude via OpenRouter or native Anthropic API).
-    # cache_ttl must be "5m" or "1h" (Anthropic-supported tiers); other values are ignored.
-    "prompt_caching": {
-        "cache_ttl": "5m",
-    },
-
-    # OpenRouter-specific settings.
-    # response_cache: enable OpenRouter response caching (X-OpenRouter-Cache header).
-    #   When enabled, identical requests return cached responses for free (zero billing).
-    #   This is separate from Anthropic prompt caching and works alongside it.
-    #   See: https://openrouter.ai/docs/guides/features/response-caching
-    # response_cache_ttl: how long cached responses remain valid, in seconds (1-86400).
-    #   Default 300 (5 minutes). Only used when response_cache is enabled.
-    # min_coding_score: knob for the openrouter/pareto-code router (0.0-1.0).
-    #   Only applied when model.model is "openrouter/pareto-code". Higher
-    #   values route to stronger (more expensive) coders; lower values open
-    #   up cheaper, faster options. Default 0.65 lands on the mid-tier
-    #   coder on the current Pareto frontier. Empty string = let OpenRouter
-    #   pick the strongest available coder (router's documented default
-    #   when the plugins block is omitted).
-    #   See: https://openrouter.ai/docs/guides/routing/routers/pareto-router
-    "openrouter": {
-        "response_cache": True,
-        "response_cache_ttl": 300,
-        "min_coding_score": 0.65,
-    },
-
-    # AWS Bedrock provider configuration.
-    # Only used when model.provider is "bedrock".
-    "bedrock": {
-        "region": "",  # AWS region for Bedrock API calls (empty = AWS_REGION env var → us-east-1)
-        "discovery": {
-            "enabled": True,           # Auto-discover models via ListFoundationModels
-            "provider_filter": [],     # Only show models from these providers (e.g. ["anthropic", "amazon"])
-            "refresh_interval": 3600,  # Cache discovery results for this many seconds
-        },
-        "guardrail": {
-            # Amazon Bedrock Guardrails — content filtering and safety policies.
-            # Create a guardrail in the Bedrock console, then set the ID and version here.
-            # See: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html
-            "guardrail_identifier": "",  # e.g. "abc123def456"
-            "guardrail_version": "",     # e.g. "1" or "DRAFT"
-            "stream_processing_mode": "async",  # "sync" or "async"
-            "trace": "disabled",         # "enabled", "disabled", or "enabled_full"
-        },
-    },
-
     # Auxiliary model config — provider:model for each side task.
     # Format: provider is the provider name, model is the model slug.
     # "auto" for provider = auto-detect best available provider.
     # Empty model = use provider's default auxiliary model.
-    # All tasks fall back to openrouter:google/gemini-3-flash-preview if
-    # the configured provider is unavailable.
+    # Tasks use Codex or a configured custom/local endpoint.
     #
     # extra_body: forwarded verbatim as request body fields on every aux call
-    # for that task. Use this to set provider-specific knobs (independent of
-    # main-agent settings). On OpenRouter you can set provider routing prefs
-    # and the Pareto Code coding-score floor here. Example:
-    #
-    #   auxiliary:
-    #     compression:
-    #       provider: openrouter
-    #       model: openrouter/pareto-code
-    #       extra_body:
-    #         provider:           # OpenRouter provider routing
-    #           order: [anthropic, google]
-    #           sort: throughput  # or price | latency
-    #         plugins:            # OpenRouter Pareto Code router
-    #           - id: pareto-router
-    #             min_coding_score: 0.5
-    #
-    # Each aux task is independent — main-agent provider_routing and
-    # openrouter.min_coding_score do NOT propagate to aux calls by design.
+    # for that task. Use this for endpoint-specific OpenAI-compatible fields.
     "auxiliary": {
         "vision": {
-            "provider": "auto",    # auto | openrouter | nous | codex | custom
-            "model": "",           # e.g. "google/gemini-2.5-flash", "gpt-4o"
+            "provider": "auto",    # auto | openai-codex | lmstudio | custom
+            "model": "",           # endpoint model name
             "base_url": "",        # direct OpenAI-compatible endpoint (takes precedence over provider)
-            "api_key": "",         # API key for base_url (falls back to OPENAI_API_KEY)
+            "api_key": "",         # API key for base_url
             "timeout": 120,        # seconds — LLM API call timeout; vision payloads need generous timeout
             "extra_body": {},      # OpenAI-compatible provider-specific request fields
             "download_timeout": 30,  # seconds — image HTTP download timeout; increase for slow connections
@@ -1190,17 +944,9 @@ DEFAULT_CONFIG = {
         # single-shape tool returns DB content directly). The old
         # ``auxiliary.session_search.*`` block was removed here. Existing
         # values in user config.yaml files are harmless leftovers and ignored.
-        "skills_hub": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 30,
-            "extra_body": {},
-        },
         "approval": {
             "provider": "auto",
-            "model": "",           # fast/cheap model recommended (e.g. gemini-flash, haiku)
+            "model": "",           # optional smaller compatible model
             "base_url": "",
             "api_key": "",
             "timeout": 30,
@@ -1224,8 +970,7 @@ DEFAULT_CONFIG = {
         },
         # Profile describer — auto-generates a 1-2 sentence description
         # of what a profile is good at. Invoked by
-        # ``marlow profile describe <name> --auto`` and the dashboard's
-        # auto-generate button. Short, cheap call.
+        # ``marlow profile describe <name> --auto``. Short, cheap call.
         "profile_describer": {
             "provider": "auto",
             "model": "",
@@ -1238,27 +983,13 @@ DEFAULT_CONFIG = {
         # review pass can take several minutes on reasoning models (umbrella
         # building over hundreds of candidate skills). "auto" = use main chat
         # model; override via `marlow model` → auxiliary → Curator to route
-        # to a cheaper aux model (e.g. openrouter google/gemini-3-flash-preview).
+        # to a dedicated Codex or compatible local model.
         "curator": {
             "provider": "auto",
             "model": "",
             "base_url": "",
             "api_key": "",
             "timeout": 600,
-            "extra_body": {},
-        },
-        # Monitor — urgency/importance classifier used by the important-mail
-        # monitor catalog automation (cron/scripts/classify_items.py). Scores
-        # candidate items 0-10 against the user's criteria so only above-
-        # threshold items get delivered. "auto" = main chat model; override to
-        # a cheap fast model (e.g. openrouter google/gemini-3-flash-preview,
-        # haiku) since per-item scoring is high-volume and a small model is fine.
-        "monitor": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 60,
             "extra_body": {},
         },
     },
@@ -1289,7 +1020,7 @@ DEFAULT_CONFIG = {
         # When true (default), `marlow --tui` drops a one-time hint
         # ("subagents working · /agents to watch live") the first time a turn
         # starts delegating, nudging the user toward the live spawn-tree
-        # dashboard. Set false to suppress the hint.
+        # agent monitor. Set false to suppress the hint.
         "tui_agents_nudge": True,
         "bell_on_complete": False,
         "show_reasoning": False,
@@ -1322,7 +1053,7 @@ DEFAULT_CONFIG = {
         # UI language for static user-facing messages (approval prompts, a
         # handful of gateway slash-command replies).  Does NOT affect agent
         # responses, log lines, tool outputs, or slash-command descriptions.
-        # Supported: en, zh, ja, de, es, fr, tr, uk.  Unknown values fall back to en.
+        # Marlow Lite ships English UI strings.
         "language": "en",
         # TUI busy indicator style: kaomoji (default), emoji, unicode (braille
         # spinner), or ascii.  Live-swappable via `/indicator <style>`.
@@ -1333,7 +1064,6 @@ DEFAULT_CONFIG = {
         },
         "interim_assistant_messages": True,  # Gateway: show natural mid-turn assistant status messages
         "tool_progress_command": False,  # Enable /verbose command in messaging gateway
-        "tool_progress_overrides": {},  # DEPRECATED — use display.platforms instead
         "tool_preview_length": 0,  # Max chars for tool call previews (0 = no limit, show full paths/commands)
         # Auto-delete system-notice replies (e.g. "✨ New session started!",
         # "♻ Restarting gateway…", "⚡ Stopped…") after N seconds on platforms
@@ -1373,64 +1103,6 @@ DEFAULT_CONFIG = {
             "fields": ["model", "context_pct", "cwd"],  # Order shown; drop any to hide
         },
         "copy_shortcut": "auto",  # "auto" (platform default) | "ctrl_c" | "ctrl_shift_c" | "disabled"
-    },
-
-    # Web dashboard settings
-    "dashboard": {
-        "theme": "default",  # Dashboard visual theme: "default", "midnight", "ember", "mono", "cyberpunk", "rose"
-        # Hide the token/cost analytics surfaces (Analytics page, token bars and
-        # cost figures on the Models page) by default.  The numbers shown there
-        # are a local debug estimate: they only count successful main-agent
-        # responses with a usable ``response.usage``, and silently exclude every
-        # auxiliary call (context compression, title generation, vision,
-        # session search, web extract, smart approval, MCP routing, plugin LLM
-        # access) plus provider-side retries, fallback attempts, and any call
-        # whose usage block didn't come back.  Cache writes are also missing
-        # from the API response.  On models with heavy auxiliary traffic
-        # (Kimi K2.6, MiniMax M2.7) the local total can be 10x-100x lower than
-        # the provider bill, which is worse than hiding the numbers entirely
-        # because they look precise enough to compare against the provider.
-        # Set this to True to re-enable the surfaces with the understanding
-        # that the numbers are a local lower-bound estimate, not billing.
-        "show_token_analytics": False,
-        # OAuth gate configuration (engaged when ``--host`` is set and
-        # ``--insecure`` is not). The bundled Nous Portal plugin reads
-        # both keys at startup; they are the canonical surface for these
-        # settings. Each can be overridden by an environment variable —
-        # ``MARLOW_DASHBOARD_OAUTH_CLIENT_ID`` and
-        # ``MARLOW_DASHBOARD_PORTAL_URL`` respectively — and the env var
-        # wins when set to a non-empty value. The override path is what
-        # Fly.io's platform-secret injection uses to push the per-deploy
-        # client_id at provisioning time without operators needing to
-        # touch config.yaml. Local dev / non-Fly deploys can set either
-        # surface; missing values fall through to the plugin's defaults
-        # (no provider registered when ``client_id`` is empty;
-        # ``portal_url`` defaults to https://portal.nousresearch.com).
-        "oauth": {
-            "client_id": "",  # agent:{instance_id} — Portal provisions this
-            "portal_url": "",  # blank → use plugin default (production Portal)
-        },
-        # Public URL override (env: ``MARLOW_DASHBOARD_PUBLIC_URL``).
-        # When set, this is the complete authority — scheme + host +
-        # optional path prefix (e.g. ``https://example.com/marlow``) —
-        # the OAuth ``redirect_uri`` is built from. Set this for deploys
-        # behind reverse proxies that don't reliably forward
-        # ``X-Forwarded-Host`` / ``X-Forwarded-Proto`` / ``X-Forwarded-Prefix``
-        # (manual nginx setups, on-prem ingresses, custom-domain Fly
-        # deploys without proper proxy headers). When set,
-        # ``X-Forwarded-Prefix`` is IGNORED on the OAuth path because
-        # the operator has declared the public URL — we no longer need
-        # to guess from proxy headers, and stacking the prefix on top
-        # would double-prefix the common case where the prefix is
-        # already baked into ``public_url``. Leave empty to use the
-        # existing proxy-header reconstruction (the default).
-        #
-        # Validation: rejects values without ``http(s)://`` scheme or
-        # without a host, and any string containing quote / angle /
-        # whitespace / control characters. A malformed value silently
-        # falls through to request reconstruction rather than breaking
-        # the login flow.
-        "public_url": "",
     },
 
     # Privacy settings
@@ -1542,8 +1214,7 @@ DEFAULT_CONFIG = {
         "memory_char_limit": 2200,   # ~800 tokens at 2.75 chars/token
         "user_char_limit": 1375,     # ~500 tokens at 2.75 chars/token
         # External memory provider plugin (empty = built-in only).
-        # Set to a provider name to activate: "openviking", "mem0",
-        # "hindsight", "holographic", "retaindb", "byterover".
+        # Supported bundled providers are "holographic" and "honcho".
         # Only ONE external provider is allowed at a time.
         "provider": "",
         # Legacy warmer for the completed turn's query. Disabled by
@@ -1601,16 +1272,13 @@ DEFAULT_CONFIG = {
     # Subagent delegation — override the provider:model used by delegate_task
     # so child agents can run on a different (cheaper/faster) provider and model.
     # Uses the same runtime provider resolution as CLI/gateway startup, so all
-    # configured providers (OpenRouter, Nous, Z.ai, Kimi, etc.) are supported.
+    # retained Codex and custom/local compatible runtimes are supported.
     "delegation": {
-        "model": "",       # e.g. "google/gemini-3-flash-preview" (empty = inherit parent model)
-        "provider": "",    # e.g. "openrouter" (empty = inherit parent provider + credentials)
+        "model": "",       # empty = inherit parent model
+        "provider": "",    # empty = inherit parent provider + credentials
         "base_url": "",    # direct OpenAI-compatible endpoint for subagents
         "api_key": "",     # API key for delegation.base_url (falls back to OPENAI_API_KEY)
-        "api_mode": "",    # wire protocol for delegation.base_url: "chat_completions",
-                           # "codex_responses", or "anthropic_messages". Empty = auto-detect
-                           # from URL (e.g. /anthropic suffix → anthropic_messages). Set this
-                           # explicitly for non-standard endpoints the heuristic can't detect.
+        "api_mode": "",    # "chat_completions" or "codex_responses"; empty = auto
         # When delegate_task narrows child toolsets explicitly, preserve any
         # MCP toolsets the parent already has enabled. On by default so
         # narrowing (e.g. toolsets=["web","browser"]) expresses "I want these
@@ -1717,7 +1385,7 @@ DEFAULT_CONFIG = {
     # Curator — background skill maintenance.
     #
     # Periodically reviews AGENT-CREATED skills (never bundled or
-    # hub-installed) and keeps the collection tidy: marks long-unused skills
+    # locally created) and keeps the collection tidy: marks long-unused skills
     # as stale, archives genuinely obsolete ones (archive only, never
     # deletes), and spawns a forked aux-model agent to consolidate overlaps
     # and patch drift. Runs inactivity-triggered from session start — no
@@ -1812,34 +1480,11 @@ DEFAULT_CONFIG = {
         "max_attachment_bytes": 33554432,
     },
 
-    # WhatsApp platform settings (gateway mode)
-    "whatsapp": {
-        # Reply prefix prepended to every outgoing WhatsApp message.
-        # Default (None) uses the built-in "⚕ *Marlow Agent*" header.
-        # Set to "" (empty string) to disable the header entirely.
-        # Supports \n for newlines, e.g. "🤖 *My Bot*\n──────\n"
-    },
-
     # Telegram platform settings (gateway mode)
     "telegram": {
         "reactions": False,            # Add 👀/✅/❌ reactions to messages during processing
         "channel_prompts": {},         # Per-chat/topic ephemeral system prompts (topics inherit from parent group)
         "allowed_chats": "",           # If set, bot ONLY responds in these group/supergroup chat IDs (whitelist)
-    },
-
-    # Mattermost platform settings (gateway mode)
-    "mattermost": {
-        "require_mention": True,       # Require @mention to respond in channels
-        "free_response_channels": "",  # Comma-separated channel IDs where bot responds without mention
-        "allowed_channels": "",        # If set, bot ONLY responds in these channel IDs (whitelist)
-        "channel_prompts": {},         # Per-channel ephemeral system prompts
-    },
-
-    # Matrix platform settings (gateway mode)
-    "matrix": {
-        "require_mention": True,       # Require @mention to respond in rooms
-        "free_response_rooms": "",     # Comma-separated room IDs where bot responds without mention
-        "allowed_rooms": "",           # If set, bot ONLY responds in these room IDs (whitelist)
     },
 
     # Approval mode for dangerous commands:
@@ -1972,8 +1617,7 @@ DEFAULT_CONFIG = {
     #
     # Core Marlow tools (terminal, read_file, write_file, patch,
     # search_files, todo, memory, browser_*, etc.) are NEVER deferred.
-    # See tools/tool_search.py for full design notes and the
-    # openclaw-tool-search-report PDF in this PR for the rationale.
+    # See tools/tool_search.py for the design rationale.
     "tools": {
         "tool_search": {
             # "auto" (default) — activate only when deferrable tool schemas
@@ -2001,27 +1645,6 @@ DEFAULT_CONFIG = {
         "level": "INFO",       # Minimum level for agent.log: DEBUG, INFO, WARNING
         "max_size_mb": 5,      # Max size per log file before rotation
         "backup_count": 3,     # Number of rotated backup files to keep
-    },
-
-    # Remotely-hosted model catalog manifest.  When enabled, the CLI fetches
-    # curated model lists for OpenRouter and Nous Portal from this URL,
-    # falling back to the in-repo snapshot on network failure.  Lets us
-    # update model picker lists without shipping a marlow-agent release.
-    # The default URL is served by the docs site GitHub Pages deploy.
-    "model_catalog": {
-        "enabled": True,
-        "url": "https://marlow-agent.nousresearch.com/docs/api/model-catalog.json",
-        # Disk cache TTL in hours.  Beyond this, the CLI refetches on the
-        # next /model or `marlow model` invocation; network failures
-        # silently fall back to the stale cache.
-        "ttl_hours": 1,
-        # Optional per-provider override URLs for third parties that want
-        # to self-host their own curation list using the same schema.
-        # Example:
-        #   providers:
-        #     openrouter:
-        #       url: https://example.com/my-curation.json
-        "providers": {},
     },
 
     # Network settings — workarounds for connectivity issues.
@@ -2090,7 +1713,7 @@ DEFAULT_CONFIG = {
         #             supports it (Telegram DMs via sendMessageDraft,
         #             Bot API 9.5+) and fall back to edit-based elsewhere.
         #             Safe global default: platforms without draft support
-        #             (Discord, Slack, Matrix, Telegram groups) transparently
+        #             (Discord, Slack, Telegram groups) transparently
         #             use the edit path, so "auto" only upgrades chats that
         #             can render the smoother native preview.
         #   "draft" — explicitly request native drafts; falls back to edit
@@ -2157,127 +1780,6 @@ DEFAULT_CONFIG = {
         "seen": {},
     },
 
-    # ``marlow update`` behaviour.
-    "updates": {
-        # Run a full ``marlow backup``-style zip of MARLOW_HOME before every
-        # ``marlow update``.  Backups land in ``<MARLOW_HOME>/backups/`` and
-        # can be restored with ``marlow import <path>``.  Off by default —
-        # on large MARLOW_HOME directories the zip can add minutes to every
-        # update.  Set to true to re-enable, or pass ``--backup`` to opt in
-        # for a single update run.
-        "pre_update_backup": False,
-        # How many pre-update backup zips to retain.  Older ones are pruned
-        # automatically after each successful backup.  Values below 1 are
-        # floored to 1 — the backup just created is always preserved.  To
-        # disable backups entirely, set ``pre_update_backup: false`` above
-        # rather than ``backup_keep: 0``.
-        "backup_keep": 5,
-    },
-
-    # Language Server Protocol — semantic diagnostics from real
-    # language servers (pyright, gopls, rust-analyzer, etc.) wired
-    # into the post-write lint check used by ``write_file`` and
-    # ``patch``.
-    #
-    # LSP is gated on git-workspace detection: when the agent's
-    # cwd (or the file being edited) is inside a git worktree, LSP
-    # runs against that workspace.  When neither is in a git repo,
-    # LSP stays dormant and the in-process syntax check is the only
-    # tier — handy for Telegram/Discord chats where the cwd is the
-    # user's home directory.
-    "lsp": {
-        # Master toggle.  Setting this to false disables the entire
-        # subsystem — no servers spawn, no background event loop, no
-        # cost.
-        "enabled": True,
-
-        # Diagnostic-wait mode for the post-write check.
-        # ``"document"`` waits up to ``wait_timeout`` seconds for the
-        # current file's diagnostics; ``"full"`` additionally requests
-        # workspace-wide diagnostics (slower).
-        "wait_mode": "document",
-        "wait_timeout": 5.0,
-
-        # How to handle missing server binaries.
-        # ``"auto"`` — try to install via npm/go/pip into
-        #              ``<MARLOW_HOME>/lsp/bin/`` on first use.
-        # ``"manual"`` — only use binaries already on PATH.
-        # ``"off"`` — alias for ``manual``.
-        "install_strategy": "auto",
-
-        # Per-server overrides.  Each key is a server_id from the
-        # registry (``pyright``, ``typescript``, ``gopls``,
-        # ``rust-analyzer``, etc.) and accepts:
-        #   disabled: true
-        #     — skip this server even when its extensions match
-        #   command: ["full/path/to/server", "--stdio"]
-        #     — pin a custom binary path; bypasses auto-install
-        #   env: {"KEY": "value"}
-        #     — extra env vars passed to the spawned process
-        #   initialization_options: {...}
-        #     — merged into the LSP ``initializationOptions``
-        # Empty by default; the registry defaults work for typical
-        # setups.
-        "servers": {},
-    },
-
-
-    # X (Twitter) Search via xAI's built-in x_search Responses tool.
-    # The tool registers when xAI credentials are available (SuperGrok
-    # OAuth or XAI_API_KEY) AND the x_search toolset is enabled in
-    # `marlow tools`. These settings tune the backing Responses API call.
-    "x_search": {
-        # xAI model used for the Responses call. grok-4.20-reasoning is
-        # the recommended default; any Grok model with x_search tool
-        # access works.
-        "model": "grok-4.20-reasoning",
-        # Request timeout in seconds (minimum 30). x_search can take
-        # 60-120s for complex queries — the default is generous.
-        "timeout_seconds": 180,
-        # Number of automatic retries on 5xx / ReadTimeout / ConnectionError.
-        # Each retry backs off (1.5x attempt seconds, capped at 5s).
-        "retries": 2,
-    },
-
-    # =========================================================================
-    # External secret sources
-    # =========================================================================
-    # Pull credentials from external secret managers at process startup
-    # rather than storing them in ~/.marlow/.env.
-    "secrets": {
-        "bitwarden": {
-            # Master switch.  When false, BSM is never contacted and the
-            # bws binary is never auto-installed — same as not having
-            # this section at all.
-            "enabled": False,
-            # Name of the env var that holds the Bitwarden machine-account
-            # access token.  This is the one bootstrap secret; it lives
-            # in ~/.marlow/.env (or your shell) and never in config.yaml.
-            "access_token_env": "BWS_ACCESS_TOKEN",
-            # UUID of the BSM project to sync from.
-            "project_id": "",
-            # Seconds to cache fetched secrets in-process.  0 disables.
-            "cache_ttl_seconds": 300,
-            # When True, BSM values overwrite existing env vars.  Default
-            # True because the point of using BSM is centralized rotation —
-            # if .env had the final say, rotating in Bitwarden wouldn't
-            # take effect until you also cleared the matching .env line.
-            "override_existing": True,
-            # When True, the bws binary is auto-downloaded into
-            # ~/.marlow/bin/ on first use.  When False you must install
-            # bws yourself and have it on PATH.
-            "auto_install": True,
-            # Bitwarden region / self-hosted endpoint.  Empty string
-            # means use the bws CLI default (US Cloud,
-            # https://vault.bitwarden.com).  Set to
-            # https://vault.bitwarden.eu for EU Cloud, or your own URL
-            # for self-hosted Bitwarden.  Plumbed into the bws subprocess
-            # as BWS_SERVER_URL.  Prompted for during
-            # `marlow secrets bitwarden setup`.
-            "server_url": "",
-        },
-    },
-
     # Paste collapse thresholds (TUI + CLI).
     #
     # paste_collapse_threshold (default 5)
@@ -2308,1098 +1810,220 @@ DEFAULT_CONFIG = {
 # Config Migration System
 # =============================================================================
 
-# Track which env vars were introduced in each config version.
-# Migration only mentions vars new since the user's previous version.
-ENV_VARS_BY_VERSION: Dict[int, List[str]] = {
-    3: ["FIRECRAWL_API_KEY", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "FAL_KEY"],
-    4: ["VOICE_TOOLS_OPENAI_KEY", "ELEVENLABS_API_KEY"],
-    5: ["WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS",
-        "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_ALLOWED_USERS"],
-    10: ["TAVILY_API_KEY"],
-    11: ["TERMINAL_MODAL_MODE"],
-}
-
 # Required environment variables with metadata for migration prompts.
 # LLM provider is required but handled in the setup wizard's provider
-# selection step (Nous Portal / OpenRouter / Custom endpoint), so this
+# selection step (Codex or a custom/local endpoint), so this
 # dict is intentionally empty — no single env var is universally required.
 REQUIRED_ENV_VARS = {}
 
 # Optional environment variables that enhance functionality
-OPTIONAL_ENV_VARS = {
-    # ── Provider (handled in provider selection, not shown in checklists) ──
-    "NOUS_BASE_URL": {
-        "description": "Nous Portal base URL override",
-        "prompt": "Nous Portal base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENROUTER_API_KEY": {
-        "description": "OpenRouter API key (for vision, web scraping helpers, and MoA)",
-        "prompt": "OpenRouter API key",
-        "url": "https://openrouter.ai/keys",
-        "password": True,
-        "tools": ["vision_analyze", "mixture_of_agents"],
-        "category": "provider",
-        "advanced": True,
-    },
-    "GOOGLE_API_KEY": {
-        "description": "Google AI Studio API key (also recognized as GEMINI_API_KEY)",
-        "prompt": "Google AI Studio API key",
-        "url": "https://aistudio.google.com/app/apikey",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GEMINI_API_KEY": {
-        "description": "Google AI Studio API key (alias for GOOGLE_API_KEY)",
-        "prompt": "Gemini API key",
-        "url": "https://aistudio.google.com/app/apikey",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GEMINI_BASE_URL": {
-        "description": "Google AI Studio base URL override",
-        "prompt": "Gemini base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "XAI_API_KEY": {
-        "description": "xAI API key",
-        "prompt": "xAI API key",
-        "url": "https://console.x.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "XAI_BASE_URL": {
-        "description": "xAI base URL override",
-        "prompt": "xAI base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "NVIDIA_API_KEY": {
-        "description": "NVIDIA NIM API key (build.nvidia.com or local NIM endpoint)",
-        "prompt": "NVIDIA NIM API key",
-        "url": "https://build.nvidia.com/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "NVIDIA_BASE_URL": {
-        "description": "NVIDIA NIM base URL override (e.g. http://localhost:8000/v1 for local NIM)",
-        "prompt": "NVIDIA NIM base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "LM_API_KEY": {
-        "description": "LM Studio bearer token for auth-enabled local servers",
-        "prompt": "LM Studio API key / bearer token",
-        "url": None,
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "LM_BASE_URL": {
-        "description": "LM Studio base URL override",
-        "prompt": "LM Studio base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GLM_API_KEY": {
-        "description": "Z.AI / GLM API key (also recognized as ZAI_API_KEY / Z_AI_API_KEY)",
-        "prompt": "Z.AI / GLM API key",
-        "url": "https://z.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "ZAI_API_KEY": {
-        "description": "Z.AI API key (alias for GLM_API_KEY)",
-        "prompt": "Z.AI API key",
-        "url": "https://z.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "Z_AI_API_KEY": {
-        "description": "Z.AI API key (alias for GLM_API_KEY)",
-        "prompt": "Z.AI API key",
-        "url": "https://z.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GLM_BASE_URL": {
-        "description": "Z.AI / GLM base URL override",
-        "prompt": "Z.AI / GLM base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "KIMI_API_KEY": {
-        "description": "Kimi / Moonshot API key",
-        "prompt": "Kimi API key",
-        "url": "https://platform.moonshot.cn/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "KIMI_BASE_URL": {
-        "description": "Kimi / Moonshot base URL override",
-        "prompt": "Kimi base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "KIMI_CN_API_KEY": {
-        "description": "Kimi / Moonshot China API key",
-        "prompt": "Kimi (China) API key",
-        "url": "https://platform.moonshot.cn/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "STEPFUN_API_KEY": {
-        "description": "StepFun Step Plan API key",
-        "prompt": "StepFun Step Plan API key",
-        "url": "https://platform.stepfun.com/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "STEPFUN_BASE_URL": {
-        "description": "StepFun Step Plan base URL override",
-        "prompt": "StepFun Step Plan base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "ARCEEAI_API_KEY": {
-        "description": "Arcee AI API key",
-        "prompt": "Arcee AI API key",
-        "url": "https://chat.arcee.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "ARCEE_BASE_URL": {
-        "description": "Arcee AI base URL override",
-        "prompt": "Arcee base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GMI_API_KEY": {
-        "description": "GMI Cloud API key",
-        "prompt": "GMI Cloud API key",
-        "url": "https://www.gmicloud.ai/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "GMI_BASE_URL": {
-        "description": "GMI Cloud base URL override",
-        "prompt": "GMI Cloud base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MINIMAX_API_KEY": {
-        "description": "MiniMax API key (international)",
-        "prompt": "MiniMax API key",
-        "url": "https://www.minimax.io/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MINIMAX_BASE_URL": {
-        "description": "MiniMax base URL override",
-        "prompt": "MiniMax base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MINIMAX_CN_API_KEY": {
-        "description": "MiniMax API key (China endpoint)",
-        "prompt": "MiniMax (China) API key",
-        "url": "https://www.minimaxi.com/",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MINIMAX_CN_BASE_URL": {
-        "description": "MiniMax (China) base URL override",
-        "prompt": "MiniMax (China) base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "DEEPSEEK_API_KEY": {
-        "description": "DeepSeek API key for direct DeepSeek access",
-        "prompt": "DeepSeek API Key",
-        "url": "https://platform.deepseek.com/api_keys",
-        "password": True,
-        "category": "provider",
-    },
-    "DEEPSEEK_BASE_URL": {
-        "description": "Custom DeepSeek API base URL (advanced)",
-        "prompt": "DeepSeek Base URL",
-        "url": "",
-        "password": False,
-        "category": "provider",
-    },
-    "DASHSCOPE_API_KEY": {
-        "description": "Alibaba Cloud DashScope API key (Qwen + multi-provider models)",
-        "prompt": "DashScope API Key",
-        "url": "https://modelstudio.console.alibabacloud.com/",
-        "password": True,
-        "category": "provider",
-    },
-    "DASHSCOPE_BASE_URL": {
-        "description": "Custom DashScope base URL (default: coding-intl OpenAI-compat endpoint)",
-        "prompt": "DashScope Base URL",
-        "url": "",
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MARLOW_QWEN_BASE_URL": {
-        "description": "Qwen Portal base URL override (default: https://portal.qwen.ai/v1)",
-        "prompt": "Qwen Portal base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MARLOW_GEMINI_CLIENT_ID": {
-        "description": "Google OAuth client ID for google-gemini-cli (optional; defaults to Google's public gemini-cli client)",
-        "prompt": "Google OAuth client ID (optional — leave empty to use the public default)",
-        "url": "https://console.cloud.google.com/apis/credentials",
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MARLOW_GEMINI_CLIENT_SECRET": {
-        "description": "Google OAuth client secret for google-gemini-cli (optional)",
-        "prompt": "Google OAuth client secret (optional)",
-        "url": "https://console.cloud.google.com/apis/credentials",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "MARLOW_GEMINI_PROJECT_ID": {
-        "description": "GCP project ID for paid Gemini tiers (free tier auto-provisions)",
-        "prompt": "GCP project ID for Gemini OAuth (leave empty for free tier)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENCODE_ZEN_API_KEY": {
-        "description": "OpenCode Zen API key (pay-as-you-go access to curated models)",
-        "prompt": "OpenCode Zen API key",
-        "url": "https://opencode.ai/auth",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENCODE_ZEN_BASE_URL": {
-        "description": "OpenCode Zen base URL override",
-        "prompt": "OpenCode Zen base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENCODE_GO_API_KEY": {
-        "description": "OpenCode Go API key ($10/month subscription for open models)",
-        "prompt": "OpenCode Go API key",
-        "url": "https://opencode.ai/auth",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENCODE_GO_BASE_URL": {
-        "description": "OpenCode Go base URL override",
-        "prompt": "OpenCode Go base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "HF_TOKEN": {
-        "description": "Hugging Face token for Inference Providers (20+ open models via router.huggingface.co)",
-        "prompt": "Hugging Face Token",
-        "url": "https://huggingface.co/settings/tokens",
-        "password": True,
-        "category": "provider",
-    },
-    "HF_BASE_URL": {
-        "description": "Hugging Face Inference Providers base URL override",
-        "prompt": "HF base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OLLAMA_API_KEY": {
-        "description": "Ollama Cloud API key (ollama.com — cloud-hosted open models)",
-        "prompt": "Ollama Cloud API key",
-        "url": "https://ollama.com/settings",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OLLAMA_BASE_URL": {
-        "description": "Ollama Cloud base URL override (default: https://ollama.com/v1)",
-        "prompt": "Ollama base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "XIAOMI_API_KEY": {
-        "description": "Xiaomi MiMo API key for MiMo models (mimo-v2.5-pro, mimo-v2.5, mimo-v2-pro, mimo-v2-omni, mimo-v2-flash)",
-        "prompt": "Xiaomi MiMo API Key",
-        "url": "https://platform.xiaomimimo.com",
-        "password": True,
-        "category": "provider",
-    },
-    "XIAOMI_BASE_URL": {
-        "description": "Xiaomi MiMo base URL override (default: https://api.xiaomimimo.com/v1)",
-        "prompt": "Xiaomi base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "AWS_REGION": {
-        "description": "AWS region for Bedrock API calls (e.g. us-east-1, eu-central-1)",
-        "prompt": "AWS Region",
-        "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-regions.html",
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "AWS_PROFILE": {
-        "description": "AWS named profile for Bedrock authentication (from ~/.aws/credentials)",
-        "prompt": "AWS Profile",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "AZURE_FOUNDRY_API_KEY": {
-        "description": "Azure Foundry API key for custom Azure endpoints",
-        "prompt": "Azure Foundry API Key",
-        "url": "https://ai.azure.com/",
-        "password": True,
-        "category": "provider",
-    },
-    "AZURE_FOUNDRY_BASE_URL": {
-        "description": "Azure Foundry base URL (set via 'marlow model' for endpoint-specific config)",
-        "prompt": "Azure Foundry base URL",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-
-    # ── Tool API keys ──
-    "EXA_API_KEY": {
-        "description": "Exa API key for AI-native web search and contents",
-        "prompt": "Exa API key",
-        "url": "https://exa.ai/",
-        "tools": ["web_search", "web_extract"],
-        "password": True,
-        "category": "tool",
-    },
-    "PARALLEL_API_KEY": {
-        "description": "Parallel API key for AI-native web search and extract",
-        "prompt": "Parallel API key",
-        "url": "https://parallel.ai/",
-        "tools": ["web_search", "web_extract"],
-        "password": True,
-        "category": "tool",
-    },
-    "FIRECRAWL_API_KEY": {
-        "description": "Firecrawl API key for web search and scraping",
-        "prompt": "Firecrawl API key",
-        "url": "https://firecrawl.dev/",
-        "tools": ["web_search", "web_extract"],
-        "password": True,
-        "category": "tool",
-    },
-    "FIRECRAWL_API_URL": {
-        "description": "Firecrawl API URL for self-hosted instances (optional)",
-        "prompt": "Firecrawl API URL (leave empty for cloud)",
-        "url": None,
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "FIRECRAWL_GATEWAY_URL": {
-        "description": "Exact Firecrawl tool-gateway origin override for Nous Subscribers only (optional)",
-        "prompt": "Firecrawl gateway URL (leave empty to derive from domain)",
-        "url": None,
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "TOOL_GATEWAY_DOMAIN": {
-        "description": "Shared tool-gateway domain suffix for Nous Subscribers only, used to derive vendor hosts, e.g. nousresearch.com -> firecrawl-gateway.nousresearch.com",
-        "prompt": "Tool-gateway domain suffix",
-        "url": None,
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "TOOL_GATEWAY_SCHEME": {
-        "description": "Shared tool-gateway URL scheme for Nous Subscribers only, used to derive vendor hosts (`https` by default, set `http` for local gateway testing)",
-        "prompt": "Tool-gateway URL scheme",
-        "url": None,
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "TOOL_GATEWAY_USER_TOKEN": {
-        "description": "Explicit Nous Subscriber access token for tool-gateway requests (optional; otherwise read from the Marlow auth store)",
-        "prompt": "Tool-gateway user token",
-        "url": None,
-        "password": True,
-        "category": "tool",
-        "advanced": True,
-    },
-    "TAVILY_API_KEY": {
-        "description": "Tavily API key for AI-native web search and extract",
-        "prompt": "Tavily API key",
-        "url": "https://app.tavily.com/home",
-        "tools": ["web_search", "web_extract"],
-        "password": True,
-        "category": "tool",
-    },
-    "SEARXNG_URL": {
-        "description": "URL of your SearXNG instance for free self-hosted web search",
-        "prompt": "SearXNG URL (e.g. http://localhost:8080)",
-        "url": "https://searxng.github.io/searxng/",
-        "tools": ["web_search"],
-        "password": False,
-        "category": "tool",
-    },
-    "BRAVE_SEARCH_API_KEY": {
-        "description": "Brave Search API subscription token (free tier: 2,000 queries/mo)",
-        "prompt": "Brave Search subscription token",
-        "url": "https://brave.com/search/api/",
-        "tools": ["web_search"],
-        "password": True,
-        "category": "tool",
-    },
-    "BROWSERBASE_API_KEY": {
-        "description": "Browserbase API key for cloud browser (optional — local browser works without this)",
-        "prompt": "Browserbase API key",
-        "url": "https://browserbase.com/",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": True,
-        "category": "tool",
-    },
-    "BROWSERBASE_PROJECT_ID": {
-        "description": "Browserbase project ID (optional — only needed for cloud browser)",
-        "prompt": "Browserbase project ID",
-        "url": "https://browserbase.com/",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": False,
-        "category": "tool",
-    },
-    "BROWSER_USE_API_KEY": {
-        "description": "Browser Use API key for cloud browser (optional — local browser works without this)",
-        "prompt": "Browser Use API key",
-        "url": "https://browser-use.com/",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": True,
-        "category": "tool",
-    },
-    "FIRECRAWL_BROWSER_TTL": {
-        "description": "Firecrawl browser session TTL in seconds (optional, default 300)",
-        "prompt": "Browser session TTL (seconds)",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": False,
-        "category": "tool",
-    },
-    "AGENT_BROWSER_ENGINE": {
-        "description": "Browser engine for local mode: auto (default Chrome), lightpanda (faster, no screenshots), chrome",
-        "prompt": "Browser engine (auto/lightpanda/chrome)",
-        "url": "https://github.com/vercel-labs/agent-browser",
-        "tools": ["browser_navigate", "browser_snapshot", "browser_click", "browser_vision"],
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "CAMOFOX_URL": {
-        "description": "Camofox browser server URL for local anti-detection browsing (e.g. http://localhost:9377)",
-        "prompt": "Camofox server URL",
-        "url": "https://github.com/jo-inc/camofox-browser",
-        "tools": ["browser_navigate", "browser_click"],
-        "password": False,
-        "category": "tool",
-    },
-    "FAL_KEY": {
-        "description": "FAL API key for image and video generation",
-        "prompt": "FAL API key",
-        "url": "https://fal.ai/",
-        "tools": ["image_generate", "video_generate"],
-        "password": True,
-        "category": "tool",
-    },
-    "KREA_API_KEY": {
-        "description": "Krea API key for Krea 2 image generation (Medium + Large)",
-        "prompt": "Krea API key",
-        "url": "https://www.krea.ai/settings/api-tokens",
-        "tools": ["image_generate"],
-        "password": True,
-        "category": "tool",
-    },
-    "VOICE_TOOLS_OPENAI_KEY": {
-        "description": "OpenAI API key for voice transcription (Whisper) and OpenAI TTS",
-        "prompt": "OpenAI API Key (for Whisper STT + TTS)",
-        "url": "https://platform.openai.com/api-keys",
-        "tools": ["voice_transcription", "openai_tts"],
-        "password": True,
-        "category": "tool",
-    },
-    "ELEVENLABS_API_KEY": {
-        "description": "ElevenLabs API key for premium text-to-speech voices and Scribe transcription",
-        "prompt": "ElevenLabs API key",
-        "url": "https://elevenlabs.io/",
-        "tools": ["elevenlabs_tts", "voice_transcription"],
-        "password": True,
-        "category": "tool",
-    },
-    "MISTRAL_API_KEY": {
-        "description": "Mistral API key for Voxtral TTS and transcription (STT)",
-        "prompt": "Mistral API key",
-        "url": "https://console.mistral.ai/",
-        "password": True,
-        "category": "tool",
-    },
-    "GITHUB_TOKEN": {
-        "description": "GitHub token for Skills Hub (higher API rate limits, skill publish)",
-        "prompt": "GitHub Token",
-        "url": "https://github.com/settings/tokens",
-        "password": True,
-        "category": "tool",
-    },
-
-    # ── Bundled skills (opt-in: only needed if the user uses that skill) ──
-    # These use category="skill" (distinct from "tool") so the sandbox
-    # env blocklist in tools/environments/local.py does NOT rewrite them —
-    # skills legitimately need these passed through to curl via
-    # tools/env_passthrough.py when the user's skill calls out.
-    "NOTION_API_KEY": {
-        "description": "Notion integration token (used by the `notion` skill)",
-        "prompt": "Notion API key",
-        "url": "https://www.notion.so/my-integrations",
-        "password": True,
-        "category": "skill",
-        "advanced": True,
-    },
-    "LINEAR_API_KEY": {
-        "description": "Linear personal API key (used by the `linear` skill)",
-        "prompt": "Linear API key",
-        "url": "https://linear.app/settings/account/security",
-        "password": True,
-        "category": "skill",
-        "advanced": True,
-    },
-    "AIRTABLE_API_KEY": {
-        "description": "Airtable personal access token (used by the `airtable` skill)",
-        "prompt": "Airtable API key",
-        "url": "https://airtable.com/create/tokens",
-        "password": True,
-        "category": "skill",
-        "advanced": True,
-    },
-    "TENOR_API_KEY": {
-        "description": "Tenor API key for GIF search (used by the `gif-search` skill)",
-        "prompt": "Tenor API key",
-        "url": "https://developers.google.com/tenor/guides/quickstart",
-        "password": True,
-        "category": "skill",
-        "advanced": True,
-    },
-
-    # ── Honcho ──
-    "HONCHO_API_KEY": {
-        "description": "Honcho API key for AI-native persistent memory",
-        "prompt": "Honcho API key",
-        "url": "https://app.honcho.dev",
-        "tools": ["honcho_context"],
-        "password": True,
-        "category": "tool",
-    },
-    "HONCHO_BASE_URL": {
-        "description": "Base URL for self-hosted Honcho instances (no API key needed)",
-        "prompt": "Honcho base URL (e.g. http://localhost:8000)",
-        "category": "tool",
-    },
-
-    # ── Langfuse observability ──
-    "MARLOW_LANGFUSE_PUBLIC_KEY": {
-        "description": "Langfuse project public key (pk-lf-...)",
-        "prompt": "Langfuse public key",
-        "url": "https://cloud.langfuse.com",
-        "password": False,
-        "category": "tool",
-    },
-    "MARLOW_LANGFUSE_SECRET_KEY": {
-        "description": "Langfuse project secret key (sk-lf-...)",
-        "prompt": "Langfuse secret key",
-        "url": "https://cloud.langfuse.com",
-        "password": True,
-        "category": "tool",
-    },
-    "MARLOW_LANGFUSE_BASE_URL": {
-        "description": "Langfuse server URL (default: https://cloud.langfuse.com)",
-        "prompt": "Langfuse server URL (leave empty for cloud.langfuse.com)",
-        "url": None,
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-
-    # ── Messaging platforms ──
-    "TELEGRAM_BOT_TOKEN": {
-        "description": "Telegram bot token from @BotFather",
-        "prompt": "Telegram bot token",
-        "url": "https://t.me/BotFather",
-        "password": True,
-        "category": "messaging",
-    },
-    "TELEGRAM_ALLOWED_USERS": {
-        "description": "Comma-separated Telegram user IDs allowed to use the bot (get ID from @userinfobot)",
-        "prompt": "Allowed Telegram user IDs (comma-separated)",
-        "url": "https://t.me/userinfobot",
-        "password": False,
-        "category": "messaging",
-    },
-    "TELEGRAM_PROXY": {
-        "description": "Proxy URL for Telegram connections (overrides HTTPS_PROXY). Supports http://, https://, socks5://",
-        "prompt": "Telegram proxy URL (optional)",
-        "password": False,
-        "category": "messaging",
-    },
-    "DISCORD_BOT_TOKEN": {
-        "description": "Discord bot token from Developer Portal",
-        "prompt": "Discord bot token",
-        "url": "https://discord.com/developers/applications",
-        "password": True,
-        "category": "messaging",
-    },
-    "DISCORD_ALLOWED_USERS": {
-        "description": "Comma-separated Discord user IDs allowed to use the bot",
-        "prompt": "Allowed Discord user IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "DISCORD_REPLY_TO_MODE": {
-        "description": "Discord reply threading mode: 'off' (no reply references), 'first' (reply on first message only, default), 'all' (reply on every chunk)",
-        "prompt": "Discord reply mode (off/first/all)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "SLACK_BOT_TOKEN": {
-        "description": "Slack bot token (xoxb-). Get from OAuth & Permissions after installing your app. "
-                       "Required scopes: chat:write, app_mentions:read, channels:history, groups:history, "
-                       "im:history, im:read, im:write, users:read, files:read, files:write",
-        "prompt": "Slack Bot Token (xoxb-...)",
-        "url": "https://api.slack.com/apps",
-        "password": True,
-        "category": "messaging",
-    },
-    "SLACK_APP_TOKEN": {
-        "description": "Slack app-level token (xapp-) for Socket Mode. Get from Basic Information → "
-                       "App-Level Tokens. Also ensure Event Subscriptions include: message.im, "
-                       "message.channels, message.groups, app_mention",
-        "prompt": "Slack App Token (xapp-...)",
-        "url": "https://api.slack.com/apps",
-        "password": True,
-        "category": "messaging",
-    },
-    "MATTERMOST_URL": {
-        "description": "Mattermost server URL (e.g. https://mm.example.com)",
-        "prompt": "Mattermost server URL",
-        "url": "https://mattermost.com/deploy/",
-        "password": False,
-        "category": "messaging",
-    },
-    "MATTERMOST_TOKEN": {
-        "description": "Mattermost bot token or personal access token",
-        "prompt": "Mattermost bot token",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-    },
-    "MATTERMOST_ALLOWED_USERS": {
-        "description": "Comma-separated Mattermost user IDs allowed to use the bot",
-        "prompt": "Allowed Mattermost user IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATTERMOST_REQUIRE_MENTION": {
-        "description": "Require @mention in Mattermost channels (default: true). Set to false to respond to all messages.",
-        "prompt": "Require @mention in channels",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATTERMOST_FREE_RESPONSE_CHANNELS": {
-        "description": "Comma-separated Mattermost channel IDs where bot responds without @mention",
-        "prompt": "Free-response channel IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATRIX_HOMESERVER": {
-        "description": "Matrix homeserver URL (e.g. https://matrix.example.org)",
-        "prompt": "Matrix homeserver URL",
-        "url": "https://matrix.org/ecosystem/servers/",
-        "password": False,
-        "category": "messaging",
-    },
-    "MATRIX_ACCESS_TOKEN": {
-        "description": "Matrix access token (preferred over password login)",
-        "prompt": "Matrix access token",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-    },
-    "MATRIX_USER_ID": {
-        "description": "Matrix user ID (e.g. @marlow:example.org)",
-        "prompt": "Matrix user ID (@user:server)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATRIX_ALLOWED_USERS": {
-        "description": "Comma-separated Matrix user IDs allowed to use the bot (@user:server format)",
-        "prompt": "Allowed Matrix user IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATRIX_REQUIRE_MENTION": {
-        "description": "Require @mention in Matrix rooms (default: true). Set to false to respond to all messages.",
-        "prompt": "Require @mention in rooms (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "MATRIX_FREE_RESPONSE_ROOMS": {
-        "description": "Comma-separated Matrix room IDs where bot responds without @mention",
-        "prompt": "Free-response room IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "MATRIX_AUTO_THREAD": {
-        "description": "Auto-create threads for messages in Matrix rooms (default: true)",
-        "prompt": "Auto-create threads in rooms (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "MATRIX_DM_AUTO_THREAD": {
-        "description": "Auto-create threads for DM messages in Matrix (default: false)",
-        "prompt": "Auto-create threads in DMs (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "MATRIX_DEVICE_ID": {
-        "description": "Stable Matrix device ID for E2EE persistence across restarts (e.g. MARLOW_BOT)",
-        "prompt": "Matrix device ID (stable across restarts)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "MATRIX_RECOVERY_KEY": {
-        "description": "Matrix recovery key for cross-signing verification after device key rotation (from Element: Settings → Security → Recovery Key)",
-        "prompt": "Matrix recovery key",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "BLUEBUBBLES_SERVER_URL": {
-        "description": "BlueBubbles server URL for iMessage integration (e.g. http://192.168.1.10:1234)",
-        "prompt": "BlueBubbles server URL",
-        "url": "https://bluebubbles.app/",
-        "password": False,
-        "category": "messaging",
-    },
-    "BLUEBUBBLES_PASSWORD": {
-        "description": "BlueBubbles server password (from BlueBubbles Server → Settings → API)",
-        "prompt": "BlueBubbles server password",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-    },
-    "BLUEBUBBLES_ALLOWED_USERS": {
-        "description": "Comma-separated iMessage addresses (email or phone) allowed to use the bot",
-        "prompt": "Allowed iMessage addresses (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "BLUEBUBBLES_ALLOW_ALL_USERS": {
-        "description": "Allow all BlueBubbles users without allowlist",
-        "prompt": "Allow All BlueBubbles Users",
-        "category": "messaging",
-    },
-    "QQ_APP_ID": {
-        "description": "QQ Bot App ID from QQ Open Platform (q.qq.com)",
-        "prompt": "QQ App ID",
-        "url": "https://q.qq.com",
-        "category": "messaging",
-    },
-    "QQ_CLIENT_SECRET": {
-        "description": "QQ Bot Client Secret from QQ Open Platform",
-        "prompt": "QQ Client Secret",
-        "password": True,
-        "category": "messaging",
-    },
-    "QQ_ALLOWED_USERS": {
-        "description": "Comma-separated QQ user IDs allowed to use the bot",
-        "prompt": "QQ Allowed Users",
-        "category": "messaging",
-    },
-    "QQ_GROUP_ALLOWED_USERS": {
-        "description": "Comma-separated QQ group IDs allowed to interact with the bot",
-        "prompt": "QQ Group Allowed Users",
-        "category": "messaging",
-    },
-    "QQ_ALLOW_ALL_USERS": {
-        "description": "Allow all QQ users without an allowlist (true/false)",
-        "prompt": "Allow All QQ Users",
-        "category": "messaging",
-    },
-    "QQBOT_HOME_CHANNEL": {
-        "description": "Default QQ channel/group for cron delivery and notifications",
-        "prompt": "QQ Home Channel",
-        "category": "messaging",
-    },
-    "QQBOT_HOME_CHANNEL_NAME": {
-        "description": "Display name for the QQ home channel",
-        "prompt": "QQ Home Channel Name",
-        "category": "messaging",
-    },
-    "QQ_SANDBOX": {
-        "description": "Enable QQ sandbox mode for development testing (true/false)",
-        "prompt": "QQ Sandbox Mode",
-        "category": "messaging",
-    },
-    "IRC_SERVER": {
-        "description": "IRC server hostname (e.g. irc.libera.chat)",
-        "prompt": "IRC server",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "IRC_CHANNEL": {
-        "description": "IRC channel to join (e.g. #marlow)",
-        "prompt": "IRC channel",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "IRC_NICKNAME": {
-        "description": "Bot nickname on IRC (default: marlow-bot)",
-        "prompt": "IRC nickname",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "IRC_SERVER_PASSWORD": {
-        "description": "IRC server password (if required)",
-        "prompt": "IRC server password",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "IRC_NICKSERV_PASSWORD": {
-        "description": "NickServ password for nick identification",
-        "prompt": "NickServ password",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "GATEWAY_ALLOW_ALL_USERS": {
-        "description": "Allow all users to interact with messaging bots (true/false). Default: false.",
-        "prompt": "Allow all users (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_ENABLED": {
-        "description": "Enable the OpenAI-compatible API server (true/false). Allows frontends like Open WebUI, LobeChat, etc. to connect.",
-        "prompt": "Enable API server (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_KEY": {
-        "description": "Bearer token for API server authentication. Required whenever the API server is enabled; server refuses to start without it.",
-        "prompt": "API server auth key",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_PORT": {
-        "description": "Port for the API server (default: 8642).",
-        "prompt": "API server port",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_HOST": {
-        "description": "Host/bind address for the API server (default: 127.0.0.1). API_SERVER_KEY is still required even on loopback binds.",
-        "prompt": "API server host",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_MODEL_NAME": {
-        "description": "Model name advertised on /v1/models. Defaults to the profile name (or 'marlow-agent' for the default profile). Useful for multi-user setups with OpenWebUI.",
-        "prompt": "API server model name",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "GATEWAY_PROXY_URL": {
-        "description": "URL of a remote Marlow API server to forward messages to (proxy mode). When set, the gateway handles platform I/O only — all agent work is delegated to the remote server. Use for Docker E2EE containers that relay to a host agent. Also configurable via gateway.proxy_url in config.yaml.",
-        "prompt": "Remote Marlow API server URL (e.g. http://192.168.1.100:8642)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "GATEWAY_PROXY_KEY": {
-        "description": "Bearer token for authenticating with the remote Marlow API server (proxy mode). Must match the API_SERVER_KEY on the remote host.",
-        "prompt": "Remote API server auth key",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "WEBHOOK_ENABLED": {
-        "description": "Enable the webhook platform adapter for receiving events from GitHub, GitLab, etc.",
-        "prompt": "Enable webhooks (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "WEBHOOK_PORT": {
-        "description": "Port for the webhook HTTP server (default: 8644).",
-        "prompt": "Webhook port",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "WEBHOOK_SECRET": {
-        "description": "Global HMAC secret for webhook signature validation (overridable per route in config.yaml).",
-        "prompt": "Webhook secret",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-    },
-
-    # ── Agent settings ──
-    # NOTE: MESSAGING_CWD was removed here — use terminal.cwd in config.yaml
-    # instead.  The gateway reads TERMINAL_CWD (bridged from terminal.cwd).
-    "SUDO_PASSWORD": {
-        "description": "Sudo password for terminal commands requiring root access; set to an explicit empty string to try empty without prompting",
-        "prompt": "Sudo password",
-        "url": None,
-        "password": True,
-        "category": "setting",
-    },
-    "MARLOW_MAX_ITERATIONS": {
-        "description": "Maximum tool-calling iterations per conversation (default: 90)",
-        "prompt": "Max iterations",
-        "url": None,
-        "password": False,
-        "category": "setting",
-    },
-    # MARLOW_TOOL_PROGRESS and MARLOW_TOOL_PROGRESS_MODE are deprecated —
-    # now configured via display.tool_progress in config.yaml (off|new|all|verbose).
-    # Gateway falls back to these env vars for backward compatibility.
-    "MARLOW_TOOL_PROGRESS": {
-        "description": "(deprecated) Use display.tool_progress in config.yaml instead",
-        "prompt": "Tool progress (deprecated — use config.yaml)",
-        "url": None,
-        "password": False,
-        "category": "setting",
-    },
-    "MARLOW_TOOL_PROGRESS_MODE": {
-        "description": "(deprecated) Use display.tool_progress in config.yaml instead",
-        "prompt": "Progress mode (deprecated — use config.yaml)",
-        "url": None,
-        "password": False,
-        "category": "setting",
-    },
-    "MARLOW_PREFILL_MESSAGES_FILE": {
-        "description": "Path to JSON file with ephemeral prefill messages for few-shot priming",
-        "prompt": "Prefill messages file path",
-        "url": None,
-        "password": False,
-        "category": "setting",
-    },
-    "MARLOW_EPHEMERAL_SYSTEM_PROMPT": {
-        "description": "Ephemeral system prompt injected at API-call time (never persisted to sessions)",
-        "prompt": "Ephemeral system prompt",
-        "url": None,
-        "password": False,
-        "category": "setting",
-    },
-}
-
-# Tool Gateway env vars are always visible — they're useful for
-# self-hosted / custom gateway setups regardless of subscription state.
-
+OPTIONAL_ENV_VARS = {'LM_API_KEY': {'description': 'LM Studio bearer token for auth-enabled local servers',
+                'prompt': 'LM Studio API key / bearer token',
+                'url': None,
+                'password': True,
+                'category': 'provider',
+                'advanced': True},
+ 'LM_BASE_URL': {'description': 'LM Studio base URL override',
+                 'prompt': 'LM Studio base URL (leave empty for default)',
+                 'url': None,
+                 'password': False,
+                 'category': 'provider',
+                 'advanced': True},
+ 'BRAVE_SEARCH_API_KEY': {'description': 'Brave Search API subscription token (free tier: 2,000 '
+                                         'queries/mo)',
+                          'prompt': 'Brave Search subscription token',
+                          'url': 'https://brave.com/search/api/',
+                          'tools': ['web_search'],
+                          'password': True,
+                          'category': 'tool'},
+ 'AGENT_BROWSER_ENGINE': {'description': 'Browser engine for local mode: auto (default Chrome), '
+                                         'lightpanda (faster, no screenshots), chrome',
+                          'prompt': 'Browser engine (auto/lightpanda/chrome)',
+                          'url': 'https://github.com/vercel-labs/agent-browser',
+                          'tools': ['browser_navigate',
+                                    'browser_snapshot',
+                                    'browser_click',
+                                    'browser_vision'],
+                          'password': False,
+                          'category': 'tool',
+                          'advanced': True},
+ 'VOICE_TOOLS_OPENAI_KEY': {'description': 'OpenAI API key for voice transcription (Whisper) and '
+                                           'OpenAI TTS',
+                            'prompt': 'OpenAI API Key (for Whisper STT + TTS)',
+                            'url': 'https://platform.openai.com/api-keys',
+                            'tools': ['voice_transcription', 'openai_tts'],
+                            'password': True,
+                            'category': 'tool'},
+ 'ELEVENLABS_API_KEY': {'description': 'ElevenLabs API key for premium text-to-speech voices and '
+                                       'Scribe transcription',
+                        'prompt': 'ElevenLabs API key',
+                        'url': 'https://elevenlabs.io/',
+                        'tools': ['elevenlabs_tts', 'voice_transcription'],
+                        'password': True,
+                        'category': 'tool'},
+ 'MISTRAL_API_KEY': {'description': 'Mistral API key for Voxtral TTS and transcription (STT)',
+                     'prompt': 'Mistral API key',
+                     'url': 'https://console.mistral.ai/',
+                     'password': True,
+                     'category': 'tool'},
+ 'GROQ_API_KEY': {'description': 'Groq API key for speech-to-text',
+                  'prompt': 'Groq API key for STT',
+                  'url': 'https://console.groq.com/keys',
+                  'tools': ['voice_transcription'],
+                  'password': True,
+                  'category': 'tool'},
+ 'XAI_API_KEY': {'description': 'xAI API key for retained speech backends',
+                 'prompt': 'xAI API key for STT/TTS',
+                 'url': 'https://console.x.ai/',
+                 'tools': ['voice_transcription', 'xai_tts'],
+                 'password': True,
+                 'category': 'tool'},
+ 'XAI_BASE_URL': {'description': 'xAI speech API base URL override',
+                  'prompt': 'xAI speech base URL',
+                  'password': False,
+                  'category': 'tool',
+                  'advanced': True},
+ 'MINIMAX_API_KEY': {'description': 'MiniMax API key for text-to-speech',
+                     'prompt': 'MiniMax TTS API key',
+                     'url': 'https://www.minimax.io/',
+                     'tools': ['minimax_tts'],
+                     'password': True,
+                     'category': 'tool'},
+ 'MINIMAX_GROUP_ID': {'description': 'Optional MiniMax TTS group identifier',
+                      'prompt': 'MiniMax TTS group ID',
+                      'password': False,
+                      'category': 'tool',
+                      'advanced': True},
+ 'GEMINI_API_KEY': {'description': 'Google Gemini API key for text-to-speech',
+                    'prompt': 'Gemini TTS API key',
+                    'url': 'https://aistudio.google.com/app/apikey',
+                    'tools': ['gemini_tts'],
+                    'password': True,
+                    'category': 'tool'},
+ 'HONCHO_API_KEY': {'description': 'Honcho API key for AI-native persistent memory',
+                    'prompt': 'Honcho API key',
+                    'url': 'https://app.honcho.dev',
+                    'tools': ['honcho_context'],
+                    'password': True,
+                    'category': 'tool'},
+ 'HONCHO_BASE_URL': {'description': 'Base URL for self-hosted Honcho instances (no API key needed)',
+                     'prompt': 'Honcho base URL (e.g. http://localhost:8000)',
+                     'category': 'tool'},
+ 'MARLOW_LANGFUSE_PUBLIC_KEY': {'description': 'Langfuse project public key (pk-lf-...)',
+                                'prompt': 'Langfuse public key',
+                                'url': 'https://cloud.langfuse.com',
+                                'password': False,
+                                'category': 'tool'},
+ 'MARLOW_LANGFUSE_SECRET_KEY': {'description': 'Langfuse project secret key (sk-lf-...)',
+                                'prompt': 'Langfuse secret key',
+                                'url': 'https://cloud.langfuse.com',
+                                'password': True,
+                                'category': 'tool'},
+ 'MARLOW_LANGFUSE_BASE_URL': {'description': 'Langfuse server URL (default: '
+                                             'https://cloud.langfuse.com)',
+                              'prompt': 'Langfuse server URL (leave empty for cloud.langfuse.com)',
+                              'url': None,
+                              'password': False,
+                              'category': 'tool',
+                              'advanced': True},
+ 'TELEGRAM_BOT_TOKEN': {'description': 'Telegram bot token from @BotFather',
+                        'prompt': 'Telegram bot token',
+                        'url': 'https://t.me/BotFather',
+                        'password': True,
+                        'category': 'messaging'},
+ 'TELEGRAM_ALLOWED_USERS': {'description': 'Comma-separated Telegram user IDs allowed to use the '
+                                           'bot (get ID from @userinfobot)',
+                            'prompt': 'Allowed Telegram user IDs (comma-separated)',
+                            'url': 'https://t.me/userinfobot',
+                            'password': False,
+                            'category': 'messaging'},
+ 'TELEGRAM_PROXY': {'description': 'Proxy URL for Telegram connections (overrides HTTPS_PROXY). '
+                                   'Supports http://, https://, socks5://',
+                    'prompt': 'Telegram proxy URL (optional)',
+                    'password': False,
+                    'category': 'messaging'},
+ 'DISCORD_BOT_TOKEN': {'description': 'Discord bot token from Developer Portal',
+                       'prompt': 'Discord bot token',
+                       'url': 'https://discord.com/developers/applications',
+                       'password': True,
+                       'category': 'messaging'},
+ 'DISCORD_ALLOWED_USERS': {'description': 'Comma-separated Discord user IDs allowed to use the bot',
+                           'prompt': 'Allowed Discord user IDs (comma-separated)',
+                           'url': None,
+                           'password': False,
+                           'category': 'messaging'},
+ 'DISCORD_REPLY_TO_MODE': {'description': "Discord reply threading mode: 'off' (no reply "
+                                          "references), 'first' (reply on first message only, "
+                                          "default), 'all' (reply on every chunk)",
+                           'prompt': 'Discord reply mode (off/first/all)',
+                           'url': None,
+                           'password': False,
+                           'category': 'messaging'},
+ 'SLACK_BOT_TOKEN': {'description': 'Slack bot token (xoxb-). Get from OAuth & Permissions after '
+                                    'installing your app. Required scopes: chat:write, '
+                                    'app_mentions:read, channels:history, groups:history, '
+                                    'im:history, im:read, im:write, users:read, files:read, '
+                                    'files:write',
+                     'prompt': 'Slack Bot Token (xoxb-...)',
+                     'url': 'https://api.slack.com/apps',
+                     'password': True,
+                     'category': 'messaging'},
+ 'SLACK_APP_TOKEN': {'description': 'Slack app-level token (xapp-) for Socket Mode. Get from Basic '
+                                    'Information → App-Level Tokens. Also ensure Event '
+                                    'Subscriptions include: message.im, message.channels, '
+                                    'message.groups, app_mention',
+                     'prompt': 'Slack App Token (xapp-...)',
+                     'url': 'https://api.slack.com/apps',
+                     'password': True,
+                     'category': 'messaging'},
+ 'GATEWAY_ALLOW_ALL_USERS': {'description': 'Allow all users to interact with messaging bots '
+                                            '(true/false). Default: false.',
+                             'prompt': 'Allow all users (true/false)',
+                             'url': None,
+                             'password': False,
+                             'category': 'messaging',
+                             'advanced': True},
+ 'WEBHOOK_ENABLED': {'description': 'Enable the webhook platform adapter for receiving events from '
+                                    'GitHub, GitLab, etc.',
+                     'prompt': 'Enable webhooks (true/false)',
+                     'url': None,
+                     'password': False,
+                     'category': 'messaging'},
+ 'WEBHOOK_PORT': {'description': 'Port for the webhook HTTP server (default: 8644).',
+                  'prompt': 'Webhook port',
+                  'url': None,
+                  'password': False,
+                  'category': 'messaging'},
+ 'WEBHOOK_SECRET': {'description': 'Global HMAC secret for webhook signature validation '
+                                   '(overridable per route in config.yaml).',
+                    'prompt': 'Webhook secret',
+                    'url': None,
+                    'password': True,
+                    'category': 'messaging'},
+ 'SUDO_PASSWORD': {'description': 'Sudo password for terminal commands requiring root access; set '
+                                  'to an explicit empty string to try empty without prompting',
+                   'prompt': 'Sudo password',
+                   'url': None,
+                   'password': True,
+                   'category': 'setting'},
+ 'MARLOW_MAX_ITERATIONS': {'description': 'Maximum tool-calling iterations per conversation '
+                                          '(default: 90)',
+                           'prompt': 'Max iterations',
+                           'url': None,
+                           'password': False,
+                           'category': 'setting'},
+ 'MARLOW_PREFILL_MESSAGES_FILE': {'description': 'Path to JSON file with ephemeral prefill '
+                                                 'messages for few-shot priming',
+                                  'prompt': 'Prefill messages file path',
+                                  'url': None,
+                                  'password': False,
+                                  'category': 'setting'},
+ 'MARLOW_EPHEMERAL_SYSTEM_PROMPT': {'description': 'Ephemeral system prompt injected at API-call '
+                                                   'time (never persisted to sessions)',
+                                    'prompt': 'Ephemeral system prompt',
+                                    'url': None,
+                                    'password': False,
+                                    'category': 'setting'}}
 
 def get_missing_env_vars(required_only: bool = False) -> List[Dict[str, Any]]:
     """
@@ -3440,10 +2064,7 @@ def _set_nested(config, dotted_key: str, value):
     overrides (e.g. setting ``a.b.c`` where ``a.b`` was previously a
     string).
 
-    Guards against #17876: before this fix the code unconditionally
-    replaced any non-dict value (including lists) with ``{}``, silently
-    destroying list-typed config like ``custom_providers`` whenever a
-    caller used an indexed path.
+    List values are preserved when callers navigate an indexed path.
     """
     parts = dotted_key.split(".")
     current = config
@@ -3558,38 +2179,13 @@ def _normalize_custom_provider_entry(
     if not isinstance(entry, dict):
         return None
 
-    # Accept camelCase aliases commonly used in hand-written configs.
-    _CAMEL_ALIASES: Dict[str, str] = {
-        "apiKey": "api_key",
-        "baseUrl": "base_url",
-        "apiMode": "api_mode",
-        "keyEnv": "key_env",
-        "apiKeyEnv": "key_env",  # alias — OpenClaw-compatible + docs variant
-        "defaultModel": "default_model",
-        "contextLength": "context_length",
-        "rateLimitDelay": "rate_limit_delay",
-    }
-    # api_key_env is a documented snake_case alias for key_env (see
-    # website/docs/guides/azure-foundry.md).  Normalize it up front so the
-    # rest of the normalizer treats it as the canonical field.
-    if "api_key_env" in entry and "key_env" not in entry:
-        entry["key_env"] = entry["api_key_env"]
     _KNOWN_KEYS = {
-        "name", "api", "url", "base_url", "api_key", "key_env", "api_key_env",
-        "api_mode", "transport", "model", "default_model", "models",
+        "name", "base_url", "api_key", "key_env", "api_mode", "model", "models",
         "context_length", "rate_limit_delay",
         "request_timeout_seconds", "stale_timeout_seconds",
         "discover_models", "extra_body",
     }
-    for camel, snake in _CAMEL_ALIASES.items():
-        if camel in entry and snake not in entry:
-            logger.warning(
-                "providers.%s: camelCase key '%s' auto-mapped to '%s' "
-                "(use snake_case to avoid this warning)",
-                provider_key or "?", camel, snake,
-            )
-            entry[snake] = entry[camel]
-    unknown = set(entry.keys()) - _KNOWN_KEYS - set(_CAMEL_ALIASES.keys())
+    unknown = set(entry.keys()) - _KNOWN_KEYS
     if unknown:
         logger.warning(
             "providers.%s: unknown config keys ignored: %s",
@@ -3599,7 +2195,7 @@ def _normalize_custom_provider_entry(
     from urllib.parse import urlparse
 
     base_url = ""
-    for url_key in ("base_url", "url", "api"):
+    for url_key in ("base_url",):
         raw_url = entry.get(url_key)
         if isinstance(raw_url, str) and raw_url.strip():
             candidate = raw_url.strip()
@@ -3642,25 +2238,17 @@ def _normalize_custom_provider_entry(
     if isinstance(key_env, str) and key_env.strip():
         normalized["key_env"] = key_env.strip()
 
-    api_mode = entry.get("api_mode") or entry.get("transport")
+    api_mode = entry.get("api_mode")
     if isinstance(api_mode, str) and api_mode.strip():
         normalized["api_mode"] = api_mode.strip()
 
-    model_name = entry.get("model") or entry.get("default_model")
+    model_name = entry.get("model")
     if isinstance(model_name, str) and model_name.strip():
         normalized["model"] = model_name.strip()
 
     models = entry.get("models")
     if isinstance(models, dict) and models:
         normalized["models"] = models
-    elif isinstance(models, list) and models:
-        # Hand-edited configs (and older Marlow versions) write ``models`` as
-        # a plain list of model ids. Preserve them by converting to the dict
-        # shape downstream code expects; otherwise normalize silently drops
-        # the list and /model shows the provider with (0) models.
-        normalized["models"] = {
-            str(m): {} for m in models if isinstance(m, str) and m.strip()
-        }
 
     context_length = entry.get("context_length")
     if isinstance(context_length, int) and context_length > 0:
@@ -3681,8 +2269,8 @@ def _normalize_custom_provider_entry(
     return normalized
 
 
-def providers_dict_to_custom_providers(providers_dict: Any) -> List[Dict[str, Any]]:
-    """Normalize ``providers`` config entries into the legacy custom-provider shape."""
+def get_custom_provider_entries(providers_dict: Any) -> List[Dict[str, Any]]:
+    """Normalize canonical ``providers`` entries for runtime consumers."""
     if not isinstance(providers_dict, dict):
         return []
 
@@ -3695,54 +2283,13 @@ def providers_dict_to_custom_providers(providers_dict: Any) -> List[Dict[str, An
     return custom_providers
 
 
-def get_compatible_custom_providers(
+def load_custom_provider_entries(
     config: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Return a deduplicated custom-provider view across legacy and v12+ config.
-
-    ``custom_providers`` remains the on-disk legacy format, while ``providers``
-    is the newer keyed schema.  Runtime and picker flows still need a single
-    list-shaped view, but we should not materialise that compatibility layer
-    back into config.yaml because it duplicates entries in UIs.
-    """
+    """Return normalized custom endpoints from canonical ``providers`` config."""
     if config is None:
         config = load_config()
-
-    compatible: List[Dict[str, Any]] = []
-    seen_provider_keys: set = set()
-    seen_name_url_pairs: set = set()
-
-    def _append_if_new(entry: Optional[Dict[str, Any]]) -> None:
-        if entry is None:
-            return
-        provider_key = str(entry.get("provider_key", "") or "").strip().lower()
-        name = str(entry.get("name", "") or "").strip().lower()
-        base_url = str(entry.get("base_url", "") or "").strip().rstrip("/").lower()
-        model = str(entry.get("model", "") or "").strip().lower()
-        pair = (name, base_url, model)
-
-        if provider_key and provider_key in seen_provider_keys:
-            return
-        if name and base_url and pair in seen_name_url_pairs:
-            return
-
-        compatible.append(entry)
-        if provider_key:
-            seen_provider_keys.add(provider_key)
-        if name and base_url:
-            seen_name_url_pairs.add(pair)
-
-    custom_providers = config.get("custom_providers")
-    if custom_providers is not None:
-        if not isinstance(custom_providers, list):
-            return []
-        for entry in custom_providers:
-            _append_if_new(_normalize_custom_provider_entry(entry))
-
-    for entry in providers_dict_to_custom_providers(config.get("providers")):
-        _append_if_new(entry)
-
-    return compatible
+    return get_custom_provider_entries(config.get("providers"))
 
 
 def get_custom_provider_context_length(
@@ -3751,7 +2298,7 @@ def get_custom_provider_context_length(
     custom_providers: Optional[List[Dict[str, Any]]] = None,
     config: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
-    """Look up a per-model ``context_length`` override from ``custom_providers``.
+    """Look up a per-model ``context_length`` override for a custom endpoint.
 
     Matches any entry whose ``base_url`` equals ``base_url`` (trailing-slash
     insensitive) and returns ``custom_providers[i].models.<model>.context_length``
@@ -3773,12 +2320,11 @@ def get_custom_provider_context_length(
         return None
     if custom_providers is None:
         try:
-            custom_providers = get_compatible_custom_providers(config)
+            custom_providers = load_custom_provider_entries(config)
         except Exception:
             if config is None:
                 return None
-            raw = config.get("custom_providers")
-            custom_providers = raw if isinstance(raw, list) else []
+            custom_providers = []
     if not isinstance(custom_providers, list):
         return None
 
@@ -3828,23 +2374,13 @@ def check_config_version() -> Tuple[int, int]:
 
 # Fields that are valid at root level of config.yaml
 _KNOWN_ROOT_KEYS = {
-    "_config_version", "model", "providers", "fallback_model",
-    "fallback_providers", "credential_pool_strategies", "toolsets",
+    "_config_version", "model", "providers", "fallback_providers", "toolsets",
     "agent", "terminal", "display", "compression", "delegation",
-    "auxiliary", "custom_providers", "context", "memory", "gateway",
+    "auxiliary", "context", "memory", "gateway",
     "sessions", "streaming",
 }
 
-# Valid fields inside a custom_providers list entry
-_VALID_CUSTOM_PROVIDER_FIELDS = {
-    "name", "base_url", "api_key", "api_mode", "model", "models",
-    "context_length", "rate_limit_delay", "extra_body",
-    # key_env is read at runtime by runtime_provider.py and auxiliary_client.py
-    # — include it here so the set accurately describes the supported schema.
-    "key_env",
-}
-
-# Fields that look like they should be inside custom_providers, not at root
+# Fields that look like they should be inside a provider entry, not at root.
 _CUSTOM_PROVIDER_LIKE_FIELDS = {"base_url", "api_key", "rate_limit_delay", "api_mode"}
 
 
@@ -3873,113 +2409,68 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
 
     issues: List[ConfigIssue] = []
 
-    # ── custom_providers must be a list, not a dict ──────────────────────
-    cp = config.get("custom_providers")
-    if cp is not None:
-        if isinstance(cp, dict):
-            issues.append(ConfigIssue(
-                "error",
-                "custom_providers is a dict — it must be a YAML list (items prefixed with '-')",
-                "Change to:\n"
-                "  custom_providers:\n"
-                "    - name: my-provider\n"
-                "      base_url: https://...\n"
-                "      api_key: ...",
-            ))
-            # Check if dict keys look like they should be list-entry fields
-            cp_keys = set(cp.keys()) if isinstance(cp, dict) else set()
-            suspicious = cp_keys & _CUSTOM_PROVIDER_LIKE_FIELDS
-            if suspicious:
+    providers = config.get("providers")
+    if providers is not None and not isinstance(providers, dict):
+        issues.append(ConfigIssue(
+            "error",
+            "providers must be a mapping keyed by provider name",
+            "Use: providers:\n  my-provider:\n    base_url: https://...",
+        ))
+    elif isinstance(providers, dict):
+        for key, entry in providers.items():
+            if not isinstance(entry, dict):
                 issues.append(ConfigIssue(
                     "warning",
-                    f"Root-level keys {sorted(suspicious)} look like custom_providers entry fields",
-                    "These should be indented under a '- name: ...' list entry, not at root level",
+                    f"providers.{key} is not a mapping",
+                    "Each provider needs at minimum: base_url",
                 ))
-        elif isinstance(cp, list):
-            # Validate each entry in the list
-            for i, entry in enumerate(cp):
-                if not isinstance(entry, dict):
-                    issues.append(ConfigIssue(
-                        "warning",
-                        f"custom_providers[{i}] is not a dict (got {type(entry).__name__})",
-                        "Each entry should have at minimum: name, base_url",
-                    ))
-                    continue
-                if not entry.get("name"):
-                    issues.append(ConfigIssue(
-                        "warning",
-                        f"custom_providers[{i}] is missing 'name' field",
-                        "Add a name, e.g.: name: my-provider",
-                    ))
-                if not entry.get("base_url"):
-                    issues.append(ConfigIssue(
-                        "warning",
-                        f"custom_providers[{i}] is missing 'base_url' field",
-                        "Add the API endpoint URL, e.g.: base_url: https://api.example.com/v1",
-                    ))
+            elif not entry.get("base_url"):
+                issues.append(ConfigIssue(
+                    "warning",
+                    f"providers.{key} is missing 'base_url'",
+                    "Add the API endpoint URL, e.g. base_url: https://api.example.com/v1",
+                ))
 
-    # ── fallback_model: single dict OR list of dicts (chain) ─────────────
-    fb = config.get("fallback_model")
+    # ── fallback_providers: ordered list of provider/model entries ───────
+    fb = config.get("fallback_providers")
     if fb is not None:
         if isinstance(fb, list):
-            # Chain fallback — validate each entry
             for i, entry in enumerate(fb):
                 if not isinstance(entry, dict):
                     issues.append(ConfigIssue(
                         "error",
-                        f"fallback_model[{i}] should be a dict, got {type(entry).__name__}",
+                        f"fallback_providers[{i}] should be a dict, got {type(entry).__name__}",
                         "Each entry needs provider + model",
                     ))
                 else:
                     if not entry.get("provider"):
                         issues.append(ConfigIssue(
                             "warning",
-                            f"fallback_model[{i}] is missing 'provider' field",
-                            "Add: provider: openrouter (or another provider)",
+                            f"fallback_providers[{i}] is missing 'provider' field",
+                            "Add: provider: openai-codex or a configured custom provider",
                         ))
                     if not entry.get("model"):
                         issues.append(ConfigIssue(
                             "warning",
-                            f"fallback_model[{i}] is missing 'model' field",
+                            f"fallback_providers[{i}] is missing 'model' field",
                             "Add: model: <model-name>",
                         ))
-        elif not isinstance(fb, dict):
+        else:
             issues.append(ConfigIssue(
                 "error",
-                f"fallback_model should be a dict with 'provider' and 'model', got {type(fb).__name__}",
+                f"fallback_providers should be a list, got {type(fb).__name__}",
                 "Change to:\n"
-                "  fallback_model:\n"
-                "    provider: openrouter\n"
-                "    model: anthropic/claude-sonnet-4",
+                "  fallback_providers:\n"
+                "    - provider: openai-codex\n"
+                "      model: gpt-5.3-codex",
             ))
-        elif fb:
-            if not fb.get("provider"):
-                issues.append(ConfigIssue(
-                    "warning",
-                    "fallback_model is missing 'provider' field — fallback will be disabled",
-                    "Add: provider: openrouter (or another provider)",
-                ))
-            if not fb.get("model"):
-                issues.append(ConfigIssue(
-                    "warning",
-                    "fallback_model is missing 'model' field — fallback will be disabled",
-                    "Add: model: anthropic/claude-sonnet-4 (or another model)",
-                ))
 
-    # ── Check for fallback_model accidentally nested inside custom_providers ──
-    if isinstance(cp, dict) and "fallback_model" not in config and "fallback_model" in (cp or {}):
-        issues.append(ConfigIssue(
-            "error",
-            "fallback_model appears inside custom_providers instead of at root level",
-            "Move fallback_model to the top level of config.yaml (no indentation)",
-        ))
-
-    # ── model section: should exist when custom_providers is configured ──
+    # ── model section: should exist when custom providers are configured ──
     model_cfg = config.get("model")
-    if cp and not model_cfg:
+    if providers and not model_cfg:
         issues.append(ConfigIssue(
             "warning",
-            "custom_providers defined but no 'model' section — Marlow won't know which provider to use",
+            "providers defined but no 'model' section — Marlow won't know which provider to use",
             "Add a model section:\n"
             "  model:\n"
             "    provider: custom\n"
@@ -3994,7 +2485,7 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
         if key not in _KNOWN_ROOT_KEYS and key in _CUSTOM_PROVIDER_LIKE_FIELDS:
             issues.append(ConfigIssue(
                 "warning",
-                f"Root-level key '{key}' looks misplaced — should it be under 'model:' or inside a 'custom_providers' entry?",
+                f"Root-level key '{key}' looks misplaced — should it be under 'model:' or inside a 'providers' entry?",
                 f"Move '{key}' under the appropriate section",
             ))
 
@@ -4023,643 +2514,20 @@ def print_config_warnings(config: Optional[Dict[str, Any]] = None) -> None:
     sys.stderr.write("\n".join(lines) + "\n\n")
 
 
-def warn_deprecated_cwd_env_vars(config: Optional[Dict[str, Any]] = None) -> None:
-    """Warn if MESSAGING_CWD or TERMINAL_CWD is set in .env instead of config.yaml.
-
-    These env vars are deprecated — the canonical setting is terminal.cwd
-    in config.yaml.  Prints a migration hint to stderr.
-    """
-    messaging_cwd = os.environ.get("MESSAGING_CWD")
-    terminal_cwd_env = os.environ.get("TERMINAL_CWD")
-
-    if config is None:
-        try:
-            config = load_config()
-        except Exception:
-            return
-
-    terminal_cfg = config.get("terminal", {})
-    config_cwd = terminal_cfg.get("cwd", ".") if isinstance(terminal_cfg, dict) else "."
-    # Only warn if config.yaml doesn't have an explicit path
-    config_has_explicit_cwd = config_cwd not in {".", "auto", "cwd", ""}
-
-    lines: list[str] = []
-    if messaging_cwd:
-        lines.append(
-            f"  \033[33m⚠\033[0m MESSAGING_CWD={messaging_cwd} found in .env — "
-            f"this is deprecated."
-        )
-    if terminal_cwd_env and not config_has_explicit_cwd:
-        # TERMINAL_CWD in env but not from config bridge — likely from .env
-        lines.append(
-            f"  \033[33m⚠\033[0m TERMINAL_CWD={terminal_cwd_env} found in .env — "
-            f"this is deprecated."
-        )
-    if lines:
-        hint_path = os.environ.get("MARLOW_HOME", "~/.marlow")
-        lines.insert(0, "\033[33m⚠ Deprecated .env settings detected:\033[0m")
-        lines.append(
-            f"  \033[2mMove to config.yaml instead:  "
-            f"terminal:\\n    cwd: /your/project/path\033[0m"
-        )
-        lines.append(
-            f"  \033[2mThen remove the old entries from {hint_path}/.env\033[0m"
-        )
-        sys.stderr.write("\n".join(lines) + "\n\n")
-
-
 def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, Any]:
-    """
-    Migrate config to latest version, prompting for new required fields.
-    
-    Args:
-        interactive: If True, prompt user for missing values
-        quiet: If True, suppress output
-        
-    Returns:
-        Dict with migration results: {"env_added": [...], "config_added": [...], "warnings": [...]}
-    """
+    """Bring config metadata forward without translating removed schemas."""
+    del interactive
     results = {"env_added": [], "config_added": [], "warnings": []}
-
-    # ── Always: sanitize .env (split concatenated keys) ──
-    try:
-        fixes = sanitize_env_file()
-        if fixes and not quiet:
-            print(f"  ✓ Repaired .env file ({fixes} corrupted entries fixed)")
-    except Exception:
-        pass  # best-effort; don't block migration on sanitize failure
-
-    # Check config version
     current_ver, latest_ver = check_config_version()
-    
-    # ── Version 3 → 4: migrate tool progress from .env to config.yaml ──
-    if current_ver < 4:
-        config = load_config()
-        display = config.get("display", {})
-        if not isinstance(display, dict):
-            display = {}
-        if "tool_progress" not in display:
-            old_enabled = get_env_value("MARLOW_TOOL_PROGRESS")
-            old_mode = get_env_value("MARLOW_TOOL_PROGRESS_MODE")
-            if old_enabled and old_enabled.lower() in {"false", "0", "no"}:
-                display["tool_progress"] = "off"
-                results["config_added"].append("display.tool_progress=off (from MARLOW_TOOL_PROGRESS=false)")
-            elif old_mode and old_mode.lower() in {"new", "all"}:
-                display["tool_progress"] = old_mode.lower()
-                results["config_added"].append(f"display.tool_progress={old_mode.lower()} (from MARLOW_TOOL_PROGRESS_MODE)")
-            else:
-                display["tool_progress"] = "all"
-                results["config_added"].append("display.tool_progress=all (default)")
-            config["display"] = display
-            save_config(config)
-            if not quiet:
-                print(f"  ✓ Migrated tool progress to config.yaml: {display['tool_progress']}")
-    
-    # ── Version 4 → 5: add timezone field ──
-    if current_ver < 5:
-        config = load_config()
-        if "timezone" not in config:
-            old_tz = os.getenv("MARLOW_TIMEZONE", "")
-            if old_tz and old_tz.strip():
-                config["timezone"] = old_tz.strip()
-                results["config_added"].append(f"timezone={old_tz.strip()} (from MARLOW_TIMEZONE)")
-            else:
-                config["timezone"] = ""
-                results["config_added"].append("timezone= (empty, uses server-local)")
-            save_config(config)
-            if not quiet:
-                tz_display = config["timezone"] or "(server-local)"
-                print(f"  ✓ Added timezone to config.yaml: {tz_display}")
+    if current_ver >= latest_ver:
+        return results
 
-    # ── Version 8 → 9: clear ANTHROPIC_TOKEN from .env ──
-    # The new Anthropic auth flow no longer uses this env var.
-    if current_ver < 9:
-        try:
-            old_token = get_env_value("ANTHROPIC_TOKEN")
-            if old_token:
-                save_env_value("ANTHROPIC_TOKEN", "")
-                if not quiet:
-                    print("  ✓ Cleared ANTHROPIC_TOKEN from .env (no longer used)")
-        except Exception:
-            pass
-
-    # ── Version 11 → 12: migrate custom_providers list → providers dict ──
-    if current_ver < 12:
-        config = load_config()
-        custom_list = config.get("custom_providers")
-        if isinstance(custom_list, list) and custom_list:
-            providers_dict = config.get("providers", {})
-            if not isinstance(providers_dict, dict):
-                providers_dict = {}
-            migrated_count = 0
-            for entry in custom_list:
-                if not isinstance(entry, dict):
-                    continue
-                old_name = entry.get("name", "")
-                old_url = entry.get("base_url", "") or entry.get("url", "") or ""
-                old_key = entry.get("api_key", "")
-                if not old_url:
-                    continue  # skip entries with no URL
-
-                # Generate a kebab-case key from the display name
-                key = old_name.strip().lower().replace(" ", "-").replace("(", "").replace(")", "")
-                # Remove consecutive hyphens and trailing hyphens
-                while "--" in key:
-                    key = key.replace("--", "-")
-                key = key.strip("-")
-                if not key:
-                    # Fallback: derive from URL hostname
-                    try:
-                        from urllib.parse import urlparse
-                        parsed = urlparse(old_url)
-                        key = (parsed.hostname or "endpoint").replace(".", "-")
-                    except Exception:
-                        key = f"endpoint-{migrated_count}"
-
-                # Don't overwrite existing entries
-                if key in providers_dict:
-                    key = f"{key}-{migrated_count}"
-
-                new_entry = {"api": old_url}
-                if old_name:
-                    new_entry["name"] = old_name
-                if old_key and old_key not in {"no-key", "no-key-required", ""}:
-                    new_entry["api_key"] = old_key
-
-                # Carry over model and api_mode if present
-                if entry.get("model"):
-                    new_entry["default_model"] = entry["model"]
-                if entry.get("api_mode"):
-                    new_entry["transport"] = entry["api_mode"]
-
-                providers_dict[key] = new_entry
-                migrated_count += 1
-
-            if migrated_count > 0:
-                config["providers"] = providers_dict
-                # Remove the old list — runtime reads via get_compatible_custom_providers()
-                config.pop("custom_providers", None)
-                save_config(config)
-                if not quiet:
-                    print(f"  ✓ Migrated {migrated_count} custom provider(s) to providers: section")
-                    for key in list(providers_dict.keys())[-migrated_count:]:
-                        ep = providers_dict[key]
-                        print(f"    → {key}: {ep.get('api', '')}")
-
-    # ── Version 12 → 13: clear dead LLM_MODEL / OPENAI_MODEL from .env ──
-    # These env vars were written by the old setup wizard but nothing reads
-    # them anymore (config.yaml is the sole source of truth since March 2026).
-    # Stale entries cause user confusion — see issue report.
-    if current_ver < 13:
-        for dead_var in ("LLM_MODEL", "OPENAI_MODEL"):
-            try:
-                old_val = get_env_value(dead_var)
-                if old_val:
-                    save_env_value(dead_var, "")
-                    if not quiet:
-                        print(f"  ✓ Cleared {dead_var} from .env (no longer used — config.yaml is source of truth)")
-            except Exception:
-                pass
-
-    # ── Version 13 → 14: migrate legacy flat stt.model to provider section ──
-    # Old configs (and cli-config.yaml.example) had a flat `stt.model` key
-    # that was provider-agnostic.  When the provider was "local" this caused
-    # OpenAI model names (e.g. "whisper-1") to be fed to faster-whisper,
-    # crashing with "Invalid model size".  Move the value into the correct
-    # provider-specific section and remove the flat key.
-    if current_ver < 14:
-        # Read raw config (no defaults merged) to check what the user actually
-        # wrote, then apply changes to the merged config for saving.
-        raw = read_raw_config()
-        raw_stt = raw.get("stt", {})
-        if isinstance(raw_stt, dict) and "model" in raw_stt:
-            legacy_model = raw_stt["model"]
-            provider = raw_stt.get("provider", "local")
-            config = load_config()
-            stt = config.get("stt", {})
-            # Remove the legacy flat key
-            stt.pop("model", None)
-            # Place it in the appropriate provider section only if the
-            # user didn't already set a model there
-            if provider in {"local", "local_command"}:
-                # Don't migrate an OpenAI model name into the local section
-                _local_models = {
-                    "tiny.en", "tiny", "base.en", "base", "small.en", "small",
-                    "medium.en", "medium", "large-v1", "large-v2", "large-v3",
-                    "large", "distil-large-v2", "distil-medium.en",
-                    "distil-small.en", "distil-large-v3", "distil-large-v3.5",
-                    "large-v3-turbo", "turbo",
-                }
-                if legacy_model in _local_models:
-                    # Check raw config — only set if user didn't already
-                    # have a nested local.model
-                    raw_local = raw_stt.get("local", {})
-                    if not isinstance(raw_local, dict) or "model" not in raw_local:
-                        local_cfg = stt.setdefault("local", {})
-                        local_cfg["model"] = legacy_model
-                # else: drop it — it was an OpenAI model name, local section
-                # already defaults to "base" via DEFAULT_CONFIG
-            else:
-                # Cloud provider — put it in that provider's section only
-                # if user didn't already set a nested model
-                raw_provider = raw_stt.get(provider, {})
-                if not isinstance(raw_provider, dict) or "model" not in raw_provider:
-                    provider_cfg = stt.setdefault(provider, {})
-                    provider_cfg["model"] = legacy_model
-            config["stt"] = stt
-            save_config(config)
-            if not quiet:
-                print(f"  ✓ Migrated legacy stt.model to provider-specific config")
-
-    # ── Version 14 → 15: add explicit gateway interim-message gate ──
-    if current_ver < 15:
-        config = read_raw_config()
-        display = config.get("display", {})
-        if not isinstance(display, dict):
-            display = {}
-        if "interim_assistant_messages" not in display:
-            display["interim_assistant_messages"] = True
-            config["display"] = display
-            results["config_added"].append("display.interim_assistant_messages=true (default)")
-            save_config(config)
-            if not quiet:
-                print("  ✓ Added display.interim_assistant_messages=true")
-
-    # ── Version 15 → 16: migrate tool_progress_overrides into display.platforms ──
-    if current_ver < 16:
-        config = read_raw_config()
-        display = config.get("display", {})
-        if not isinstance(display, dict):
-            display = {}
-        old_overrides = display.get("tool_progress_overrides")
-        if isinstance(old_overrides, dict) and old_overrides:
-            platforms = display.get("platforms", {})
-            if not isinstance(platforms, dict):
-                platforms = {}
-            for plat, mode in old_overrides.items():
-                if plat not in platforms:
-                    platforms[plat] = {}
-                if "tool_progress" not in platforms[plat]:
-                    platforms[plat]["tool_progress"] = mode
-            display["platforms"] = platforms
-            config["display"] = display
-            save_config(config)
-            if not quiet:
-                migrated = ", ".join(f"{p}={m}" for p, m in old_overrides.items())
-                print(f"  ✓ Migrated tool_progress_overrides → display.platforms: {migrated}")
-            results["config_added"].append("display.platforms (migrated from tool_progress_overrides)")
-
-    # ── Version 16 → 17: remove legacy compression.summary_* keys ──
-    if current_ver < 17:
-        config = read_raw_config()
-        comp = config.get("compression", {})
-        if isinstance(comp, dict):
-            s_model = comp.pop("summary_model", None)
-            s_provider = comp.pop("summary_provider", None)
-            s_base_url = comp.pop("summary_base_url", None)
-            migrated_keys = []
-            # Migrate non-empty, non-default values to auxiliary.compression
-            if s_model and str(s_model).strip():
-                aux = config.setdefault("auxiliary", {})
-                aux_comp = aux.setdefault("compression", {})
-                if not aux_comp.get("model"):
-                    aux_comp["model"] = str(s_model).strip()
-                    migrated_keys.append(f"model={s_model}")
-            if s_provider and str(s_provider).strip() not in {"", "auto"}:
-                aux = config.setdefault("auxiliary", {})
-                aux_comp = aux.setdefault("compression", {})
-                if not aux_comp.get("provider") or aux_comp.get("provider") == "auto":
-                    aux_comp["provider"] = str(s_provider).strip()
-                    migrated_keys.append(f"provider={s_provider}")
-            if s_base_url and str(s_base_url).strip():
-                aux = config.setdefault("auxiliary", {})
-                aux_comp = aux.setdefault("compression", {})
-                if not aux_comp.get("base_url"):
-                    aux_comp["base_url"] = str(s_base_url).strip()
-                    migrated_keys.append(f"base_url={s_base_url}")
-            if migrated_keys or s_model is not None or s_provider is not None or s_base_url is not None:
-                config["compression"] = comp
-                save_config(config)
-                if not quiet:
-                    if migrated_keys:
-                        print(f"  ✓ Migrated compression.summary_* → auxiliary.compression: {', '.join(migrated_keys)}")
-                    else:
-                        print("  ✓ Removed unused compression.summary_* keys")
-
-    # ── Version 20 → 21: plugins are now opt-in; grandfather existing user plugins ──
-    # The loader now requires plugins to appear in ``plugins.enabled`` before
-    # loading. Existing installs had all discovered plugins loading by default
-    # (minus anything in ``plugins.disabled``). To avoid silently breaking
-    # those setups on upgrade, populate ``plugins.enabled`` with the set of
-    # currently-installed user plugins that aren't already disabled.
-    #
-    # Bundled plugins (shipped in the repo itself) are NOT grandfathered —
-    # they ship off for everyone, including existing users, so any user who
-    # wants one has to opt in explicitly.
-    if current_ver < 21:
-        config = read_raw_config()
-        plugins_cfg = config.get("plugins")
-        if not isinstance(plugins_cfg, dict):
-            plugins_cfg = {}
-        # Only migrate if the enabled allow-list hasn't been set yet.
-        if "enabled" not in plugins_cfg:
-            disabled = plugins_cfg.get("disabled", []) or []
-            if not isinstance(disabled, list):
-                disabled = []
-            disabled_set = set(disabled)
-
-            # Scan ``$MARLOW_HOME/plugins/`` for currently installed user plugins.
-            grandfathered: List[str] = []
-            try:
-                user_plugins_dir = get_marlow_home() / "plugins"
-                if user_plugins_dir.is_dir():
-                    for child in sorted(user_plugins_dir.iterdir()):
-                        if not child.is_dir():
-                            continue
-                        manifest_file = child / "plugin.yaml"
-                        if not manifest_file.exists():
-                            manifest_file = child / "plugin.yml"
-                        if not manifest_file.exists():
-                            continue
-                        try:
-                            with open(manifest_file, encoding="utf-8") as _mf:
-                                manifest = yaml.safe_load(_mf) or {}
-                        except Exception:
-                            manifest = {}
-                        name = manifest.get("name") or child.name
-                        if name in disabled_set:
-                            continue
-                        grandfathered.append(name)
-            except Exception:
-                grandfathered = []
-
-            plugins_cfg["enabled"] = grandfathered
-            config["plugins"] = plugins_cfg
-            save_config(config)
-            results["config_added"].append(
-                f"plugins.enabled (opt-in allow-list, {len(grandfathered)} grandfathered)"
-            )
-            if not quiet:
-                if grandfathered:
-                    print(
-                        f"  ✓ Plugins now opt-in: grandfathered "
-                        f"{len(grandfathered)} existing plugin(s) into plugins.enabled"
-                    )
-                else:
-                    print(
-                        "  ✓ Plugins now opt-in: no existing plugins to grandfather. "
-                        "Use `marlow plugins enable <name>` to activate."
-                    )
-
-    # ── Version 22 → 23: seed curator defaults + create logs/curator/ ──
-    # The curator (background skill maintenance) was added in PR #16049, but
-    # existing configs from before that PR (or before the April 2026
-    # unification under `auxiliary.curator`) never wrote the curator section
-    # to disk. The runtime deep-merge in `load_config()` fills defaults at
-    # read time, so the curator *functions*; but users can't see/edit the
-    # settings in their `config.yaml`, and `marlow curator status` has no
-    # stable logs dir to point at until the first run mkdir's it.
-    #
-    # This migration:
-    #   1. Writes the `curator` top-level section to config.yaml (enabled,
-    #      interval_hours, min_idle_hours, stale_after_days, archive_after_days)
-    #      — only keys the user hasn't already overridden.
-    #   2. Writes the `auxiliary.curator` aux-task slot (provider, model,
-    #      base_url, api_key, timeout, extra_body) — canonical slot for
-    #      routing the curator fork to a cheaper aux model.
-    #   3. Creates `~/.marlow/logs/curator/` if missing (belt-and-suspenders
-    #      on top of ensure_marlow_home() — old profiles that predate this
-    #      migration still benefit).
-    if current_ver < 23:
-        try:
-            curator_dir = get_marlow_home() / "logs" / "curator"
-            curator_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            results["warnings"].append(f"Could not create {curator_dir}: {e}")
-
-        config = read_raw_config()
-        touched = False
-
-        # (1) Top-level curator section — only add missing keys
-        _curator_defaults = DEFAULT_CONFIG.get("curator", {})
-        raw_curator = config.get("curator")
-        if not isinstance(raw_curator, dict):
-            raw_curator = {}
-        added_curator: List[str] = []
-        for k, v in _curator_defaults.items():
-            if k not in raw_curator:
-                raw_curator[k] = copy.deepcopy(v)
-                added_curator.append(k)
-        if added_curator:
-            config["curator"] = raw_curator
-            touched = True
-
-        # (2) auxiliary.curator task slot
-        _aux_curator_defaults = (
-            DEFAULT_CONFIG.get("auxiliary", {}).get("curator", {})
-        )
-        raw_aux = config.get("auxiliary")
-        if not isinstance(raw_aux, dict):
-            raw_aux = {}
-        raw_aux_curator = raw_aux.get("curator")
-        if not isinstance(raw_aux_curator, dict):
-            raw_aux_curator = {}
-        added_aux: List[str] = []
-        for k, v in _aux_curator_defaults.items():
-            if k not in raw_aux_curator:
-                raw_aux_curator[k] = copy.deepcopy(v)
-                added_aux.append(k)
-        if added_aux:
-            raw_aux["curator"] = raw_aux_curator
-            config["auxiliary"] = raw_aux
-            touched = True
-
-        if touched:
-            save_config(config)
-            if added_curator:
-                results["config_added"].append(
-                    f"curator ({len(added_curator)} default key(s))"
-                )
-                if not quiet:
-                    print(
-                        "  ✓ Seeded curator defaults in config.yaml: "
-                        f"{', '.join(added_curator)}"
-                    )
-            if added_aux:
-                results["config_added"].append(
-                    f"auxiliary.curator ({len(added_aux)} default key(s))"
-                )
-                if not quiet:
-                    print(
-                        "  ✓ Seeded auxiliary.curator defaults in config.yaml: "
-                        f"{', '.join(added_aux)}"
-                    )
-
-    # ── Version 24 → 25: lower model_catalog TTL 24h → 1h ──
-    # The model picker now refreshes its curated list hourly so freshly
-    # published model-catalog.json deploys reach users without a day-long
-    # stale window. Only rewrite the OLD default (24) — never clobber a
-    # value the user deliberately customized.
-    if current_ver < 25:
-        config = read_raw_config()
-        raw_mc = config.get("model_catalog")
-        if isinstance(raw_mc, dict) and raw_mc.get("ttl_hours") == 24:
-            raw_mc["ttl_hours"] = 1
-            config["model_catalog"] = raw_mc
-            save_config(config)
-            results["config_added"].append("model_catalog.ttl_hours 24→1")
-            if not quiet:
-                print("  ✓ Lowered model_catalog.ttl_hours to 1 (hourly picker refresh)")
-
-    if current_ver < latest_ver and not quiet:
+    config = read_raw_config()
+    config["_config_version"] = latest_ver
+    save_config(config)
+    results["config_added"].append("_config_version")
+    if not quiet:
         print(f"Config version: {current_ver} → {latest_ver}")
-    
-    # Check for missing required env vars
-    missing_env = get_missing_env_vars(required_only=True)
-    
-    if missing_env and not quiet:
-        print("\n⚠️  Missing required environment variables:")
-        for var in missing_env:
-            print(f"   • {var['name']}: {var['description']}")
-    
-    if interactive and missing_env:
-        print("\nLet's configure them now:\n")
-        for var in missing_env:
-            if var.get("url"):
-                print(f"  Get your key at: {var['url']}")
-            
-            if var.get("password"):
-                value = masked_secret_prompt(f"  {var['prompt']}: ")
-            else:
-                value = input(f"  {var['prompt']}: ").strip()
-            
-            if value:
-                save_env_value(var["name"], value)
-                results["env_added"].append(var["name"])
-                print(f"  ✓ Saved {var['name']}")
-            else:
-                results["warnings"].append(f"Skipped {var['name']} - some features may not work")
-            print()
-    
-    # Check for missing optional env vars and offer to configure interactively
-    # Skip "advanced" vars (like OPENAI_BASE_URL) -- those are for power users
-    missing_optional = get_missing_env_vars(required_only=False)
-    required_names = {v["name"] for v in missing_env} if missing_env else set()
-    missing_optional = [
-        v for v in missing_optional
-        if v["name"] not in required_names and not v.get("advanced")
-    ]
-    
-    # Only offer to configure env vars that are NEW since the user's previous version
-    new_var_names = set()
-    for ver in range(current_ver + 1, latest_ver + 1):
-        new_var_names.update(ENV_VARS_BY_VERSION.get(ver, []))
-
-    if new_var_names and interactive and not quiet:
-        new_and_unset = [
-            (name, OPTIONAL_ENV_VARS[name])
-            for name in sorted(new_var_names)
-            if not get_env_value(name) and name in OPTIONAL_ENV_VARS
-        ]
-        if new_and_unset:
-            print(f"\n  {len(new_and_unset)} new optional key(s) in this update:")
-            for name, info in new_and_unset:
-                print(f"    • {name} — {info.get('description', '')}")
-            print()
-            try:
-                answer = input("  Configure new keys? [y/N]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                answer = "n"
-
-            if answer in {"y", "yes"}:
-                print()
-                for name, info in new_and_unset:
-                    if info.get("url"):
-                        print(f"  {info.get('description', name)}")
-                        print(f"  Get your key at: {info['url']}")
-                    else:
-                        print(f"  {info.get('description', name)}")
-                    if info.get("password"):
-                        value = masked_secret_prompt(
-                            f"  {info.get('prompt', name)} (Enter to skip): "
-                        )
-                    else:
-                        value = input(f"  {info.get('prompt', name)} (Enter to skip): ").strip()
-                    if value:
-                        save_env_value(name, value)
-                        results["env_added"].append(name)
-                        print(f"  ✓ Saved {name}")
-                    print()
-            else:
-                print("  Set later with: marlow config set <key> <value>")
-    
-    # Check for missing config fields
-    missing_config = get_missing_config_fields()
-    
-    if missing_config:
-        config = load_config()
-        
-        for field in missing_config:
-            key = field["key"]
-            default = field["default"]
-            
-            _set_nested(config, key, default)
-            results["config_added"].append(key)
-            if not quiet:
-                print(f"  ✓ Added {key} = {default}")
-        
-        # Update version and save
-        config["_config_version"] = latest_ver
-        save_config(config)
-    elif current_ver < latest_ver:
-        # Just update version
-        config = load_config()
-        config["_config_version"] = latest_ver
-        save_config(config)
-
-    # ── Skill-declared config vars ──────────────────────────────────────
-    # Skills can declare config.yaml settings they need via
-    # metadata.marlow.config in their SKILL.md frontmatter.
-    # Prompt for any that are missing/empty.
-    missing_skill_config = get_missing_skill_config_vars()
-    if missing_skill_config and interactive and not quiet:
-        print(f"\n  {len(missing_skill_config)} skill setting(s) not configured:")
-        for var in missing_skill_config:
-            skill_name = var.get("skill", "unknown")
-            print(f"    • {var['key']} — {var['description']} (from skill: {skill_name})")
-        print()
-        try:
-            answer = input("  Configure skill settings? [y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            answer = "n"
-
-        if answer in {"y", "yes"}:
-            print()
-            config = load_config()
-            try:
-                from agent.skill_utils import SKILL_CONFIG_PREFIX
-            except Exception:
-                SKILL_CONFIG_PREFIX = "skills.config"
-            for var in missing_skill_config:
-                default = var.get("default", "")
-                default_hint = f" (default: {default})" if default else ""
-                value = input(f"  {var['prompt']}{default_hint}: ").strip()
-                if not value and default:
-                    value = str(default)
-                if value:
-                    storage_key = f"{SKILL_CONFIG_PREFIX}.{var['key']}"
-                    _set_nested(config, storage_key, value)
-                    results["config_added"].append(var["key"])
-                    print(f"  ✓ Saved {var['key']} = {value}")
-                else:
-                    results["warnings"].append(
-                        f"Skipped {var['key']} — skill '{var.get('skill', '?')}' may ask for it later"
-                    )
-                print()
-            save_config(config)
-        else:
-            print("  Set later with: marlow config set <key> <value>")
-
     return results
 
 
@@ -4752,7 +2620,7 @@ def _preserve_env_ref_templates(current, raw, loaded_expanded=None):
         }
 
     if isinstance(current, list) and isinstance(raw, list):
-        # Prefer matching named config objects (e.g. custom_providers) by name
+        # Prefer matching named config objects by name
         # so harmless reordering doesn't drop the original template. If names
         # are duplicated, fall back to positional matching instead of silently
         # shadowing one entry.
@@ -4780,52 +2648,6 @@ def _preserve_env_ref_templates(current, raw, loaded_expanded=None):
         ]
 
     return current
-
-
-def _normalize_root_model_keys(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Move stale root-level provider/base_url/context_length into model section.
-
-    Some users (or older code) placed ``provider:``, ``base_url:``, or
-    ``context_length:`` at the config root instead of inside ``model:``.
-    These root-level keys are only used as a fallback when the corresponding
-    ``model.*`` key is empty — they never override an existing value.
-    After migration the root-level keys are removed so they can't cause
-    confusion on subsequent loads.
-    """
-    # Only act if there are root-level keys to migrate
-    has_root = any(config.get(k) for k in ("provider", "base_url", "context_length"))
-    if not has_root:
-        return config
-
-    config = dict(config)
-    model = config.get("model")
-    if not isinstance(model, dict):
-        model = {"default": model} if model else {}
-        config["model"] = model
-
-    for key in ("provider", "base_url", "context_length"):
-        root_val = config.get(key)
-        if root_val and not model.get(key):
-            model[key] = root_val
-        config.pop(key, None)
-
-    return config
-
-
-def _normalize_max_turns_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize legacy root-level max_turns into agent.max_turns."""
-    config = dict(config)
-    agent_config = dict(config.get("agent") or {})
-
-    if "max_turns" in config and "max_turns" not in agent_config:
-        agent_config["max_turns"] = config["max_turns"]
-
-    if "max_turns" not in agent_config:
-        agent_config["max_turns"] = DEFAULT_CONFIG["agent"]["max_turns"]
-
-    config["agent"] = agent_config
-    config.pop("max_turns", None)
-    return config
 
 
 def cfg_get(cfg: Optional[Dict[str, Any]], *keys: str, default: Any = None) -> Any:
@@ -4976,19 +2798,11 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
                 with open(config_path, encoding="utf-8") as f:
                     user_config = yaml.safe_load(f) or {}
 
-                if "max_turns" in user_config:
-                    agent_user_config = dict(user_config.get("agent") or {})
-                    if agent_user_config.get("max_turns") is None:
-                        agent_user_config["max_turns"] = user_config["max_turns"]
-                    user_config["agent"] = agent_user_config
-                    user_config.pop("max_turns", None)
-
                 config = _deep_merge(config, user_config)
             except Exception as e:
                 _warn_config_parse_failure(config_path, e)
 
-        normalized = _normalize_root_model_keys(_normalize_max_turns_config(config))
-        expanded = _expand_env_vars(normalized)
+        expanded = _expand_env_vars(config)
         _LAST_EXPANDED_CONFIG_BY_PATH[path_key] = copy.deepcopy(expanded)
         if cache_key is not None:
             # Cache stores a separate deepcopy so subsequent ``load_config()``
@@ -5036,22 +2850,15 @@ _FALLBACK_COMMENT = """
 # Uncomment and configure to enable. Triggers on rate limits (429),
 # overload (529), service errors (503), or connection failures.
 #
-# Supported providers:
-#   openrouter   (OPENROUTER_API_KEY)  — routes to any model
-#   openai-codex (OAuth — marlow auth) — OpenAI Codex
-#   nous         (OAuth — marlow auth) — Nous Portal
-#   zai          (ZAI_API_KEY)         — Z.AI / GLM
-#   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
-#   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
-#   minimax      (MINIMAX_API_KEY)     — MiniMax
-#   minimax-cn   (MINIMAX_CN_API_KEY)  — MiniMax (China)
-#   bedrock      (AWS IAM / boto3)     — AWS Bedrock (Converse API)
+# Supported providers are OpenAI Codex and configured custom/local
+# OpenAI-compatible endpoints.
 #
 # For custom OpenAI-compatible endpoints, add base_url and key_env.
 #
-# fallback_model:
-#   provider: openrouter
-#   model: anthropic/claude-sonnet-4
+# fallback_providers:
+#   - provider: custom
+#     model: local-model
+#     base_url: http://localhost:8000/v1
 """
 
 
@@ -5068,22 +2875,15 @@ _COMMENTED_SECTIONS = """
 # Uncomment and configure to enable. Triggers on rate limits (429),
 # overload (529), service errors (503), or connection failures.
 #
-# Supported providers:
-#   openrouter   (OPENROUTER_API_KEY)  — routes to any model
-#   openai-codex (OAuth — marlow auth) — OpenAI Codex
-#   nous         (OAuth — marlow auth) — Nous Portal
-#   zai          (ZAI_API_KEY)         — Z.AI / GLM
-#   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
-#   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
-#   minimax      (MINIMAX_API_KEY)     — MiniMax
-#   minimax-cn   (MINIMAX_CN_API_KEY)  — MiniMax (China)
-#   bedrock      (AWS IAM / boto3)     — AWS Bedrock (Converse API)
+# Supported providers are OpenAI Codex and configured custom/local
+# OpenAI-compatible endpoints.
 #
 # For custom OpenAI-compatible endpoints, add base_url and key_env.
 #
-# fallback_model:
-#   provider: openrouter
-#   model: anthropic/claude-sonnet-4
+# fallback_providers:
+#   - provider: custom
+#     model: local-model
+#     base_url: http://localhost:8000/v1
 """
 
 
@@ -5097,9 +2897,9 @@ def save_config(config: Dict[str, Any]):
 
         ensure_marlow_home()
         config_path = get_config_path()
-        current_normalized = _normalize_root_model_keys(_normalize_max_turns_config(config))
-        normalized = current_normalized
-        raw_existing = _normalize_root_model_keys(_normalize_max_turns_config(read_raw_config()))
+        current_config = dict(config)
+        normalized = current_config
+        raw_existing = read_raw_config()
         if raw_existing:
             normalized = _preserve_env_ref_templates(
                 normalized,
@@ -5113,12 +2913,10 @@ def save_config(config: Dict[str, Any]):
         sec = normalized.get("security", {})
         if not sec or sec.get("redact_secrets") is None:
             parts.append(_SECURITY_COMMENT)
-        fb = normalized.get("fallback_model", {})
-        fb_is_valid = False
-        if isinstance(fb, list):
-            fb_is_valid = any(isinstance(e, dict) and e.get("provider") and e.get("model") for e in fb)
-        elif isinstance(fb, dict):
-            fb_is_valid = bool(fb.get("provider") and fb.get("model"))
+        fb = normalized.get("fallback_providers", [])
+        fb_is_valid = isinstance(fb, list) and any(
+            isinstance(e, dict) and e.get("provider") and e.get("model") for e in fb
+        )
         if not fb_is_valid:
             parts.append(_FALLBACK_COMMENT)
 
@@ -5128,7 +2926,7 @@ def save_config(config: Dict[str, Any]):
             extra_content="".join(parts) if parts else None,
         )
         _secure_file(config_path)
-        _LAST_EXPANDED_CONFIG_BY_PATH[str(config_path)] = copy.deepcopy(current_normalized)
+        _LAST_EXPANDED_CONFIG_BY_PATH[str(config_path)] = copy.deepcopy(normalized)
 
 
 def load_env() -> Dict[str, str]:
@@ -5175,7 +2973,7 @@ def load_env() -> Dict[str, str]:
             raw_lines = f.readlines()
         # Sanitize before parsing: split concatenated lines & drop stale
         # placeholders so corrupted .env files don't produce invalid tokens.
-        lines = _sanitize_env_lines(raw_lines)
+        lines = raw_lines
         for line in lines:
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
@@ -5206,112 +3004,6 @@ def invalidate_env_cache() -> None:
     """
     global _env_cache
     _env_cache = None
-
-
-def _sanitize_env_lines(lines: list) -> list:
-    """Fix corrupted .env lines before reading or writing.
-
-    Handles two known corruption patterns:
-    1. Concatenated KEY=VALUE pairs on a single line (missing newline between
-       entries, e.g. ``ANTHROPIC_API_KEY=sk-...OPENAI_BASE_URL=https://...``).
-    2. Stale ``KEY=***`` placeholder entries left by incomplete setup runs.
-
-    Uses a known-keys set (OPTIONAL_ENV_VARS + _EXTRA_ENV_KEYS) so we only
-    split on real Marlow env var names, avoiding false positives from values
-    that happen to contain uppercase text with ``=``.
-    """
-    # Build the known keys set lazily from OPTIONAL_ENV_VARS + extras.
-    # Done inside the function so OPTIONAL_ENV_VARS is guaranteed to be defined.
-    known_keys = set(OPTIONAL_ENV_VARS.keys()) | _EXTRA_ENV_KEYS
-
-    sanitized: list[str] = []
-    for line in lines:
-        raw = line.rstrip("\r\n")
-        stripped = raw.strip()
-
-        # Preserve blank lines and comments
-        if not stripped or stripped.startswith("#"):
-            sanitized.append(raw + "\n")
-            continue
-
-        # Detect concatenated KEY=VALUE pairs on one line.
-        # Search for known KEY= patterns at any position in the line.
-        # We collect full needle ranges so we can drop matches that are
-        # fully contained within a longer overlapping needle. Without this,
-        # suffix collisions corrupt the file: e.g. LM_API_KEY= inside
-        # GLM_API_KEY= would otherwise split the line into "G\nLM_API_KEY=...".
-        match_ranges: list[tuple[int, int]] = []
-        for key_name in known_keys:
-            needle = key_name + "="
-            idx = stripped.find(needle)
-            while idx >= 0:
-                match_ranges.append((idx, idx + len(needle)))
-                idx = stripped.find(needle, idx + len(needle))
-
-        split_positions = sorted({
-            s for s, e in match_ranges
-            if not any(
-                s2 <= s and e2 >= e and (s2, e2) != (s, e)
-                for s2, e2 in match_ranges
-            )
-        })
-
-        if len(split_positions) > 1:
-            for i, pos in enumerate(split_positions):
-                end = split_positions[i + 1] if i + 1 < len(split_positions) else len(stripped)
-                part = stripped[pos:end].strip()
-                if part:
-                    sanitized.append(part + "\n")
-        else:
-            sanitized.append(stripped + "\n")
-
-    return sanitized
-
-
-def sanitize_env_file() -> int:
-    """Read, sanitize, and rewrite ~/.marlow/.env in place.
-
-    Returns the number of lines that were fixed (concatenation splits +
-    placeholder removals).  Returns 0 when no changes are needed.
-    """
-    env_path = get_env_path()
-    if not env_path.exists():
-        return 0
-
-    read_kw = {"encoding": "utf-8-sig", "errors": "replace"}
-    write_kw = {"encoding": "utf-8"}
-
-    with open(env_path, **read_kw) as f:
-        original_lines = f.readlines()
-
-    sanitized = _sanitize_env_lines(original_lines)
-
-    if sanitized == original_lines:
-        return 0
-
-    # Count fixes: difference in line count (from splits) + removed lines
-    fixes = abs(len(sanitized) - len(original_lines))
-    if fixes == 0:
-        # Lines changed content (e.g. *** removal) even if count is same
-        fixes = sum(1 for a, b in zip(original_lines, sanitized) if a != b)
-        fixes += abs(len(sanitized) - len(original_lines))
-
-    fd, tmp_path = tempfile.mkstemp(dir=str(env_path.parent), suffix=".tmp", prefix=".env_")
-    try:
-        with os.fdopen(fd, "w", **write_kw) as f:
-            f.writelines(sanitized)
-            f.flush()
-            os.fsync(f.fileno())
-        atomic_replace(tmp_path, env_path)
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-    _secure_file(env_path)
-    invalidate_env_cache()
-    return fixes
 
 
 def _check_non_ascii_credential(key: str, value: str) -> str:
@@ -5378,7 +3070,6 @@ def save_env_value(key: str, value: str):
         with open(env_path, **read_kw) as f:
             lines = f.readlines()
         # Sanitize on every read: split concatenated keys, drop stale placeholders
-        lines = _sanitize_env_lines(lines)
 
     # Find and update or append
     found = False
@@ -5446,7 +3137,6 @@ def remove_env_value(key: str) -> bool:
 
     with open(env_path, **read_kw) as f:
         lines = f.readlines()
-    lines = _sanitize_env_lines(lines)
 
     new_lines = [line for line in lines if not line.strip().startswith(f"{key}=")]
     found = len(new_lines) < len(lines)
@@ -5481,27 +3171,6 @@ def remove_env_value(key: str) -> bool:
     os.environ.pop(key, None)
     invalidate_env_cache()
     return found
-
-
-def save_anthropic_oauth_token(value: str, save_fn=None):
-    """Persist an Anthropic OAuth/setup token and clear the API-key slot."""
-    writer = save_fn or save_env_value
-    writer("ANTHROPIC_TOKEN", value)
-    writer("ANTHROPIC_API_KEY", "")
-
-
-def use_anthropic_claude_code_credentials(save_fn=None):
-    """Use Claude Code's own credential files instead of persisting env tokens."""
-    writer = save_fn or save_env_value
-    writer("ANTHROPIC_TOKEN", "")
-    writer("ANTHROPIC_API_KEY", "")
-
-
-def save_anthropic_api_key(value: str, save_fn=None):
-    """Persist an Anthropic API key and clear the OAuth/setup-token slot."""
-    writer = save_fn or save_env_value
-    writer("ANTHROPIC_API_KEY", value)
-    writer("ANTHROPIC_TOKEN", "")
 
 
 def save_env_value_secure(key: str, value: str) -> Dict[str, Any]:
@@ -5582,24 +3251,21 @@ def show_config():
     print(color("◆ API Keys", Colors.CYAN, Colors.BOLD))
     
     keys = [
-        ("OPENROUTER_API_KEY", "OpenRouter"),
-        ("VOICE_TOOLS_OPENAI_KEY", "OpenAI (STT/TTS)"),
-        ("EXA_API_KEY", "Exa"),
-        ("PARALLEL_API_KEY", "Parallel"),
-        ("FIRECRAWL_API_KEY", "Firecrawl"),
-        ("TAVILY_API_KEY", "Tavily"),
-        ("BROWSERBASE_API_KEY", "Browserbase"),
-        ("BROWSER_USE_API_KEY", "Browser Use"),
-        ("FAL_KEY", "FAL"),
+        ("LM_API_KEY", "LM Studio"),
+        ("BRAVE_SEARCH_API_KEY", "Brave Search"),
+        ("VOICE_TOOLS_OPENAI_KEY", "OpenAI audio"),
+        ("ELEVENLABS_API_KEY", "ElevenLabs"),
+        ("MISTRAL_API_KEY", "Mistral audio"),
+        ("GROQ_API_KEY", "Groq STT"),
+        ("XAI_API_KEY", "xAI audio"),
+        ("MINIMAX_API_KEY", "MiniMax TTS"),
+        ("GEMINI_API_KEY", "Gemini TTS"),
+        ("HONCHO_API_KEY", "Honcho"),
     ]
     
     for env_key, name in keys:
         value = get_env_value(env_key)
         print(f"  {name:<14} {redact_key(value)}")
-    from marlow_cli.auth import get_anthropic_key
-    anthropic_value = get_anthropic_key()
-    print(f"  {'Anthropic':<14} {redact_key(anthropic_value)}")
-    
     # Model settings
     print()
     print(color("◆ Model", Colors.CYAN, Colors.BOLD))
@@ -5628,16 +3294,6 @@ def show_config():
     
     if terminal.get('backend') == 'docker':
         print(f"  Docker image: {terminal.get('docker_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}")
-    elif terminal.get('backend') == 'singularity':
-        print(f"  Image:        {terminal.get('singularity_image', 'docker://nikolaik/python-nodejs:python3.11-nodejs20')}")
-    elif terminal.get('backend') == 'modal':
-        print(f"  Modal image:  {terminal.get('modal_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}")
-        modal_token = get_env_value('MODAL_TOKEN_ID')
-        print(f"  Modal token:  {'configured' if modal_token else '(not set)'}")
-    elif terminal.get('backend') == 'daytona':
-        print(f"  Daytona image: {terminal.get('daytona_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}")
-        daytona_key = get_env_value('DAYTONA_API_KEY')
-        print(f"  API key:      {'configured' if daytona_key else '(not set)'}")
     elif terminal.get('backend') == 'ssh':
         ssh_host = get_env_value('TERMINAL_SSH_HOST')
         ssh_user = get_env_value('TERMINAL_SSH_USER')
@@ -5744,16 +3400,9 @@ def edit_config():
     editor = os.getenv('EDITOR') or os.getenv('VISUAL')
 
     if not editor:
-        # Try common editors — order is platform-aware so Windows users
-        # land on a working editor (notepad) even without Git Bash or nano
-        # installed.  On POSIX, prefer nano/vim over code/notepad because
-        # it's more likely to be present on headless / server systems.
+        # Prefer terminal editors commonly present on headless systems.
         import shutil
-        import sys as _sys
-        if _sys.platform == "win32":
-            candidates = ['notepad', 'code', 'vim', 'vi', 'nano']
-        else:
-            candidates = ['nano', 'vim', 'vi', 'code', 'notepad']
+        candidates = ['nano', 'vim', 'vi', 'code']
         for cmd in candidates:
             if shutil.which(cmd):
                 editor = cmd
@@ -5774,17 +3423,7 @@ def set_config_value(key: str, value: str):
         managed_error("set configuration values")
         return
     # Check if it's an API key (goes to .env)
-    api_keys = [
-        'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'VOICE_TOOLS_OPENAI_KEY',
-        'EXA_API_KEY', 'PARALLEL_API_KEY', 'FIRECRAWL_API_KEY', 'FIRECRAWL_API_URL',
-        'FIRECRAWL_GATEWAY_URL', 'TOOL_GATEWAY_DOMAIN', 'TOOL_GATEWAY_SCHEME',
-        'TOOL_GATEWAY_USER_TOKEN', 'TAVILY_API_KEY',
-        'BROWSERBASE_API_KEY', 'BROWSERBASE_PROJECT_ID', 'BROWSER_USE_API_KEY',
-        'FAL_KEY', 'TELEGRAM_BOT_TOKEN', 'DISCORD_BOT_TOKEN',
-        'TERMINAL_SSH_HOST', 'TERMINAL_SSH_USER', 'TERMINAL_SSH_KEY',
-        'SUDO_PASSWORD', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN',
-        'GITHUB_TOKEN', 'HONCHO_API_KEY',
-    ]
+    api_keys = ['SUDO_PASSWORD']
     
     if key.upper() in api_keys or key.upper().endswith(('_API_KEY', '_TOKEN')) or key.upper().startswith('TERMINAL_SSH'):
         save_env_value(key.upper(), value)
@@ -5804,7 +3443,7 @@ def set_config_value(key: str, value: str):
             user_config = {}
     
     # Handle nested keys (e.g., "tts.provider") including numeric list
-    # indices (e.g., "custom_providers.0.api_key").  Delegates to
+    # indices. Delegates to
     # _set_nested which preserves list-typed nodes; before #17876 the
     # inline navigation here silently overwrote lists with dicts.
 
@@ -5829,11 +3468,7 @@ def set_config_value(key: str, value: str):
     # config.yaml is authoritative, but terminal_tool only reads TERMINAL_ENV etc.
     _config_to_env_sync = {
         "terminal.backend": "TERMINAL_ENV",
-        "terminal.modal_mode": "TERMINAL_MODAL_MODE",
         "terminal.docker_image": "TERMINAL_DOCKER_IMAGE",
-        "terminal.singularity_image": "TERMINAL_SINGULARITY_IMAGE",
-        "terminal.modal_image": "TERMINAL_MODAL_IMAGE",
-        "terminal.daytona_image": "TERMINAL_DAYTONA_IMAGE",
         "terminal.docker_mount_cwd_to_workspace": "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE",
         "terminal.docker_run_as_host_user": "TERMINAL_DOCKER_RUN_AS_HOST_USER",
         "terminal.docker_persist_across_processes": "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES",
@@ -5877,9 +3512,9 @@ def config_command(args):
             print("Usage: marlow config set <key> <value>")
             print()
             print("Examples:")
-            print("  marlow config set model anthropic/claude-sonnet-4")
+            print("  marlow config set model gpt-5.3-codex")
             print("  marlow config set terminal.backend docker")
-            print("  marlow config set OPENROUTER_API_KEY sk-or-...")
+            print("  marlow config set LM_API_KEY local-token")
             sys.exit(1)
         set_config_value(key, value)
     
@@ -6040,24 +3675,22 @@ _inject_profile_env_vars()
 
 
 # ── Platform-plugin env var injection ────────────────────────────────────────
-# Bundled platform plugins under ``plugins/platforms/*/plugin.yaml`` declare
-# their required env vars via ``requires_env``.  This mirror of
-# ``_inject_profile_env_vars`` surfaces them in ``marlow config`` UI so users
-# can configure Teams / IRC / Google Chat without the core repo ever needing
-# to know they exist.
+# Installed platform plugins may declare required env vars via ``requires_env``.
+# This mirror of ``_inject_profile_env_vars`` surfaces them in config UI without
+# coupling core Marlow to a connector.
 #
 # Each ``requires_env`` entry may be a bare string (name only) or a dict:
 #
 #   requires_env:
-#     - TEAMS_CLIENT_ID                          # minimal
-#     - name: TEAMS_CLIENT_SECRET                # rich
-#       description: "Teams bot client secret"
-#       url: "https://portal.azure.com/"
+#     - EXAMPLE_CLIENT_ID                        # minimal
+#     - name: EXAMPLE_CLIENT_SECRET              # rich
+#       description: "Connector client secret"
+#       url: "https://example.com/settings"
 #       password: true
 #       prompt: "Teams client secret"
 #
 # An optional ``optional_env`` block surfaces non-required vars the same way
-# (e.g. allowlist, home channel).
+# (for example an allowlist or home channel).
 
 _platform_plugin_env_vars_injected = False
 

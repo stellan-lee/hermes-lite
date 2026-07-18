@@ -105,23 +105,23 @@ def test_classify_consolidated_into_newly_created_umbrella(curator_env):
 def test_classify_handles_underscore_hyphen_variants(curator_env):
     """Names with hyphens match underscore forms in paths/content and vice versa."""
     result = curator_env._classify_removed_skills(
-        removed=["open-webui-setup"],
+        removed=["rest-api-debugging"],
         added=[],
-        after_names={"webui"},
+        after_names={"api-debugging"},
         tool_calls=[
             {
                 "name": "skill_manage",
                 "arguments": json.dumps({
                     "action": "write_file",
-                    "name": "webui",
-                    "file_path": "references/open_webui_setup.md",
+                    "name": "api-debugging",
+                    "file_path": "references/rest_api_debugging.md",
                     "file_content": "...",
                 }),
             },
         ],
     )
     assert len(result["consolidated"]) == 1
-    assert result["consolidated"][0]["into"] == "webui"
+    assert result["consolidated"][0]["into"] == "api-debugging"
 
 
 def test_classify_self_reference_does_not_count(curator_env):

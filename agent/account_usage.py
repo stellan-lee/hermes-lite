@@ -6,9 +6,7 @@ from typing import Any, Optional
 
 import httpx
 
-from agent.anthropic_adapter import _is_oauth_token, resolve_anthropic_token
 from marlow_cli.auth import _read_codex_tokens, resolve_codex_runtime_credentials
-from marlow_cli.runtime_provider import resolve_runtime_provider
 
 
 def _utc_now() -> datetime:
@@ -172,139 +170,6 @@ def _fetch_codex_account_usage() -> Optional[AccountUsageSnapshot]:
     )
 
 
-def _fetch_anthropic_account_usage() -> Optional[AccountUsageSnapshot]:
-    token = (resolve_anthropic_token() or "").strip()
-    if not token:
-        return None
-    if not _is_oauth_token(token):
-        return AccountUsageSnapshot(
-            provider="anthropic",
-            source="oauth_usage_api",
-            fetched_at=_utc_now(),
-            unavailable_reason="Anthropic account limits are only available for OAuth-backed Claude accounts.",
-        )
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "claude-code/2.1.0",
-    }
-    with httpx.Client(timeout=15.0) as client:
-        response = client.get("https://api.anthropic.com/api/oauth/usage", headers=headers)
-        response.raise_for_status()
-    payload = response.json() or {}
-    windows: list[AccountUsageWindow] = []
-    mapping = (
-        ("five_hour", "Current session"),
-        ("seven_day", "Current week"),
-        ("seven_day_opus", "Opus week"),
-        ("seven_day_sonnet", "Sonnet week"),
-    )
-    for key, label in mapping:
-        window = payload.get(key) or {}
-        util = window.get("utilization")
-        if util is None:
-            continue
-        used = float(util) * 100 if float(util) <= 1 else float(util)
-        windows.append(
-            AccountUsageWindow(
-                label=label,
-                used_percent=used,
-                reset_at=_parse_dt(window.get("resets_at")),
-            )
-        )
-    details: list[str] = []
-    extra = payload.get("extra_usage") or {}
-    if extra.get("is_enabled"):
-        used_credits = extra.get("used_credits")
-        monthly_limit = extra.get("monthly_limit")
-        currency = extra.get("currency") or "USD"
-        if isinstance(used_credits, (int, float)) and isinstance(monthly_limit, (int, float)):
-            details.append(
-                f"Extra usage: {used_credits:.2f} / {monthly_limit:.2f} {currency}"
-            )
-    return AccountUsageSnapshot(
-        provider="anthropic",
-        source="oauth_usage_api",
-        fetched_at=_utc_now(),
-        windows=tuple(windows),
-        details=tuple(details),
-    )
-
-
-def _fetch_openrouter_account_usage(base_url: Optional[str], api_key: Optional[str]) -> Optional[AccountUsageSnapshot]:
-    runtime = resolve_runtime_provider(
-        requested="openrouter",
-        explicit_base_url=base_url,
-        explicit_api_key=api_key,
-    )
-    token = str(runtime.get("api_key", "") or "").strip()
-    if not token:
-        return None
-    normalized = str(runtime.get("base_url", "") or "").rstrip("/")
-    credits_url = f"{normalized}/credits"
-    key_url = f"{normalized}/key"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-    }
-    with httpx.Client(timeout=10.0) as client:
-        credits_resp = client.get(credits_url, headers=headers)
-        credits_resp.raise_for_status()
-        credits = (credits_resp.json() or {}).get("data") or {}
-        try:
-            key_resp = client.get(key_url, headers=headers)
-            key_resp.raise_for_status()
-            key_data = (key_resp.json() or {}).get("data") or {}
-        except Exception:
-            key_data = {}
-    total_credits = float(credits.get("total_credits") or 0.0)
-    total_usage = float(credits.get("total_usage") or 0.0)
-    details = [f"Credits balance: ${max(0.0, total_credits - total_usage):.2f}"]
-    windows: list[AccountUsageWindow] = []
-    limit = key_data.get("limit")
-    limit_remaining = key_data.get("limit_remaining")
-    limit_reset = str(key_data.get("limit_reset") or "").strip()
-    usage = key_data.get("usage")
-    if (
-        isinstance(limit, (int, float))
-        and float(limit) > 0
-        and isinstance(limit_remaining, (int, float))
-        and 0 <= float(limit_remaining) <= float(limit)
-    ):
-        limit_value = float(limit)
-        remaining_value = float(limit_remaining)
-        used_percent = ((limit_value - remaining_value) / limit_value) * 100
-        detail_parts = [f"${remaining_value:.2f} of ${limit_value:.2f} remaining"]
-        if limit_reset:
-            detail_parts.append(f"resets {limit_reset}")
-        windows.append(
-            AccountUsageWindow(
-                label="API key quota",
-                used_percent=used_percent,
-                detail=" • ".join(detail_parts),
-            )
-        )
-    if isinstance(usage, (int, float)):
-        usage_parts = [f"API key usage: ${float(usage):.2f} total"]
-        for value, label in (
-            (key_data.get("usage_daily"), "today"),
-            (key_data.get("usage_weekly"), "this week"),
-            (key_data.get("usage_monthly"), "this month"),
-        ):
-            if isinstance(value, (int, float)) and float(value) > 0:
-                usage_parts.append(f"${float(value):.2f} {label}")
-        details.append(" • ".join(usage_parts))
-    return AccountUsageSnapshot(
-        provider="openrouter",
-        source="credits_api",
-        fetched_at=_utc_now(),
-        windows=tuple(windows),
-        details=tuple(details),
-    )
-
-
 def fetch_account_usage(
     provider: Optional[str],
     *,
@@ -317,10 +182,6 @@ def fetch_account_usage(
     try:
         if normalized == "openai-codex":
             return _fetch_codex_account_usage()
-        if normalized == "anthropic":
-            return _fetch_anthropic_account_usage()
-        if normalized == "openrouter":
-            return _fetch_openrouter_account_usage(base_url, api_key)
     except Exception:
         return None
     return None

@@ -1,5 +1,5 @@
-"""CLI subcommand: ``marlow send`` — pipe text from shell scripts to any
-configured messaging platform (Telegram, Discord, Slack, Signal, SMS, etc.).
+"""CLI subcommand: ``marlow send`` — pipe text from shell scripts to a
+configured messaging platform.
 
 This is a thin wrapper around ``tools.send_message_tool.send_message_tool``
 that exposes its functionality as a standalone CLI entry point so ops
@@ -12,11 +12,10 @@ Design notes:
 * No LLM, no agent loop — the subcommand just resolves arguments, reads the
   message body, calls the shared tool function, and prints/returns the
   result. It is intentionally fast, cheap, and side-effect-only.
-* For platforms that send via bot token (Telegram, Discord, Slack, Signal,
-  SMS, WhatsApp-CloudAPI, …) no running gateway is required. The tool
-  talks directly to each platform's REST endpoint. For platforms that rely
-  on a persistent adapter connection (plugin platforms, Matrix in some
-  modes, …) a live gateway is needed; the underlying tool surfaces that
+* For retained platforms that send via a bot token, no running gateway is
+  required. The tool talks directly to each platform's endpoint. For plugin
+  platforms that rely on a persistent adapter connection, a live gateway is
+  needed; the underlying tool surfaces that
   error to the caller.
 * Exit codes follow the classic Unix convention:
     0 — delivery (or list) succeeded
@@ -325,8 +324,7 @@ def cmd_send(args: argparse.Namespace) -> None:
     from tools.send_message_tool import send_message_tool
 
     # send_message_tool auto-loads gateway config + env and routes to the
-    # appropriate platform adapter (bot-token path for Telegram/Discord/Slack/
-    # Signal/SMS/WhatsApp; live-adapter path for plugin platforms).
+    # appropriate retained platform adapter or a live plugin adapter.
     #
     # It expects the standard tool-call dict and returns a JSON string.
     tool_args = {

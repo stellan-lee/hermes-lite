@@ -101,9 +101,9 @@ _CLONE_ALL_DEFAULT_EXCLUDE_ROOT: frozenset[str] = frozenset({
 
 # Marker file written by `marlow profile create --no-skills`.  When present in
 # a profile's root, callers of seed_profile_skills() (fresh-create, `marlow
-# update`'s all-profile sync, the web dashboard) skip bundled-skill seeding
-# for that profile.  The user can still install skills manually via
-# `marlow skills install` or drop SKILL.md files into the profile's skills/.
+# update`'s all-profile sync) skip bundled-skill seeding
+# for that profile. The user can still copy SKILL.md packages into the
+# profile's skills/ directory manually.
 # Delete the marker file to opt back in.
 NO_BUNDLED_SKILLS_MARKER = ".no-bundled-skills"
 
@@ -198,10 +198,10 @@ _RESERVED_NAMES = frozenset({
 
 # Marlow subcommands that cannot be used as profile names/aliases
 _MARLOW_SUBCOMMANDS = frozenset({
-    "chat", "model", "gateway", "setup", "whatsapp", "login", "logout",
+    "chat", "model", "gateway", "setup", "login", "logout",
     "status", "cron", "doctor", "dump", "config", "pairing", "skills", "tools",
     "mcp", "sessions", "insights", "version", "update", "uninstall",
-    "profile", "plugins", "honcho", "acp",
+    "profile", "plugins", "honcho",
 })
 
 
@@ -270,7 +270,7 @@ def validate_profile_name(name: str) -> None:
     """Raise ``ValueError`` if *name* is not a valid profile identifier.
 
     Validates the input as-given — strict lowercase match. Callers that accept
-    mixed-case or title-cased input from users (dashboard UI, CLI args) should
+    mixed-case or title-cased input from users (for example, CLI args) should
     call :func:`normalize_profile_name` first. This separation keeps validate
     honest about what the on-disk directory name must look like, while
     ingress-point normalization handles UX flexibility (see #18498).
@@ -329,16 +329,15 @@ def check_alias_collision(name: str) -> Optional[str]:
 
     # Check existing commands in PATH
     wrapper_dir = _get_wrapper_dir()
-    is_windows = sys.platform == "win32"
     try:
         result = subprocess.run(
-            ["where" if is_windows else "which", canon],
+            ["which", canon],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:
             existing_path = result.stdout.strip().splitlines()[0]
             # Allow overwriting our own wrappers
-            expected = wrapper_dir / (f"{canon}.bat" if is_windows else canon)
+            expected = wrapper_dir / canon
             if existing_path == str(expected):
                 try:
                     content = expected.read_text()
@@ -366,7 +365,6 @@ def create_wrapper_script(name: str, target: Optional[str] = None) -> Optional[P
     activates is ``target`` if given, otherwise ``name`` — this lets a custom
     alias name point at a differently-named profile without a post-hoc rewrite.
 
-    On Windows, creates a ``.bat`` file instead of a POSIX shell script.
     Returns the path to the created wrapper, or None if creation failed.
     """
     canon = normalize_profile_name(name)
@@ -378,36 +376,21 @@ def create_wrapper_script(name: str, target: Optional[str] = None) -> Optional[P
         print(f"⚠ Could not create {wrapper_dir}: {e}")
         return None
 
-    is_windows = sys.platform == "win32"
-    if is_windows:
-        wrapper_path = wrapper_dir / f"{canon}.bat"
-        try:
-            wrapper_path.write_text(f"@echo off\r\nmarlow -p {profile} %*\r\n")
-            return wrapper_path
-        except OSError as e:
-            print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
-            return None
-    else:
-        wrapper_path = wrapper_dir / canon
-        try:
-            wrapper_path.write_text(f'#!/bin/sh\nexec marlow -p {profile} "$@"\n')
-            wrapper_path.chmod(wrapper_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-            return wrapper_path
-        except OSError as e:
-            print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
-            return None
+    wrapper_path = wrapper_dir / canon
+    try:
+        wrapper_path.write_text(f'#!/bin/sh\nexec marlow -p {profile} "$@"\n')
+        wrapper_path.chmod(wrapper_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return wrapper_path
+    except OSError as e:
+        print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
+        return None
 
 
 def remove_wrapper_script(name: str) -> bool:
     """Remove the wrapper script for a profile. Returns True if removed."""
     wrapper_dir = _get_wrapper_dir()
     canon = normalize_profile_name(name)
-    is_windows = sys.platform == "win32"
-
-    # Check both the extensionless path (POSIX) and .bat (Windows)
     candidates = [wrapper_dir / canon]
-    if is_windows:
-        candidates.insert(0, wrapper_dir / f"{canon}.bat")
 
     for wrapper_path in candidates:
         if wrapper_path.exists():
@@ -447,9 +430,7 @@ class ProfileInfo:
     # user has not described the profile (legacy profiles, fresh installs).
     description: str = ""
     # When True, ``description`` was auto-generated by the LLM
-    # describer and has not been confirmed by the user. The dashboard
-    # surfaces a "review" badge in this case so the user can edit or
-    # accept.
+    # describer and has not been confirmed by the user.
     description_auto: bool = False
 
 
@@ -761,10 +742,8 @@ def create_profile(
                         except OSError:
                             pass
 
-            # Clone installed skills from the source profile. The dashboard's
-            # "clone from default" flow is expected to preserve both bundled
-            # and user-installed skills so the new profile immediately has the
-            # same agent capabilities as the source profile.
+            # Clone installed skills from the source profile so the new profile
+            # immediately has the same agent capabilities as its source.
             source_skills = source_dir / "skills"
             if source_skills.is_dir():
                 shutil.copytree(source_skills, profile_dir / "skills", dirs_exist_ok=True)
@@ -956,7 +935,7 @@ def delete_profile(name: str, yes: bool = False) -> Path:
         def _make_writable(func, path, exc):
             """onexc/onerror handler: add +w on PermissionError so rmtree can proceed.
 
-            Handles two cases on NixOS (and other systems with read-only
+            Handles two cases on systems with read-only
             copies from immutable stores):
             1. The path itself isn't writable (e.g. a file with mode 0444)
             2. The *parent* directory isn't writable (e.g. mode 0555)
@@ -1153,16 +1132,10 @@ def _stop_gateway_process(profile_dir: Path) -> None:
         raw = pid_file.read_text().strip()
         data = json.loads(raw) if raw.startswith("{") else {"pid": int(raw)}
         pid = int(data["pid"])
-        # Route through terminate_pid so Windows uses the appropriate
-        # primitive (taskkill / TerminateProcess) — raw os.kill with
-        # _signal.SIGKILL raises AttributeError at import time on Windows,
-        # and raw os.kill with SIGTERM doesn't cascade to child processes
-        # the same way taskkill /T does.
         from gateway.status import terminate_pid as _terminate_pid
         from gateway.status import _pid_exists
         _terminate_pid(pid)  # graceful first
-        # Wait up to 10s for graceful shutdown. On Windows, os.kill(pid, 0)
-        # is NOT a no-op — use the handle-based existence check.
+        # Wait up to 10s for graceful shutdown.
         for _ in range(20):
             _time.sleep(0.5)
             if not _pid_exists(pid):

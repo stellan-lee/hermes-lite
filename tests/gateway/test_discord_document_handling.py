@@ -97,6 +97,7 @@ def _redirect_cache(tmp_path, monkeypatch):
 def adapter(monkeypatch):
     monkeypatch.setattr(discord_platform.discord, "DMChannel", FakeDMChannel, raising=False)
     monkeypatch.setattr(discord_platform.discord, "Thread", FakeThread, raising=False)
+    monkeypatch.setattr(discord_platform, "is_safe_url", lambda _url: True)
 
     config = PlatformConfig(enabled=True, token="fake-token")
     a = DiscordAdapter(config)
@@ -528,4 +529,3 @@ class TestAllowAnyAttachment:
         """Garbage in max_attachment_bytes config falls back to 32 MiB."""
         adapter.config.extra["max_attachment_bytes"] = "not-a-number"
         assert adapter._discord_max_attachment_bytes() == 32 * 1024 * 1024
-

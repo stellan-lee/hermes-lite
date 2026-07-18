@@ -9,8 +9,8 @@ Where this fits relative to the existing pieces:
 
 * ``marlow profile export/import`` — local backup / restore for a profile
   on your own machine. NOT a distribution format. Stays as-is.
-* ``marlow skills install <url>`` — the URL install pattern we're mirroring,
-  but at the profile granularity.
+* Local skill directories — portable content copied into a profile, while a
+  distribution packages the complete profile at once.
 
 Subcommands (all live under ``marlow profile``, not a parallel tree):
 

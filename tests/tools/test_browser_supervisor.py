@@ -390,7 +390,7 @@ def test_browser_cdp_frame_id_routes_via_supervisor(chrome_cdp, supervisor_regis
     Mocks the supervisor with a known frame and verifies browser_cdp sends
     the call via the supervisor's loop rather than opening a stateless
     WebSocket. This is the path that makes cross-origin iframe eval work
-    on Browserbase.
+    on a remote CDP endpoint.
     """
     cdp_url, _port = chrome_cdp
     sv = supervisor_registry.get_or_start(task_id="frame-id-test", cdp_url=cdp_url)
@@ -443,7 +443,7 @@ def test_browser_cdp_frame_id_real_oopif_smoke_documented():
         verifies inner page's title comes back from the OOPIF session.
         PASSED on 2026-04-23: iframe document.title = 'INNER-FRAME-XYZ'
 
-      * smoke_bb_iframe_agent_path.py — Browserbase + real cross-origin
+      * smoke_remote_iframe_agent_path.py — remote CDP + real cross-origin
         iframe (src=https://example.com/). Same browser_cdp(frame_id=)
         path. PASSED on 2026-04-23: iframe document.title =
         'Example Domain'
@@ -453,7 +453,7 @@ def test_browser_cdp_frame_id_real_oopif_smoke_documented():
     """
     pytest.skip(
         "Real-OOPIF E2E verified manually with smoke_local_oopif.py and "
-        "smoke_bb_iframe_agent_path.py — pytest version hits an asyncio "
+        "smoke_remote_iframe_agent_path.py — pytest version hits an asyncio "
         "version quirk between venv (3.11) and standalone (3.13). "
         "Smoke logs preserved in /tmp/dialog-iframe-test/."
     )

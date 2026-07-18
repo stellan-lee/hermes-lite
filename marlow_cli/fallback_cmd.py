@@ -13,8 +13,7 @@ Subcommands:
   marlow fallback clear    Remove all fallback entries
 
 Storage: ``fallback_providers`` in ``~/.marlow/config.yaml`` (top-level, list of
-``{provider, model, base_url?, api_mode?}`` dicts).  The legacy single-dict
-``fallback_model`` format is migrated to the new list format on first add.
+``{provider, model, base_url?, api_mode?}`` dicts).
 """
 from __future__ import annotations
 
@@ -31,20 +30,14 @@ from marlow_cli.fallback_config import get_fallback_chain
 def _read_chain(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Return the normalized fallback chain as a list of dicts.
 
-    Accepts both the new list format (``fallback_providers``) and the legacy
-    ``fallback_model`` format. When both are present, the effective chain is
-    merged with ``fallback_providers`` entries kept first. The returned list is
-    always a fresh copy — callers can mutate without touching the config dict.
+    The returned list is always a fresh copy so callers can mutate it safely.
     """
     return get_fallback_chain(config)
 
 
 def _write_chain(config: Dict[str, Any], chain: List[Dict[str, Any]]) -> None:
-    """Persist the chain to ``fallback_providers`` and clear legacy key."""
+    """Persist the chain to ``fallback_providers``."""
     config["fallback_providers"] = chain
-    # Drop the legacy single-dict key on write so there's only one source of truth.
-    if "fallback_model" in config:
-        config.pop("fallback_model", None)
 
 
 def _format_entry(entry: Dict[str, Any]) -> str:
@@ -198,7 +191,7 @@ def cmd_fallback_add(args) -> None:
     # Reload the config with the primary restored, then append the new entry
     # to ``fallback_providers``.  We deliberately re-load (rather than mutating
     # ``after_cfg``) because the picker may have touched other top-level keys
-    # (custom_providers, providers credentials) that we want to keep.
+    # (provider credentials) that we want to keep.
     _restore_model_cfg(model_before)
     _restore_auth_active_provider(active_provider_before)
 

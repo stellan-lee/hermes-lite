@@ -4,7 +4,7 @@ description: Embed alibaba/page-agent into your own web application — a pure-J
 version: 1.0.0
 author: Marlow Agent
 license: MIT
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 metadata:
   marlow:
     tags: [web, javascript, agent, browser, gui, alibaba, embed, copilot, saas]
@@ -27,7 +27,7 @@ Load this skill when a user wants to:
 
 ## When NOT to use this skill
 
-- User wants **Marlow itself to drive a browser** → use Marlow' built-in browser tool (Browserbase / Camofox). page-agent is the *opposite* direction.
+- User wants **Marlow itself to drive a browser** → use Marlow' retained built-in browser tool. page-agent is the *opposite* direction.
 - User wants **cross-tab automation without embedding** → use Playwright, browser-use, or the page-agent Chrome extension
 - User needs **visual grounding / screenshots** → page-agent is text-DOM only; use a multimodal browser agent instead
 

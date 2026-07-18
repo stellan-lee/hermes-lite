@@ -2,17 +2,14 @@
 """
 Terminal Tool Module
 
-A terminal tool that executes commands in local, Docker, Modal, SSH,
-Singularity, and Daytona environments. Supports local execution,
-containerized backends, and cloud sandboxes, including managed Modal mode.
+A terminal tool that executes commands in local, Docker, and SSH
+environments.
 
 Supported environments:
 - "local": Execute directly on the host machine (default, fastest)
 - "docker": Execute in Docker containers (isolated, requires Docker)
-- "modal": Execute in Modal cloud sandboxes (direct Modal or managed gateway)
-
 Features:
-- Multiple execution backends (local, docker, modal)
+- Multiple execution backends (local, docker, ssh)
 - Background task support
 - VM/container lifecycle management
 - Automatic cleanup after inactivity
@@ -31,7 +28,6 @@ Usage:
     result = terminal_tool("python server.py", background=True)
 """
 
-import importlib.util
 import json
 import logging
 import os
@@ -40,7 +36,6 @@ import re
 import time
 import threading
 import atexit
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -61,21 +56,6 @@ from tools.interrupt import is_interrupted, _interrupt_event  # noqa: F401 — r
 
 
 
-# =============================================================================
-# Custom Singularity Environment with more space
-# =============================================================================
-
-# Singularity helpers (scratch dir, SIF cache) now live in tools/environments/singularity.py
-from tools.environments.singularity import _get_scratch_dir
-from tools.tool_backend_helpers import (
-    coerce_modal_mode,
-    has_direct_modal_credentials,
-    managed_nous_tools_enabled,
-    nous_tool_gateway_unavailable_message,
-    resolve_modal_backend_state,
-)
-
-
 def _safe_parse_import_env(
     name: str,
     default: Any,
@@ -84,7 +64,7 @@ def _safe_parse_import_env(
 ):
     """Parse module-level numeric env vars without breaking import.
 
-    Terminal tool is imported by CLI, ACP, tests, and tool discovery. A single
+    Terminal tool is imported by CLI, gateway, tests, and tool discovery. A single
     malformed env var must not make the whole module unloadable at import time.
     """
     raw = os.getenv(name)
@@ -120,39 +100,10 @@ DISK_USAGE_WARNING_THRESHOLD_GB = _safe_parse_import_env(
 )
 
 
-def _check_disk_usage_warning():
-    """Check if total disk usage exceeds warning threshold."""
-    try:
-        scratch_dir = _get_scratch_dir()
-
-        # Get total size of marlow directories
-        total_bytes = 0
-        import glob
-        for path in glob.glob(str(scratch_dir / "marlow-*")):
-            for f in Path(path).rglob('*'):
-                if f.is_file():
-                    try:
-                        total_bytes += f.stat().st_size
-                    except OSError as e:
-                        logger.debug("Could not stat file %s: %s", f, e)
-        
-        total_gb = total_bytes / (1024 ** 3)
-        
-        if total_gb > DISK_USAGE_WARNING_THRESHOLD_GB:
-            logger.warning("Disk usage (%.1fGB) exceeds threshold (%.0fGB). Consider running cleanup_all_environments().",
-                           total_gb, DISK_USAGE_WARNING_THRESHOLD_GB)
-            return True
-        
-        return False
-    except Exception as e:
-        logger.debug("Disk usage warning check failed: %s", e, exc_info=True)
-        return False
-
-
 # Interactive sudo password cache.
 #
 # Scope the cache to the active session when a session key is available, then
-# fall back to callback identity (ACP / CLI interactive callbacks), then the
+# fall back to callback identity (interactive client callbacks), then the
 # current thread. This prevents one interactive session from reusing another
 # session's cached sudo password inside the same long-lived process.
 _sudo_password_cache: dict[str, str] = {}
@@ -162,7 +113,7 @@ _sudo_password_cache_lock = threading.Lock()
 # instead of the default /dev/tty or input() readers. The CLI registers these
 # so prompts route through prompt_toolkit's event loop.
 # Callback slots used by the approval prompt and sudo password prompt
-# routines. Stored in thread-local state so overlapping ACP sessions —
+# routines. Stored in thread-local state so overlapping client sessions —
 # each running in its own ThreadPoolExecutor thread — don't stomp on
 # each other's callbacks. See GHSA-qg5c-hvr5-hjgr.
 #
@@ -184,7 +135,7 @@ def _get_approval_callback():
 def set_sudo_password_callback(cb):
     """Register a callback for sudo password prompts (used by CLI).
 
-    Per-thread scope — ACP sessions that run concurrently in a
+    Per-thread scope — client sessions that run concurrently in a
     ThreadPoolExecutor each have their own callback slot.
     """
     _callback_tls.sudo_password = cb
@@ -193,7 +144,7 @@ def set_sudo_password_callback(cb):
 def set_approval_callback(cb):
     """Register a callback for dangerous command approval prompts.
 
-    Per-thread scope — ACP sessions that run concurrently in a
+    Per-thread scope — client sessions that run concurrently in a
     ThreadPoolExecutor each have their own callback slot. See
     GHSA-qg5c-hvr5-hjgr.
     """
@@ -345,35 +296,23 @@ def _prompt_for_sudo_password(timeout_seconds: int = 45) -> str:
     result = {"password": None, "done": False}
     
     def read_password_thread():
-        """Read password with echo disabled. Uses msvcrt on Windows, /dev/tty on Unix."""
+        """Read a password from /dev/tty with echo disabled."""
         tty_fd = None
         old_attrs = None
         try:
-            if platform.system() == "Windows":
-                import msvcrt
-                chars = []
-                while True:
-                    c = msvcrt.getwch()
-                    if c in {"\r", "\n"}:
-                        break
-                    if c == "\x03":
-                        raise KeyboardInterrupt
-                    chars.append(c)
-                result["password"] = "".join(chars)
-            else:
-                import termios
-                tty_fd = os.open("/dev/tty", os.O_RDONLY)
-                old_attrs = termios.tcgetattr(tty_fd)
-                new_attrs = termios.tcgetattr(tty_fd)
-                new_attrs[3] = new_attrs[3] & ~termios.ECHO
-                termios.tcsetattr(tty_fd, termios.TCSAFLUSH, new_attrs)
-                chars = []
-                while True:
-                    b = os.read(tty_fd, 1)
-                    if not b or b in {b"\n", b"\r"}:
-                        break
-                    chars.append(b)
-                result["password"] = b"".join(chars).decode("utf-8", errors="replace")
+            import termios
+            tty_fd = os.open("/dev/tty", os.O_RDONLY)
+            old_attrs = termios.tcgetattr(tty_fd)
+            new_attrs = termios.tcgetattr(tty_fd)
+            new_attrs[3] = new_attrs[3] & ~termios.ECHO
+            termios.tcsetattr(tty_fd, termios.TCSAFLUSH, new_attrs)
+            chars = []
+            while True:
+                b = os.read(tty_fd, 1)
+                if not b or b in {b"\n", b"\r"}:
+                    break
+                chars.append(b)
+            result["password"] = b"".join(chars).decode("utf-8", errors="replace")
         except (EOFError, KeyboardInterrupt, OSError):
             result["password"] = ""
         except Exception:
@@ -561,7 +500,7 @@ def _rewrite_real_sudo_invocations(command: str) -> tuple[str, bool]:
 def _sudo_nopasswd_works() -> bool:
     """Return True when local sudo currently works without prompting.
 
-    Only probes for the `local` terminal backend; Docker/SSH/Modal/etc. must
+    Only probes for the `local` terminal backend; Docker/SSH must
     not inherit the host's sudo state. Re-probes every call (no process-level
     cache) so an expired sudo timestamp cannot make a later command silently
     block waiting for a password.
@@ -769,13 +708,9 @@ def _transform_sudo_command(command: str | None) -> tuple[str | None, str | None
           returned unchanged so it fails gracefully with
           "sudo: a password is required".
 
-    Callers that drive a subprocess directly (local, ssh, docker, singularity)
+    Callers that drive a subprocess directly (local, SSH, and Docker)
     should prepend sudo_stdin to their stdin_data and pass the merged bytes to
     Popen's stdin pipe.
-
-    Callers that cannot pipe subprocess stdin (modal, daytona) must embed
-    the password in the command string themselves; see their execute()
-    methods for how they handle the non-None sudo_stdin case.
 
     If SUDO_PASSWORD is not set and in interactive mode (MARLOW_INTERACTIVE=1):
       Prompts user for password with 45s timeout, caches for session.
@@ -798,7 +733,7 @@ def _transform_sudo_command(command: str | None) -> tuple[str | None, str | None
 
     # Local hosts with sudoers NOPASSWD should not be forced through the
     # interactive Marlow password prompt or the sudo -S password-pipe path.
-    # Scoped to the local terminal backend so Docker/SSH/Modal/etc. can't
+    # Scoped to the local terminal backend so Docker/SSH can't
     # inherit host sudo state. Re-probes every call (no process-lifetime
     # cache) so an expired sudo timestamp doesn't make a later command block
     # silently without Marlow prompting.
@@ -819,12 +754,8 @@ def _transform_sudo_command(command: str | None) -> tuple[str | None, str | None
 
 # Environment classes now live in tools/environments/
 from tools.environments.local import LocalEnvironment as _LocalEnvironment
-from tools.environments.singularity import SingularityEnvironment as _SingularityEnvironment
 from tools.environments.ssh import SSHEnvironment as _SSHEnvironment
 from tools.environments.docker import DockerEnvironment as _DockerEnvironment
-from tools.environments.modal import ModalEnvironment as _ModalEnvironment
-from tools.environments.managed_modal import ManagedModalEnvironment as _ManagedModalEnvironment
-from tools.managed_tool_gateway import is_managed_tool_gateway_ready
 import sys
 
 
@@ -933,10 +864,10 @@ def _maybe_reap_docker_orphans(container_config: Dict[str, Any]) -> None:
 
 
 # Per-task environment overrides registry.
-# Allows environments (e.g., TerminalBench2Env) to specify a custom Docker/Modal
+# Allows environments (e.g., TerminalBench2Env) to specify a custom Docker
 # image for a specific task_id BEFORE the agent loop starts. When the terminal or
 # file tools create a new sandbox for that task_id, they check this registry first
-# and fall back to the TERMINAL_MODAL_IMAGE (etc.) env var if no override is set.
+# and fall back to the configured Docker image if no override is set.
 #
 # This is never exposed to the model -- only infrastructure code calls it.
 # Thread-safe because each task_id is unique per rollout.
@@ -948,10 +879,9 @@ def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
     Register environment overrides for a specific task/rollout.
 
     Called by Atropos environments before the agent loop to configure
-    per-task sandbox settings (e.g., a custom Dockerfile for the Modal image).
+    per-task sandbox settings (for example, a custom Docker image).
 
     Supported override keys:
-        - modal_image: str -- Path to Dockerfile or Docker Hub image name
         - docker_image: str -- Docker image name
         - cwd: str -- Working directory inside the sandbox
 
@@ -962,14 +892,14 @@ def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
     _task_env_overrides[task_id] = overrides
 
     # If a live environment already exists for this task, a freshly registered
-    # ``cwd`` override (e.g. the ACP client switching the editor's project root
-    # mid-session via ``session/load`` / ``session/resume``) must take effect on
+    # ``cwd`` override (for example, a client switching its project root
+    # mid-session) must take effect on
     # the cached env too. ``terminal_tool`` resolves the per-command cwd as
     # ``workdir > env.cwd > config/override cwd`` so that ordinary in-session
     # ``cd`` state is preserved; without syncing here the override would sit
     # below the (already-set) ``env.cwd`` and be silently ignored once any
     # command has run. Pushing it onto the live env keeps ``cd`` tracking intact
-    # while letting an explicit ACP cwd change win, as the client expects.
+    # while letting an explicit client cwd change win.
     new_cwd = overrides.get("cwd")
     if isinstance(new_cwd, str) and new_cwd.strip():
         container_id = _resolve_container_task_id(task_id)
@@ -1002,7 +932,7 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
 
     Exception: RL / benchmark environments (TerminalBench2, MarlowSweEnv, ...)
     call ``register_task_env_overrides(task_id, {...})`` to request a
-    per-task Docker/Modal image. When an override is registered for a
+    per-task Docker image. When an override is registered for a
     task_id, we honour it by returning the task_id unchanged -- those
     rollouts need their own isolated sandbox, which is the whole point of
     the override.
@@ -1066,7 +996,7 @@ def _get_env_config() -> Dict[str, Any]:
         ):
             host_cwd = candidate
             cwd = "/workspace"
-    elif env_type in {"modal", "docker", "singularity", "daytona"} and cwd:
+    elif env_type == "docker" and cwd:
         # Host paths and relative paths that won't work inside containers
         is_host_path = any(cwd.startswith(p) for p in host_prefixes)
         is_relative = not os.path.isabs(cwd)  # e.g. "." or "src/"
@@ -1078,12 +1008,8 @@ def _get_env_config() -> Dict[str, Any]:
 
     return {
         "env_type": env_type,
-        "modal_mode": coerce_modal_mode(os.getenv("TERMINAL_MODAL_MODE", "auto")),
         "docker_image": os.getenv("TERMINAL_DOCKER_IMAGE", default_image),
         "docker_forward_env": _parse_env_var("TERMINAL_DOCKER_FORWARD_ENV", "[]", json.loads, "valid JSON"),
-        "singularity_image": os.getenv("TERMINAL_SINGULARITY_IMAGE", f"docker://{default_image}"),
-        "modal_image": os.getenv("TERMINAL_MODAL_IMAGE", default_image),
-        "daytona_image": os.getenv("TERMINAL_DAYTONA_IMAGE", default_image),
         "cwd": cwd,
         "host_cwd": host_cwd,
         "docker_mount_cwd_to_workspace": mount_docker_cwd,
@@ -1102,8 +1028,7 @@ def _get_env_config() -> Dict[str, Any]:
             os.getenv("TERMINAL_PERSISTENT_SHELL", "true"),
         ).lower() in {"true", "1", "yes"},
         "local_persistent": os.getenv("TERMINAL_LOCAL_PERSISTENT", "false").lower() in {"true", "1", "yes"},
-        # Container resource config (applies to docker, singularity, modal,
-        # daytona -- ignored for local/ssh)
+        # Container resource config (applies to docker; ignored for local/ssh)
         "container_cpu": _parse_env_var("TERMINAL_CONTAINER_CPU", "1", float, "number"),
         "container_memory": _parse_env_var("TERMINAL_CONTAINER_MEMORY", "5120"),     # MB (default 5GB)
         "container_disk": _parse_env_var("TERMINAL_CONTAINER_DISK", "51200"),        # MB (default 50GB)
@@ -1131,15 +1056,6 @@ def _get_env_config() -> Dict[str, Any]:
     }
 
 
-def _get_modal_backend_state(modal_mode: object | None) -> Dict[str, Any]:
-    """Resolve direct vs managed Modal backend selection."""
-    return resolve_modal_backend_state(
-        modal_mode,
-        has_direct=has_direct_modal_credentials(),
-        managed_ready=is_managed_tool_gateway_ready("modal"),
-    )
-
-
 def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
                         ssh_config: dict = None, container_config: dict = None,
                         local_config: dict = None,
@@ -1149,9 +1065,8 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
     Create an execution environment for sandboxed command execution.
     
     Args:
-        env_type: One of "local", "docker", "singularity", "modal",
-            "daytona", "ssh"
-        image: Docker/Singularity/Modal image name (ignored for local/ssh)
+        env_type: One of "local", "docker", or "ssh"
+        image: Docker image name (ignored for local/ssh)
         cwd: Working directory
         timeout: Default command timeout
         ssh_config: SSH connection config (for env_type="ssh")
@@ -1197,80 +1112,6 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
             persist_across_processes=cc.get("docker_persist_across_processes", True),
         )
     
-    elif env_type == "singularity":
-        return _SingularityEnvironment(
-            image=image, cwd=cwd, timeout=timeout,
-            cpu=cpu, memory=memory, disk=disk,
-            persistent_filesystem=persistent, task_id=task_id,
-        )
-    
-    elif env_type == "modal":
-        sandbox_kwargs = {}
-        if cpu > 0:
-            sandbox_kwargs["cpu"] = cpu
-        if memory > 0:
-            sandbox_kwargs["memory"] = memory
-        if disk > 0:
-            try:
-                import inspect, modal
-                if "ephemeral_disk" in inspect.signature(modal.Sandbox.create).parameters:
-                    sandbox_kwargs["ephemeral_disk"] = disk
-            except Exception:
-                pass
-
-        modal_state = _get_modal_backend_state(cc.get("modal_mode"))
-
-        if modal_state["selected_backend"] == "managed":
-            return _ManagedModalEnvironment(
-                image=image, cwd=cwd, timeout=timeout,
-                modal_sandbox_kwargs=sandbox_kwargs,
-                persistent_filesystem=persistent, task_id=task_id,
-            )
-
-        if modal_state["selected_backend"] != "direct":
-            if modal_state["managed_mode_blocked"]:
-                raise ValueError(
-                    "Modal backend is configured for managed mode, but "
-                    "Nous Tool Gateway access is not currently available and no direct "
-                    "Modal credentials/config were found. "
-                    + nous_tool_gateway_unavailable_message(
-                        "managed Modal execution",
-                    )
-                    + " Choose TERMINAL_MODAL_MODE=direct/auto to use direct Modal credentials."
-                )
-            if modal_state["mode"] == "managed":
-                raise ValueError(
-                    "Modal backend is configured for managed mode, but the managed tool gateway is unavailable. "
-                    + nous_tool_gateway_unavailable_message(
-                        "managed Modal execution",
-                    )
-                )
-            if modal_state["mode"] == "direct":
-                raise ValueError(
-                    "Modal backend is configured for direct mode, but no direct Modal credentials/config were found."
-                )
-            message = "Modal backend selected but no direct Modal credentials/config was found."
-            if managed_nous_tools_enabled():
-                message = (
-                    "Modal backend selected but no direct Modal credentials/config or managed tool gateway was found."
-                )
-            raise ValueError(message)
-
-        return _ModalEnvironment(
-            image=image, cwd=cwd, timeout=timeout,
-            modal_sandbox_kwargs=sandbox_kwargs,
-            persistent_filesystem=persistent, task_id=task_id,
-        )
-    
-    elif env_type == "daytona":
-        # Lazy import so daytona SDK is only required when backend is selected.
-        from tools.environments.daytona import DaytonaEnvironment as _DaytonaEnvironment
-        return _DaytonaEnvironment(
-            image=image, cwd=cwd, timeout=timeout,
-            cpu=int(cpu), memory=memory, disk=disk,
-            persistent_filesystem=persistent, task_id=task_id,
-        )
-
     elif env_type == "ssh":
         if not ssh_config or not ssh_config.get("host") or not ssh_config.get("user"):
             raise ValueError("SSH environment requires ssh_host and ssh_user to be configured")
@@ -1285,8 +1126,7 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
 
     else:
         raise ValueError(
-            f"Unknown environment type: {env_type}. Use 'local', 'docker', "
-            f"'singularity', 'modal', 'daytona', or 'ssh'"
+            f"Unknown environment type: {env_type}. Use 'local', 'docker', or 'ssh'"
         )
 
 
@@ -1305,7 +1145,7 @@ def _cleanup_inactive_envs(lifetime_seconds: int = 300):
         pass
 
     # Phase 1: collect stale entries and remove them from tracking dicts while
-    # holding the lock.  Do NOT call env.cleanup() inside the lock -- Modal and
+    # holding the lock. Do NOT call env.cleanup() inside the lock -- remote
     # Docker teardown can block for 10-15s, which would stall every concurrent
     # terminal/file tool call waiting on _env_lock.
     envs_to_stop = []  # list of (task_id, env) pairs
@@ -1324,7 +1164,7 @@ def _cleanup_inactive_envs(lifetime_seconds: int = 300):
                 _creation_locks.pop(task_id, None)
 
     # Phase 2: stop the actual sandboxes OUTSIDE the lock so other tool calls
-    # are not blocked while Modal/Docker sandboxes shut down.
+    # are not blocked while Docker sandboxes shut down.
     for task_id, env in envs_to_stop:
         # Invalidate stale file_ops cache entry (Bug fix: prevents
         # ShellFileOperations from referencing a dead sandbox)
@@ -1402,7 +1242,7 @@ def is_persistent_env(task_id: str) -> bool:
 
     Used by the agent loop to skip per-turn teardown for backends whose whole
     point is to survive between turns (docker with ``container_persistent``,
-    daytona, modal, etc.). Non-persistent backends (e.g. Morph) still get torn
+    docker, etc.). Non-persistent backends still get torn
     down at end-of-turn to prevent leakage. The idle reaper
     (``_cleanup_inactive_envs``) handles persistent envs once they exceed
     ``terminal.lifetime_seconds``.
@@ -1426,16 +1266,6 @@ def cleanup_all_environments():
             cleaned += 1
         except Exception as e:
             logger.error("Error cleaning %s: %s", task_id, e, exc_info=True)
-    
-    # Also clean any orphaned directories
-    scratch_dir = _get_scratch_dir()
-    import glob
-    for path in glob.glob(str(scratch_dir / "marlow-*")):
-        try:
-            shutil.rmtree(path, ignore_errors=True)
-            logger.info("Removed orphaned: %s", path)
-        except OSError as e:
-            logger.debug("Failed to remove orphaned path %s: %s", path, e)
     
     if cleaned > 0:
         logger.info("Cleaned %d environments", cleaned)
@@ -1829,12 +1659,6 @@ def terminal_tool(
         # Select image based on env type, with per-task override support
         if env_type == "docker":
             image = overrides.get("docker_image") or config["docker_image"]
-        elif env_type == "singularity":
-            image = overrides.get("singularity_image") or config["singularity_image"]
-        elif env_type == "modal":
-            image = overrides.get("modal_image") or config["modal_image"]
-        elif env_type == "daytona":
-            image = overrides.get("daytona_image") or config["daytona_image"]
         else:
             image = ""
 
@@ -1871,7 +1695,7 @@ def terminal_tool(
         # Get or create environment.
         # Use a per-task creation lock so concurrent tool calls for the same
         # task_id wait for the first one to finish creating the sandbox,
-        # instead of each creating their own (wasting Modal resources).
+        # instead of each creating a duplicate sandbox.
         with _env_lock:
             if effective_task_id in _active_environments:
                 _last_activity[effective_task_id] = time.time()
@@ -1896,8 +1720,6 @@ def terminal_tool(
                         needs_creation = False
 
                 if needs_creation:
-                    if env_type == "singularity":
-                        _check_disk_usage_warning()
                     logger.info("Creating new %s environment for task %s...", env_type, effective_task_id[:8])
                     try:
                         ssh_config = None
@@ -1911,13 +1733,12 @@ def terminal_tool(
                             }
 
                         container_config = None
-                        if env_type in {"docker", "singularity", "modal", "daytona"}:
+                        if env_type == "docker":
                             container_config = {
                                 "container_cpu": config.get("container_cpu", 1),
                                 "container_memory": config.get("container_memory", 5120),
                                 "container_disk": config.get("container_disk", 51200),
                                 "container_persistent": config.get("container_persistent", True),
-                                "modal_mode": config.get("modal_mode", "auto"),
                                 "docker_volumes": config.get("docker_volumes", []),
                                 "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
                                 "docker_forward_env": config.get("docker_forward_env", []),
@@ -2384,13 +2205,6 @@ def check_terminal_requirements() -> bool:
             result = subprocess.run([docker, "version"], capture_output=True, timeout=5)
             return result.returncode == 0
 
-        elif env_type == "singularity":
-            executable = shutil.which("apptainer") or shutil.which("singularity")
-            if executable:
-                result = subprocess.run([executable, "--version"], capture_output=True, timeout=5)
-                return result.returncode == 0
-            return False
-
         elif env_type == "ssh":
             if not config.get("ssh_host") or not config.get("ssh_user"):
                 logger.error(
@@ -2400,74 +2214,9 @@ def check_terminal_requirements() -> bool:
                 return False
             return True
 
-        elif env_type == "modal":
-            modal_state = _get_modal_backend_state(config.get("modal_mode"))
-            if modal_state["selected_backend"] == "managed":
-                return True
-
-            if modal_state["selected_backend"] != "direct":
-                if modal_state["managed_mode_blocked"]:
-                    logger.error(
-                        "Modal backend selected with TERMINAL_MODAL_MODE=managed, but "
-                        "Nous Tool Gateway access is not currently available and no direct "
-                        "Modal credentials/config were found. %s Choose "
-                        "TERMINAL_MODAL_MODE=direct/auto to use direct Modal credentials.",
-                        nous_tool_gateway_unavailable_message(
-                            "managed Modal execution",
-                        ),
-                    )
-                    return False
-                if modal_state["mode"] == "managed":
-                    logger.error(
-                        "Modal backend selected with TERMINAL_MODAL_MODE=managed, but the managed "
-                        "tool gateway is unavailable. %s",
-                        nous_tool_gateway_unavailable_message(
-                            "managed Modal execution",
-                        ),
-                    )
-                    return False
-                elif modal_state["mode"] == "direct":
-                    if managed_nous_tools_enabled():
-                        logger.error(
-                            "Modal backend selected with TERMINAL_MODAL_MODE=direct, but no direct "
-                            "Modal credentials/config were found. Configure Modal or choose "
-                            "TERMINAL_MODAL_MODE=managed/auto."
-                        )
-                    else:
-                        logger.error(
-                            "Modal backend selected with TERMINAL_MODAL_MODE=direct, but no direct "
-                            "Modal credentials/config were found. Configure Modal or choose "
-                            "TERMINAL_MODAL_MODE=auto."
-                        )
-                    return False
-                else:
-                    if managed_nous_tools_enabled():
-                        logger.error(
-                            "Modal backend selected but no direct Modal credentials/config or managed "
-                            "tool gateway was found. Configure Modal, set up the managed gateway, "
-                            "or choose a different TERMINAL_ENV."
-                        )
-                    else:
-                        logger.error(
-                            "Modal backend selected but no direct Modal credentials/config was found. "
-                            "Configure Modal or choose a different TERMINAL_ENV."
-                        )
-                    return False
-
-            if importlib.util.find_spec("modal") is None:
-                logger.error("modal is required for direct modal terminal backend: pip install modal")
-                return False
-
-            return True
-
-        elif env_type == "daytona":
-            from daytona import Daytona  # noqa: F401 — SDK presence check
-            return os.getenv("DAYTONA_API_KEY") is not None
-
         else:
             logger.error(
-                "Unknown TERMINAL_ENV '%s'. Use one of: local, docker, singularity, "
-                "modal, daytona, ssh.",
+                "Unknown TERMINAL_ENV '%s'. Use one of: local, docker, ssh.",
                 env_type,
             )
             return False
@@ -2485,7 +2234,6 @@ if __name__ == "__main__":
     print("\nCurrent Configuration:")
     print(f"  Environment type: {config['env_type']}")
     print(f"  Docker image: {config['docker_image']}")
-    print(f"  Modal image: {config['modal_image']}")
     print(f"  Working directory: {config['cwd']}")
     print(f"  Default timeout: {config['timeout']}s")
     print(f"  Lifetime: {config['lifetime_seconds']}s")
@@ -2510,12 +2258,9 @@ if __name__ == "__main__":
     print(
         "  TERMINAL_ENV: "
         f"{os.getenv('TERMINAL_ENV', 'local')} "
-        "(local/docker/singularity/modal/daytona/ssh)"
+        "(local/docker/ssh)"
     )
     print(f"  TERMINAL_DOCKER_IMAGE: {os.getenv('TERMINAL_DOCKER_IMAGE', default_img)}")
-    print(f"  TERMINAL_SINGULARITY_IMAGE: {os.getenv('TERMINAL_SINGULARITY_IMAGE', f'docker://{default_img}')}")
-    print(f"  TERMINAL_MODAL_IMAGE: {os.getenv('TERMINAL_MODAL_IMAGE', default_img)}")
-    print(f"  TERMINAL_DAYTONA_IMAGE: {os.getenv('TERMINAL_DAYTONA_IMAGE', default_img)}")
     print(f"  TERMINAL_CWD: {os.getenv('TERMINAL_CWD', os.getcwd())}")
     from marlow_constants import display_marlow_home as _dhh
     print(f"  TERMINAL_SANDBOX_DIR: {os.getenv('TERMINAL_SANDBOX_DIR', f'{_dhh()}/sandboxes')}")

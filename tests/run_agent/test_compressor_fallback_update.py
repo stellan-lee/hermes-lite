@@ -12,8 +12,8 @@ def _make_agent_with_compressor() -> AIAgent:
 
     # Primary model settings
     agent.model = "primary-model"
-    agent.provider = "openrouter"
-    agent.base_url = "https://openrouter.ai/api/v1"
+    agent.provider = "custom"
+    agent.base_url = "http://localhost:11434/v1"
     agent.api_key = "sk-primary"
     agent.api_mode = "chat_completions"
     agent.client = MagicMock()
@@ -21,20 +21,17 @@ def _make_agent_with_compressor() -> AIAgent:
 
     # Fallback config
     agent._fallback_activated = False
-    agent._fallback_model = {
-        "provider": "openai",
-        "model": "gpt-4o",
-    }
-    agent._fallback_chain = [agent._fallback_model]
+    fallback = {"provider": "custom", "model": "backup-model"}
+    agent._fallback_chain = [fallback]
     agent._fallback_index = 0
 
     # Context compressor with primary model values
     compressor = ContextCompressor(
         model="primary-model",
         threshold_percent=0.50,
-        base_url="https://openrouter.ai/api/v1",
+        base_url="http://localhost:11434/v1",
         api_key="sk-primary",
-        provider="openrouter",
+        provider="custom",
         quiet_mode=True,
     )
     agent.context_compressor = compressor
@@ -51,11 +48,11 @@ def test_compressor_updated_on_fallback(mock_ctx_len, mock_resolve):
     assert agent.context_compressor.model == "primary-model"
 
     fb_client = MagicMock()
-    fb_client.base_url = "https://api.openai.com/v1"
+    fb_client.base_url = "http://localhost:1234/v1"
     fb_client.api_key = "sk-fallback"
     mock_resolve.return_value = (fb_client, None)
 
-    agent._is_direct_openai_url = lambda url: "api.openai.com" in url
+    agent._is_direct_openai_url = lambda url: False
     agent._emit_status = lambda msg: None
 
     result = agent._try_activate_fallback()
@@ -64,10 +61,10 @@ def test_compressor_updated_on_fallback(mock_ctx_len, mock_resolve):
     assert agent._fallback_activated is True
 
     c = agent.context_compressor
-    assert c.model == "gpt-4o"
-    assert c.base_url == "https://api.openai.com/v1"
+    assert c.model == "backup-model"
+    assert c.base_url == "http://localhost:1234/v1"
     assert c.api_key == "sk-fallback"
-    assert c.provider == "openai"
+    assert c.provider == "custom"
     assert c.context_length == 128_000
     assert c.threshold_tokens == int(128_000 * c.threshold_percent)
 
@@ -80,11 +77,11 @@ def test_compressor_not_present_does_not_crash(mock_ctx_len, mock_resolve):
     agent.context_compressor = None
 
     fb_client = MagicMock()
-    fb_client.base_url = "https://api.openai.com/v1"
+    fb_client.base_url = "http://localhost:1234/v1"
     fb_client.api_key = "sk-fallback"
     mock_resolve.return_value = (fb_client, None)
 
-    agent._is_direct_openai_url = lambda url: "api.openai.com" in url
+    agent._is_direct_openai_url = lambda url: False
     agent._emit_status = lambda msg: None
 
     result = agent._try_activate_fallback()

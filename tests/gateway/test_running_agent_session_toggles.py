@@ -9,11 +9,7 @@ slash commands with "⏳ Agent is running — /{cmd} can't run mid-turn"
   * /verbose — cycles the per-platform tool-progress display mode;
     affects the ongoing stream.
 
-Commands whose handlers say "takes effect on next message" stay on the
-catch-all by design:
-
-  * /fast — writes config.yaml only
-  * /reasoning — writes config.yaml only
+The config-only /reasoning command stays on the catch-all by design.
 
 These tests lock in both behaviors so the allowlist doesn't silently
 grow or shrink.
@@ -80,9 +76,8 @@ def _make_runner():
     runner._session_db = None
     runner._reasoning_config = None
     runner._provider_routing = {}
-    runner._fallback_model = None
+    runner._fallback_providers = None
     runner._show_reasoning = False
-    runner._service_tier = None
     runner._is_user_authorized = lambda _source: True
     runner._set_session_env = lambda _context: None
     runner._should_send_voice_reply = lambda *_args, **_kwargs: False
@@ -133,22 +128,6 @@ async def test_verbose_dispatches_mid_run(monkeypatch):
     runner._handle_verbose_command.assert_awaited_once()
     assert result == "tool progress: new"
     assert "can't run mid-turn" not in (result or "")
-
-
-@pytest.mark.asyncio
-async def test_fast_rejected_mid_run():
-    """/fast mid-run must hit the busy catch-all — config-only, next message."""
-    runner = _make_runner()
-    runner._handle_fast_command = AsyncMock(
-        side_effect=AssertionError("/fast should not dispatch mid-run")
-    )
-
-    result = await runner._handle_message(_make_event("/fast"))
-
-    runner._handle_fast_command.assert_not_awaited()
-    assert result is not None
-    assert "can't run mid-turn" in result
-    assert "/fast" in result
 
 
 @pytest.mark.asyncio

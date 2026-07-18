@@ -46,10 +46,6 @@ Examples:
     marlow --resume <session_id>  Resume a specific session by ID
     marlow setup                  Run setup wizard
     marlow logout                 Clear stored authentication
-    marlow auth add <provider>    Add a pooled credential
-    marlow auth list              List pooled credentials
-    marlow auth remove <p> <t>    Remove pooled credential by index, id, or label
-    marlow auth reset <provider>  Clear exhaustion status for a provider
     marlow model                  Select default model
     marlow fallback [list]        Show fallback provider chain
     marlow fallback add           Add a fallback provider (same picker as `marlow model`)
@@ -58,7 +54,7 @@ Examples:
     marlow config edit            Edit config in $EDITOR
     marlow config set model gpt-4 Set a config value
     marlow gateway                Run messaging gateway
-    marlow -s marlow-agent-dev,github-auth
+    marlow -s codex,native-mcp
     marlow -w                     Start in isolated git worktree
     marlow gateway install        Install gateway background service
     marlow sessions list          List past sessions
@@ -70,9 +66,6 @@ Examples:
     marlow logs --since 1h        Lines from the last hour
     marlow debug share             Upload debug report for support
     marlow update                 Update to latest version
-    marlow dashboard              Start web UI dashboard (port 9119)
-    marlow dashboard --stop       Stop running dashboard processes
-    marlow dashboard --status     List running dashboard processes
 
 For more help on a command:
     marlow <command> --help
@@ -119,7 +112,7 @@ def build_top_level_parser():
         "--model",
         default=None,
         help=(
-            "Model override for this invocation (e.g. anthropic/claude-sonnet-4.6). "
+            "Model override for this invocation (e.g. gpt-5.4 or a local model id). "
             "Applies to -z/--oneshot and --tui. Also settable via MARLOW_INFERENCE_MODEL env var."
         ),
     )
@@ -128,7 +121,7 @@ def build_top_level_parser():
         "--provider",
         default=None,
         help=(
-            "Provider override for this invocation (e.g. openrouter, anthropic). "
+            "Provider override for this invocation (openai-codex or custom). "
             "Applies to -z/--oneshot and --tui. The persistent provider lives in config.yaml "
             "under model.provider — use `marlow setup` or edit the file to change it."
         ),
@@ -183,14 +176,6 @@ def build_top_level_parser():
     )
     _inherited_flag(
         parser,
-        "--skills",
-        "-s",
-        action="append",
-        default=None,
-        help="Preload one or more skills for the session (repeat flag or comma-separate)",
-    )
-    _inherited_flag(
-        parser,
         "--yolo",
         action="store_true",
         default=False,
@@ -215,7 +200,7 @@ def build_top_level_parser():
         "--ignore-rules",
         action="store_true",
         default=False,
-        help="Skip auto-injection of AGENTS.md, SOUL.md, .cursorrules, memory, and preloaded skills",
+        help="Skip auto-injection of AGENTS.md, SOUL.md, .cursorrules, and memory",
     )
     _inherited_flag(
         parser,
@@ -251,18 +236,10 @@ def build_top_level_parser():
     )
     _inherited_flag(
         chat_parser,
-        "-m", "--model", help="Model to use (e.g., anthropic/claude-sonnet-4)",
+        "-m", "--model", help="Model to use (e.g. gpt-5.4 or a local model id)",
     )
     chat_parser.add_argument(
         "-t", "--toolsets", help="Comma-separated toolsets to enable"
-    )
-    _inherited_flag(
-        chat_parser,
-        "-s",
-        "--skills",
-        action="append",
-        default=argparse.SUPPRESS,
-        help="Preload one or more skills for the session (repeat flag or comma-separate)",
     )
     _inherited_flag(
         chat_parser,
@@ -367,7 +344,7 @@ def build_top_level_parser():
         "--ignore-rules",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Skip auto-injection of AGENTS.md, SOUL.md, .cursorrules, memory, and preloaded skills. Combine with --ignore-user-config for a fully isolated run.",
+        help="Skip auto-injection of AGENTS.md, SOUL.md, .cursorrules, and memory. Combine with --ignore-user-config for a fully isolated run.",
     )
     chat_parser.add_argument(
         "--source",

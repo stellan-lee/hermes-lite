@@ -348,8 +348,7 @@ def test_cmd_update_retries_optional_extras_individually_when_all_fails(monkeypa
     """When .[all] fails, update should keep base deps and retry extras individually."""
     _setup_update_mocks(monkeypatch, tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
-    monkeypatch.setattr(marlow_main, "_is_termux_env", lambda env=None: False)
-    monkeypatch.setattr(marlow_main, "_load_installable_optional_extras", lambda group="all": ["matrix", "mcp"])
+    monkeypatch.setattr(marlow_main, "_load_installable_optional_extras", lambda group="all": ["voice", "mcp"])
 
     recorded = []
 
@@ -367,13 +366,12 @@ def test_cmd_update_retries_optional_extras_individually_when_all_fails(monkeypa
             raise CalledProcessError(returncode=1, cmd=cmd)
         if cmd == ["/usr/bin/uv", "pip", "install", "-e", "."]:
             return SimpleNamespace(returncode=0)
-        if cmd == ["/usr/bin/uv", "pip", "install", "-e", ".[matrix]"]:
+        if cmd == ["/usr/bin/uv", "pip", "install", "-e", ".[voice]"]:
             raise CalledProcessError(returncode=1, cmd=cmd)
         if cmd == ["/usr/bin/uv", "pip", "install", "-e", ".[mcp]"]:
             return SimpleNamespace(returncode=0)
-        # Catch-all must include stdout/stderr so consumers that parse
-        # output (e.g. the dashboard-restart `ps -A` scan added in the
-        # updater) don't crash on AttributeError.
+        # Catch-all must include stdout/stderr so output-parsing consumers
+        # don't crash on AttributeError.
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(marlow_main.subprocess, "run", fake_run)
@@ -384,21 +382,20 @@ def test_cmd_update_retries_optional_extras_individually_when_all_fails(monkeypa
     assert install_cmds == [
         ["/usr/bin/uv", "pip", "install", "-e", ".[all]"],
         ["/usr/bin/uv", "pip", "install", "-e", "."],
-        ["/usr/bin/uv", "pip", "install", "-e", ".[matrix]"],
+        ["/usr/bin/uv", "pip", "install", "-e", ".[voice]"],
         ["/usr/bin/uv", "pip", "install", "-e", ".[mcp]"],
     ]
 
     out = capsys.readouterr().out
     assert "retrying extras individually" in out
     assert "Reinstalled optional extras individually: mcp" in out
-    assert "Skipped optional extras that still failed: matrix" in out
+    assert "Skipped optional extras that still failed: voice" in out
 
 
 def test_cmd_update_succeeds_with_extras(monkeypatch, tmp_path):
     """When .[all] succeeds, no fallback should be attempted."""
     _setup_update_mocks(monkeypatch, tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
-    monkeypatch.setattr(marlow_main, "_is_termux_env", lambda env=None: False)
 
     recorded = []
 
@@ -421,36 +418,6 @@ def test_cmd_update_succeeds_with_extras(monkeypatch, tmp_path):
     install_cmds = [c for c in recorded if "pip" in c and "install" in c]
     assert len(install_cmds) == 1
     assert ".[all]" in install_cmds[0]
-
-
-def test_install_with_optional_fallback_honors_custom_group(monkeypatch):
-    """Termux update path should target .[termux-all] when requested."""
-    calls = []
-    monkeypatch.setattr(
-        marlow_main,
-        "_load_installable_optional_extras",
-        lambda group="all": ["termux", "mcp"] if group == "termux-all" else [],
-    )
-
-    def fake_run_with_heartbeat(cmd, **kwargs):
-        calls.append(cmd)
-        if cmd[-1] == ".[termux-all]":
-            raise CalledProcessError(returncode=1, cmd=cmd)
-        return None
-
-    monkeypatch.setattr(marlow_main, "_run_install_with_heartbeat", fake_run_with_heartbeat)
-
-    marlow_main._install_python_dependencies_with_optional_fallback(
-        ["/usr/bin/uv", "pip"],
-        group="termux-all",
-    )
-
-    assert calls == [
-        ["/usr/bin/uv", "pip", "install", "-e", ".[termux-all]"],
-        ["/usr/bin/uv", "pip", "install", "-e", "."],
-        ["/usr/bin/uv", "pip", "install", "-e", ".[termux]"],
-        ["/usr/bin/uv", "pip", "install", "-e", ".[mcp]"],
-    ]
 
 
 def test_install_heartbeat_prints_when_dependency_install_is_silent(monkeypatch, capsys):

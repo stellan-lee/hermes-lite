@@ -120,7 +120,7 @@ def build_skill_nodes(skill_roots: list[tuple[str, Path]]) -> dict[str, SkillNod
     nodes: dict[str, SkillNode] = {}
 
     for source, skill_md in _iter_skill_files(skill_roots):
-        if any(p in {".archive", ".hub", "node_modules", ".git"} for p in skill_md.parts):
+        if any(p in {".archive", "node_modules", ".git"} for p in skill_md.parts):
             continue
         try:
             fm = _frontmatter(skill_md.read_text(encoding="utf-8")[:4000])

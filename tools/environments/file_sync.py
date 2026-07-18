@@ -1,9 +1,8 @@
 """Shared file sync manager for remote execution backends.
 
 Tracks local file changes via mtime+size, detects deletions, and
-syncs to remote environments transactionally.  Used by SSH, Modal,
-and Daytona.  Docker and Singularity use bind mounts (live host FS
-view) and don't need this.
+syncs to remote environments transactionally. Used by SSH. Docker uses bind
+mounts (live host FS view) and does not need this.
 """
 
 import hashlib
@@ -17,10 +16,7 @@ import tempfile
 import threading
 import time
 
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # Windows — file locking skipped
+import fcntl
 from pathlib import Path
 from typing import Callable
 
@@ -52,7 +48,7 @@ def iter_sync_files(container_base: str = "/root/.marlow") -> list[tuple[str, st
     Combines credentials, skills, and cache into a single flat list of
     (host_path, remote_path) pairs.  Credential paths are remapped from
     the hardcoded /root/.marlow to *container_base* because the remote
-    user's home may differ (e.g. /home/daytona, /home/user).
+    user's home may differ (e.g. /home/remote, /home/user).
     """
     # Late import: credential_files imports agent modules that create
     # circular dependencies if loaded at file_sync module level.
@@ -111,8 +107,7 @@ class FileSyncManager:
     and a file-source callable.  The manager handles mtime-based change
     detection, deletion tracking, rate limiting, and transactional state.
 
-    Not used by bind-mount backends (Docker, Singularity) — those get
-    live host FS views and don't need file sync.
+    Not used by Docker, which gets a live host filesystem view.
     """
 
     def __init__(
@@ -280,10 +275,6 @@ class FileSyncManager:
 
     def _sync_back_locked(self, lock_path: Path) -> None:
         """Sync-back under file lock (serializes concurrent gateways)."""
-        if fcntl is None:
-            # Windows: no flock — run without serialization
-            self._sync_back_impl()
-            return
         lock_fd = open(lock_path, "w", encoding="utf-8")
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)

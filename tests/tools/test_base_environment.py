@@ -1,7 +1,7 @@
 """Tests for BaseEnvironment unified execution model.
 
-Tests _wrap_command(), _extract_cwd_from_output(), _embed_stdin_heredoc(),
-init_session() failure handling, and the CWD marker contract.
+Tests _wrap_command(), _extract_cwd_from_output(), init_session() failure
+handling, and the CWD marker contract.
 """
 
 from unittest.mock import MagicMock
@@ -131,24 +131,6 @@ class TestExtractCwdFromOutput:
 
         assert "hello" in result["output"]
         assert marker not in result["output"]
-
-
-class TestEmbedStdinHeredoc:
-    def test_heredoc_format(self):
-        result = BaseEnvironment._embed_stdin_heredoc("cat", "hello world")
-
-        assert result.startswith("cat << '")
-        assert "hello world" in result
-        assert "MARLOW_STDIN_" in result
-
-    def test_unique_delimiter_each_call(self):
-        r1 = BaseEnvironment._embed_stdin_heredoc("cat", "data")
-        r2 = BaseEnvironment._embed_stdin_heredoc("cat", "data")
-
-        # Extract delimiters
-        d1 = r1.split("'")[1]
-        d2 = r2.split("'")[1]
-        assert d1 != d2  # UUID-based, should be unique
 
 
 class TestInitSessionFailure:

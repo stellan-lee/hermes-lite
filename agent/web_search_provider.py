@@ -12,12 +12,9 @@ Providers live in ``<repo>/plugins/web/<name>/`` (built-in, auto-loaded as
 ``kind: backend``) or ``~/.marlow/plugins/web/<name>/`` (user, opt-in via
 ``plugins.enabled``).
 
-This ABC is the SINGLE plugin-facing surface for web providers — every
-provider in the tree (brave-free, ddgs, searxng, exa, parallel, tavily,
-firecrawl) implements it. The legacy in-tree ``tools.web_providers.base``
-ABCs were deleted in PR #25182 along with the per-vendor inline helpers
-in ``tools/web_tools.py``; the response-shape contract documented below
-is preserved bit-for-bit so the tool wrapper does not have to translate.
+This ABC is the single plugin-facing surface for web providers. Bundled
+providers and locally installed plugins implement the response-shape contract
+below so the tool wrapper does not have to translate.
 
 Response shape (preserved from the legacy contract):
 
@@ -66,9 +63,8 @@ class WebSearchProvider(abc.ABC):
     Subclasses must implement :meth:`is_available` and at least one of
     :meth:`search` / :meth:`extract`. The :meth:`supports_search` /
     :meth:`supports_extract` capability flags let the registry route each
-    tool call to the right provider, and let multi-capability providers
-    (Firecrawl, Tavily, Exa, …) advertise multiple capabilities from a
-    single class.
+    tool call to the right provider, and let multi-capability plugins expose
+    search and extraction from a single class.
     """
 
     @property
@@ -78,8 +74,7 @@ class WebSearchProvider(abc.ABC):
         ``web.extract_backend`` / ``web.backend`` config keys.
 
         Lowercase, no spaces; hyphens permitted to preserve existing
-        user-visible names. Examples: ``brave-free``, ``ddgs``,
-        ``searxng``, ``firecrawl``.
+        user-visible names. Examples: ``brave-free`` and ``ddgs``.
         """
 
     @property

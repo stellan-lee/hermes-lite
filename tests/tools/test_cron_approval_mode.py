@@ -272,8 +272,8 @@ class TestCronWithGatewayOrigin:
 
     cron/scheduler.py binds MARLOW_SESSION_PLATFORM via contextvars for
     delivery routing (so cron output lands back in the origin chat). The
-    API-server approvals work (PR #20311) made check_dangerous_command treat
-    any contextvar-bound platform as a gateway session. That would route
+    A prior approval change made check_dangerous_command treat any
+    contextvar-bound platform as a gateway session. That would route
     cron-from-telegram/discord/etc. through submit_pending with no listener,
     hanging the job instead of respecting approvals.cron_mode.
     """

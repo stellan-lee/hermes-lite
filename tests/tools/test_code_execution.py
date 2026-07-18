@@ -145,7 +145,7 @@ class TestExecuteCodeRemoteTempDir(unittest.TestCase):
                 self.commands = []
 
             def get_temp_dir(self):
-                return "/data/data/com.termux/files/usr/tmp"
+                return "/var/tmp/marlow-custom"
 
             def execute(self, command, cwd=None, timeout=None):
                 self.commands.append((command, cwd, timeout))
@@ -168,9 +168,9 @@ class TestExecuteCodeRemoteTempDir(unittest.TestCase):
         mkdir_cmd = env.commands[1][0]
         run_cmd = next(cmd for cmd, _, _ in env.commands if "python3 script.py" in cmd)
         cleanup_cmd = env.commands[-1][0]
-        self.assertIn("mkdir -p /data/data/com.termux/files/usr/tmp/marlow_exec_", mkdir_cmd)
-        self.assertIn("MARLOW_RPC_DIR=/data/data/com.termux/files/usr/tmp/marlow_exec_", run_cmd)
-        self.assertIn("rm -rf /data/data/com.termux/files/usr/tmp/marlow_exec_", cleanup_cmd)
+        self.assertIn("mkdir -p /var/tmp/marlow-custom/marlow_exec_", mkdir_cmd)
+        self.assertIn("MARLOW_RPC_DIR=/var/tmp/marlow-custom/marlow_exec_", run_cmd)
+        self.assertIn("rm -rf /var/tmp/marlow-custom/marlow_exec_", cleanup_cmd)
         self.assertNotIn("mkdir -p /tmp/marlow_exec_", mkdir_cmd)
 
 

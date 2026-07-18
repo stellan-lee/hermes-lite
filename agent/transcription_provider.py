@@ -20,7 +20,7 @@ Two coexisting STT extension surfaces — in resolution order:
    ``MARLOW_LOCAL_STT_COMMAND`` is preserved via the built-in
    ``local_command`` path.
 2. **Plugin-registered providers** (this ABC). For new STT backends —
-   OpenRouter, SenseAudio, Gemini-STT, custom proprietary engines —
+   SenseAudio, custom local, or proprietary engines —
    that need a Python implementation without modifying
    ``tools/transcription_tools.py``.
 
@@ -71,8 +71,8 @@ class TranscriptionProvider(abc.ABC):
     def name(self) -> str:
         """Stable short identifier used in ``stt.provider`` config.
 
-        Lowercase, no spaces. Examples: ``openrouter``, ``sensaudio``,
-        ``gemini``, ``deepgram``. Names that collide with a built-in STT
+        Lowercase, no spaces. Examples: ``sensaudio``, ``custom_local``,
+        ``deepgram``. Names that collide with a built-in STT
         provider (``local``, ``local_command``, ``groq``, ``openai``,
         ``mistral``, ``xai``) are rejected at registration time.
         """
@@ -128,13 +128,12 @@ class TranscriptionProvider(abc.ABC):
         the Speech-to-Text provider list. Shape::
 
             {
-                "name": "OpenRouter STT",              # picker label
+                "name": "Custom STT",                  # picker label
                 "badge": "paid",                       # optional short tag
-                "tag": "Whisper via OpenRouter API",   # optional subtitle
+                "tag": "Whisper via a custom API",     # optional subtitle
                 "env_vars": [                          # keys to prompt for
-                    {"key": "OPENROUTER_API_KEY",
-                     "prompt": "OpenRouter API key",
-                     "url": "https://openrouter.ai/keys"},
+                    {"key": "CUSTOM_STT_API_KEY",
+                     "prompt": "Custom STT API key"},
                 ],
             }
 

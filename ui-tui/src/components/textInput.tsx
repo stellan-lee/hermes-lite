@@ -13,7 +13,6 @@ import {
   isVoiceToggleKey,
   type ParsedVoiceRecordKey
 } from '../lib/platform.js'
-import { isTermuxTuiMode } from '../lib/termux.js'
 
 type InkExt = typeof Ink & {
   stringWidth: (s: string) => number
@@ -124,10 +123,6 @@ export function applyPrintableInsert(
 export const shouldRouteMultiCharInputAsPaste = (text: string): boolean => text.includes('\n')
 
 export function shouldPreserveCtrlJNewline(env: MinimalEnv = process.env): boolean {
-  if (env.WT_SESSION) {
-    return true
-  }
-
   if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) {
     return true
   }
@@ -144,7 +139,7 @@ export function shouldPreserveCtrlJNewline(env: MinimalEnv = process.env): boole
     return true
   }
 
-  return (env.WSL_DISTRO_NAME ?? '').toLowerCase().includes('microsoft')
+  return false
 }
 
 function prevPos(s: string, p: number) {
@@ -356,19 +351,6 @@ export function supportsFastEchoTerminal(env: NodeJS.ProcessEnv = process.env): 
   // Terminal.app still shows paint/cursor artifacts under the fast-echo
   // bypass path. Fall back to the normal Ink render path there.
   if ((env.TERM_PROGRAM ?? '').trim() === 'Apple_Terminal') {
-    return false
-  }
-
-  // Termux terminals are especially sensitive to bypass-path cursor drift and
-  // stale paints at soft-wrap boundaries on tall/narrow viewports. Keep this
-  // off by default in Termux mode; allow explicit opt-in for local debugging.
-  if (isTermuxTuiMode(env)) {
-    const override = String(env.MARLOW_TUI_TERMUX_FAST_ECHO ?? '').trim().toLowerCase()
-
-    if (override) {
-      return /^(?:1|true|yes|on)$/i.test(override)
-    }
-
     return false
   }
 

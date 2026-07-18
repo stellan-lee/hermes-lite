@@ -167,6 +167,13 @@ async def test_send_does_not_retry_on_unrelated_errors():
 import discord as _discord_mod  # noqa: E402 — imported after _ensure_discord_mock
 
 
+class _FakeForumChannel:
+    pass
+
+
+_discord_mod.ForumChannel = _FakeForumChannel
+
+
 class TestIsForumParent:
     def test_none_returns_false(self):
         adapter = DiscordAdapter(PlatformConfig(enabled=True, token="***"))

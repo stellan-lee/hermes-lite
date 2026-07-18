@@ -2,7 +2,6 @@
 
 import os
 from unittest.mock import patch
-
 from gateway.config import (
     GatewayConfig,
     HomeChannel,
@@ -20,7 +19,6 @@ class TestHomeChannelRoundtrip:
         hc = HomeChannel(platform=Platform.DISCORD, chat_id="999", name="general")
         d = hc.to_dict()
         restored = HomeChannel.from_dict(d)
-
         assert restored.platform == Platform.DISCORD
         assert restored.chat_id == "999"
         assert restored.name == "general"
@@ -32,15 +30,12 @@ class TestPlatformConfigRoundtrip:
             enabled=True,
             token="tok_123",
             home_channel=HomeChannel(
-                platform=Platform.TELEGRAM,
-                chat_id="555",
-                name="Home",
+                platform=Platform.TELEGRAM, chat_id="555", name="Home"
             ),
             extra={"foo": "bar"},
         )
         d = pc.to_dict()
         restored = PlatformConfig.from_dict(d)
-
         assert restored.enabled is True
         assert restored.token == "tok_123"
         assert restored.home_channel.chat_id == "555"
@@ -77,8 +72,8 @@ class TestGetConnectedPlatforms:
             platforms={
                 Platform.TELEGRAM: PlatformConfig(enabled=True, token="t"),
                 Platform.DISCORD: PlatformConfig(enabled=False, token="d"),
-                Platform.SLACK: PlatformConfig(enabled=True),  # no token
-            },
+                Platform.SLACK: PlatformConfig(enabled=True),
+            }
         )
         connected = config.get_connected_platforms()
         assert Platform.TELEGRAM in connected
@@ -88,51 +83,6 @@ class TestGetConnectedPlatforms:
     def test_empty_platforms(self):
         config = GatewayConfig()
         assert config.get_connected_platforms() == []
-
-    def test_dingtalk_recognised_via_extras(self):
-        config = GatewayConfig(
-            platforms={
-                Platform.DINGTALK: PlatformConfig(
-                    enabled=True,
-                    extra={"client_id": "cid", "client_secret": "sec"},
-                ),
-            },
-        )
-        assert Platform.DINGTALK in config.get_connected_platforms()
-
-    def test_dingtalk_recognised_via_env_vars(self, monkeypatch):
-        """DingTalk configured via env vars (no extras) should still be
-        recognised as connected — covers the case where _apply_env_overrides
-        hasn't populated extras yet."""
-        monkeypatch.setenv("DINGTALK_CLIENT_ID", "env_cid")
-        monkeypatch.setenv("DINGTALK_CLIENT_SECRET", "env_sec")
-        config = GatewayConfig(
-            platforms={
-                Platform.DINGTALK: PlatformConfig(enabled=True, extra={}),
-            },
-        )
-        assert Platform.DINGTALK in config.get_connected_platforms()
-
-    def test_dingtalk_missing_creds_not_connected(self, monkeypatch):
-        monkeypatch.delenv("DINGTALK_CLIENT_ID", raising=False)
-        monkeypatch.delenv("DINGTALK_CLIENT_SECRET", raising=False)
-        config = GatewayConfig(
-            platforms={
-                Platform.DINGTALK: PlatformConfig(enabled=True, extra={}),
-            },
-        )
-        assert Platform.DINGTALK not in config.get_connected_platforms()
-
-    def test_dingtalk_disabled_not_connected(self):
-        config = GatewayConfig(
-            platforms={
-                Platform.DINGTALK: PlatformConfig(
-                    enabled=False,
-                    extra={"client_id": "cid", "client_secret": "sec"},
-                ),
-            },
-        )
-        assert Platform.DINGTALK not in config.get_connected_platforms()
 
 
 class TestSessionResetPolicy:
@@ -151,9 +101,11 @@ class TestSessionResetPolicy:
         assert policy.idle_minutes == 1440
 
     def test_from_dict_treats_null_values_as_defaults(self):
-        restored = SessionResetPolicy.from_dict(
-            {"mode": None, "at_hour": None, "idle_minutes": None}
-        )
+        restored = SessionResetPolicy.from_dict({
+            "mode": None,
+            "at_hour": None,
+            "idle_minutes": None,
+        })
         assert restored.mode == "both"
         assert restored.at_hour == 4
         assert restored.idle_minutes == 1440
@@ -165,9 +117,6 @@ class TestSessionResetPolicy:
 
 class TestStreamingConfig:
     def test_defaults_to_auto_transport(self):
-        # "auto" prefers native draft streaming where the platform supports
-        # it (Telegram DMs) and falls back to edit-based everywhere else, so
-        # it is safe as the global out-of-the-box default.
         restored = StreamingConfig.from_dict({"enabled": "true"})
         assert restored.transport == "auto"
 
@@ -176,13 +125,11 @@ class TestStreamingConfig:
         assert restored.enabled is False
 
     def test_from_dict_malformed_numeric_values_fall_back_to_defaults(self):
-        restored = StreamingConfig.from_dict(
-            {
-                "edit_interval": "oops",
-                "buffer_threshold": "oops",
-                "fresh_final_after_seconds": "oops",
-            }
-        )
+        restored = StreamingConfig.from_dict({
+            "edit_interval": "oops",
+            "buffer_threshold": "oops",
+            "fresh_final_after_seconds": "oops",
+        })
         assert restored.edit_interval == 0.8
         assert restored.buffer_threshold == 24
         assert restored.fresh_final_after_seconds == 60.0
@@ -196,7 +143,7 @@ class TestGatewayConfigRoundtrip:
                     enabled=True,
                     token="tok_123",
                     home_channel=HomeChannel(Platform.TELEGRAM, "123", "Home"),
-                ),
+                )
             },
             reset_triggers=["/new"],
             quick_commands={"limits": {"type": "exec", "command": "echo ok"}},
@@ -205,11 +152,12 @@ class TestGatewayConfigRoundtrip:
         )
         d = config.to_dict()
         restored = GatewayConfig.from_dict(d)
-
         assert Platform.TELEGRAM in restored.platforms
         assert restored.platforms[Platform.TELEGRAM].token == "tok_123"
         assert restored.reset_triggers == ["/new"]
-        assert restored.quick_commands == {"limits": {"type": "exec", "command": "echo ok"}}
+        assert restored.quick_commands == {
+            "limits": {"type": "exec", "command": "echo ok"}
+        }
         assert restored.group_sessions_per_user is False
         assert restored.thread_sessions_per_user is True
 
@@ -217,17 +165,17 @@ class TestGatewayConfigRoundtrip:
         config = GatewayConfig(
             unauthorized_dm_behavior="ignore",
             platforms={
-                Platform.WHATSAPP: PlatformConfig(
-                    enabled=True,
-                    extra={"unauthorized_dm_behavior": "pair"},
-                ),
+                Platform.TELEGRAM: PlatformConfig(
+                    enabled=True, extra={"unauthorized_dm_behavior": "pair"}
+                )
             },
         )
-
         restored = GatewayConfig.from_dict(config.to_dict())
-
         assert restored.unauthorized_dm_behavior == "ignore"
-        assert restored.platforms[Platform.WHATSAPP].extra["unauthorized_dm_behavior"] == "pair"
+        assert (
+            restored.platforms[Platform.TELEGRAM].extra["unauthorized_dm_behavior"]
+            == "pair"
+        )
 
     def test_from_dict_coerces_quoted_false_always_log_local(self):
         restored = GatewayConfig.from_dict({"always_log_local": "false"})
@@ -237,20 +185,16 @@ class TestGatewayConfigRoundtrip:
         config = GatewayConfig(
             platforms={Platform.SLACK: PlatformConfig(enabled=True, token="***")}
         )
-
         assert config.get_notice_delivery(Platform.SLACK) == "public"
 
     def test_get_notice_delivery_honors_platform_override(self):
         config = GatewayConfig(
             platforms={
                 Platform.SLACK: PlatformConfig(
-                    enabled=True,
-                    token="***",
-                    extra={"notice_delivery": "private"},
-                ),
+                    enabled=True, token="***", extra={"notice_delivery": "private"}
+                )
             }
         )
-
         assert config.get_notice_delivery(Platform.SLACK) == "private"
 
 
@@ -260,41 +204,35 @@ class TestLoadGatewayConfig:
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "quick_commands:\n"
-            "  limits:\n"
-            "    type: exec\n"
-            "    command: echo ok\n",
+            "quick_commands:\n  limits:\n    type: exec\n    command: echo ok\n",
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
+        assert config.quick_commands == {
+            "limits": {"type": "exec", "command": "echo ok"}
+        }
 
-        assert config.quick_commands == {"limits": {"type": "exec", "command": "echo ok"}}
-
-    def test_bridges_group_sessions_per_user_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_group_sessions_per_user_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text("group_sessions_per_user: false\n", encoding="utf-8")
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.group_sessions_per_user is False
 
-    def test_bridges_thread_sessions_per_user_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_thread_sessions_per_user_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text("thread_sessions_per_user: true\n", encoding="utf-8")
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.thread_sessions_per_user is True
 
     def test_thread_sessions_per_user_defaults_to_false(self, tmp_path, monkeypatch):
@@ -302,48 +240,38 @@ class TestLoadGatewayConfig:
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text("{}\n", encoding="utf-8")
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.thread_sessions_per_user is False
 
-    def test_bridges_discord_thread_require_mention_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_discord_thread_require_mention_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         """discord.thread_require_mention in config.yaml should reach the runtime env var."""
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "discord:\n"
-            "  thread_require_mention: true\n",
-            encoding="utf-8",
+            "discord:\n  thread_require_mention: true\n", encoding="utf-8"
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("DISCORD_THREAD_REQUIRE_MENTION", raising=False)
-
         load_gateway_config()
-
         assert os.environ.get("DISCORD_THREAD_REQUIRE_MENTION") == "true"
 
-    def test_thread_require_mention_yaml_does_not_overwrite_env(self, tmp_path, monkeypatch):
+    def test_thread_require_mention_yaml_does_not_overwrite_env(
+        self, tmp_path, monkeypatch
+    ):
         """Explicit env var should win over config.yaml (env > yaml precedence)."""
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "discord:\n"
-            "  thread_require_mention: false\n",
-            encoding="utf-8",
+            "discord:\n  thread_require_mention: false\n", encoding="utf-8"
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-        monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "true")  # user override
-
+        monkeypatch.setenv("DISCORD_THREAD_REQUIRE_MENTION", "true")
         load_gateway_config()
-
-        # Env value preserved, not clobbered by yaml.
         assert os.environ.get("DISCORD_THREAD_REQUIRE_MENTION") == "true"
 
     def test_bridges_discord_allow_from_from_config_yaml(self, tmp_path, monkeypatch):
@@ -352,336 +280,260 @@ class TestLoadGatewayConfig:
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "discord:\n"
-            "  allow_from:\n"
-            "    - \"123456789012345678\"\n"
-            "    - \"999888777666555444\"\n",
+            'discord:\n  allow_from:\n    - "123456789012345678"\n    - "999888777666555444"\n',
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("DISCORD_ALLOWED_USERS", raising=False)
-
         config = load_gateway_config()
-
         assert config.platforms[Platform.DISCORD].extra["allow_from"] == [
             "123456789012345678",
             "999888777666555444",
         ]
-        assert os.environ.get("DISCORD_ALLOWED_USERS") == (
-            "123456789012345678,999888777666555444"
+        assert (
+            os.environ.get("DISCORD_ALLOWED_USERS")
+            == "123456789012345678,999888777666555444"
         )
 
-    def test_bridges_discord_platform_extra_allow_from_to_env(self, tmp_path, monkeypatch):
+    def test_bridges_discord_platform_extra_allow_from_to_env(
+        self, tmp_path, monkeypatch
+    ):
         """platforms.discord.extra.allow_from should reach DISCORD_ALLOWED_USERS too."""
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "platforms:\n"
-            "  discord:\n"
-            "    extra:\n"
-            "      allow_from:\n"
-            "        - \"123456789012345678\"\n",
+            'platforms:\n  discord:\n    extra:\n      allow_from:\n        - "123456789012345678"\n',
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("DISCORD_ALLOWED_USERS", raising=False)
-
         config = load_gateway_config()
-
         assert config.platforms[Platform.DISCORD].extra["allow_from"] == [
-            "123456789012345678",
+            "123456789012345678"
         ]
         assert os.environ.get("DISCORD_ALLOWED_USERS") == "123456789012345678"
 
-    def test_bridges_quoted_false_platform_enabled_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_quoted_false_platform_enabled_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "platforms:\n"
-            "  api_server:\n"
-            "    enabled: \"false\"\n",
-            encoding="utf-8",
+            'platforms:\n  webhook:\n    enabled: "false"\n', encoding="utf-8"
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
+        assert config.platforms[Platform.WEBHOOK].enabled is False
+        assert Platform.WEBHOOK not in config.get_connected_platforms()
 
-        assert config.platforms[Platform.API_SERVER].enabled is False
-        assert Platform.API_SERVER not in config.get_connected_platforms()
-
-    def test_bridges_nested_gateway_platforms_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_nested_gateway_platforms_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "gateway:\n"
-            "  platforms:\n"
-            "    telegram:\n"
-            "      enabled: true\n"
-            "      token: nested-token\n"
-            "      home_channel:\n"
-            "        platform: telegram\n"
-            "        chat_id: \"123\"\n"
-            "        name: Nested Home\n"
-            "      extra:\n"
-            "        reply_prefix: nested\n",
+            'gateway:\n  platforms:\n    telegram:\n      enabled: true\n      token: nested-token\n      home_channel:\n        platform: telegram\n        chat_id: "123"\n        name: Nested Home\n      extra:\n        reply_prefix: nested\n',
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         telegram = config.platforms[Platform.TELEGRAM]
         assert telegram.enabled is True
         assert telegram.token == "nested-token"
         assert telegram.home_channel == HomeChannel(
-            platform=Platform.TELEGRAM,
-            chat_id="123",
-            name="Nested Home",
+            platform=Platform.TELEGRAM, chat_id="123", name="Nested Home"
         )
         assert telegram.extra["reply_prefix"] == "nested"
 
-    def test_top_level_platforms_override_nested_gateway_platforms(self, tmp_path, monkeypatch):
+    def test_top_level_platforms_override_nested_gateway_platforms(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "gateway:\n"
-            "  platforms:\n"
-            "    telegram:\n"
-            "      enabled: false\n"
-            "      token: nested-token\n"
-            "      extra:\n"
-            "        reply_prefix: nested\n"
-            "platforms:\n"
-            "  telegram:\n"
-            "    enabled: true\n"
-            "    token: top-token\n"
-            "    extra:\n"
-            "      reply_prefix: top\n",
+            "gateway:\n  platforms:\n    telegram:\n      enabled: false\n      token: nested-token\n      extra:\n        reply_prefix: nested\nplatforms:\n  telegram:\n    enabled: true\n    token: top-token\n    extra:\n      reply_prefix: top\n",
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         telegram = config.platforms[Platform.TELEGRAM]
         assert telegram.enabled is True
         assert telegram.token == "top-token"
         assert telegram.extra["reply_prefix"] == "top"
 
-    def test_bridges_quoted_false_session_notify_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_quoted_false_session_notify_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
-        config_path.write_text(
-            "session_reset:\n"
-            "  notify: \"false\"\n",
-            encoding="utf-8",
-        )
-
+        config_path.write_text('session_reset:\n  notify: "false"\n', encoding="utf-8")
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.default_reset_policy.notify is False
 
-    def test_bridges_quoted_false_always_log_local_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_quoted_false_always_log_local_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
-        config_path.write_text(
-            "always_log_local: \"false\"\n",
-            encoding="utf-8",
-        )
-
+        config_path.write_text('always_log_local: "false"\n', encoding="utf-8")
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.always_log_local is False
 
-    def test_bridges_discord_channel_prompts_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_discord_channel_prompts_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "discord:\n"
-            "  channel_prompts:\n"
-            "    \"123\": Research mode\n"
-            "    456: Therapist mode\n",
+            'discord:\n  channel_prompts:\n    "123": Research mode\n    456: Therapist mode\n',
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.platforms[Platform.DISCORD].extra["channel_prompts"] == {
             "123": "Research mode",
             "456": "Therapist mode",
         }
 
-    def test_bridges_discord_history_backfill_settings_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_discord_history_backfill_settings_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "discord:\n"
-            "  history_backfill: true\n"
-            "  history_backfill_limit: 17\n",
+            "discord:\n  history_backfill: true\n  history_backfill_limit: 17\n",
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("DISCORD_HISTORY_BACKFILL", raising=False)
         monkeypatch.delenv("DISCORD_HISTORY_BACKFILL_LIMIT", raising=False)
-
         load_gateway_config()
-
         assert os.getenv("DISCORD_HISTORY_BACKFILL") == "true"
         assert os.getenv("DISCORD_HISTORY_BACKFILL_LIMIT") == "17"
 
-    def test_bridges_telegram_channel_prompts_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_telegram_channel_prompts_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "telegram:\n"
-            "  channel_prompts:\n"
-            '    "-1001234567": Research assistant\n'
-            "    789: Creative writing\n",
+            'telegram:\n  channel_prompts:\n    "-1001234567": Research assistant\n    789: Creative writing\n',
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.platforms[Platform.TELEGRAM].extra["channel_prompts"] == {
             "-1001234567": "Research assistant",
             "789": "Creative writing",
         }
 
-    def test_bridges_slack_channel_prompts_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_slack_channel_prompts_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "slack:\n"
-            "  channel_prompts:\n"
-            '    "C01ABC": Code review mode\n',
+            'slack:\n  channel_prompts:\n    "C01ABC": Code review mode\n',
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.platforms[Platform.SLACK].extra["channel_prompts"] == {
-            "C01ABC": "Code review mode",
+            "C01ABC": "Code review mode"
         }
 
-    def test_bridges_feishu_allow_bots_from_config_yaml_to_env(self, tmp_path, monkeypatch):
+    def test_bridges_feishu_allow_bots_from_config_yaml_to_env(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
-        config_path.write_text(
-            "feishu:\n  allow_bots: mentions\n",
-            encoding="utf-8",
-        )
-
+        config_path.write_text("feishu:\n  allow_bots: mentions\n", encoding="utf-8")
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("FEISHU_ALLOW_BOTS", raising=False)
-
         load_gateway_config()
-
         assert os.environ.get("FEISHU_ALLOW_BOTS") == "mentions"
 
-    def test_feishu_allow_bots_env_takes_precedence_over_config_yaml(self, tmp_path, monkeypatch):
+    def test_feishu_allow_bots_env_takes_precedence_over_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
-        config_path.write_text(
-            "feishu:\n  allow_bots: all\n",
-            encoding="utf-8",
-        )
-
+        config_path.write_text("feishu:\n  allow_bots: all\n", encoding="utf-8")
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.setenv("FEISHU_ALLOW_BOTS", "none")
-
         load_gateway_config()
-
         assert os.environ.get("FEISHU_ALLOW_BOTS") == "none"
 
-    def test_invalid_quick_commands_in_config_yaml_are_ignored(self, tmp_path, monkeypatch):
+    def test_invalid_quick_commands_in_config_yaml_are_ignored(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text("quick_commands: not-a-mapping\n", encoding="utf-8")
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.quick_commands == {}
 
-    def test_bridges_unauthorized_dm_behavior_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_unauthorized_dm_behavior_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "unauthorized_dm_behavior: ignore\n"
-            "whatsapp:\n"
-            "  unauthorized_dm_behavior: pair\n",
+            "unauthorized_dm_behavior: ignore\ntelegram:\n  unauthorized_dm_behavior: pair\n",
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.unauthorized_dm_behavior == "ignore"
-        assert config.platforms[Platform.WHATSAPP].extra["unauthorized_dm_behavior"] == "pair"
+        assert (
+            config.platforms[Platform.TELEGRAM].extra["unauthorized_dm_behavior"]
+            == "pair"
+        )
 
-    def test_bridges_telegram_disable_link_previews_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_telegram_disable_link_previews_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "telegram:\n"
-            "  disable_link_previews: true\n",
-            encoding="utf-8",
+            "telegram:\n  disable_link_previews: true\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
+        config = load_gateway_config()
+        assert (
+            config.platforms[Platform.TELEGRAM].extra["disable_link_previews"] is True
         )
 
-        monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
-        config = load_gateway_config()
-
-        assert config.platforms[Platform.TELEGRAM].extra["disable_link_previews"] is True
-
-    def test_bridges_telegram_extra_base_url_from_config_yaml(self, tmp_path, monkeypatch):
+    def test_bridges_telegram_extra_base_url_from_config_yaml(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "telegram:\n"
-            "  extra:\n"
-            "    base_url: https://custom-proxy.example.com/bot\n",
+            "telegram:\n  extra:\n    base_url: https://custom-proxy.example.com/bot\n",
             encoding="utf-8",
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert (
             config.platforms[Platform.TELEGRAM].extra["base_url"]
             == "https://custom-proxy.example.com/bot"
@@ -691,16 +543,9 @@ class TestLoadGatewayConfig:
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
-        config_path.write_text(
-            "slack:\n"
-            "  notice_delivery: private\n",
-            encoding="utf-8",
-        )
-
+        config_path.write_text("slack:\n  notice_delivery: private\n", encoding="utf-8")
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
-
         config = load_gateway_config()
-
         assert config.get_notice_delivery(Platform.SLACK) == "private"
 
     def test_bridges_telegram_proxy_url_from_config_yaml(self, tmp_path, monkeypatch):
@@ -708,35 +553,29 @@ class TestLoadGatewayConfig:
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "telegram:\n"
-            "  proxy_url: socks5://127.0.0.1:1080\n",
-            encoding="utf-8",
+            "telegram:\n  proxy_url: socks5://127.0.0.1:1080\n", encoding="utf-8"
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.delenv("TELEGRAM_PROXY", raising=False)
-
         load_gateway_config()
-
         import os
+
         assert os.environ.get("TELEGRAM_PROXY") == "socks5://127.0.0.1:1080"
 
-    def test_telegram_proxy_env_takes_precedence_over_config(self, tmp_path, monkeypatch):
+    def test_telegram_proxy_env_takes_precedence_over_config(
+        self, tmp_path, monkeypatch
+    ):
         marlow_home = tmp_path / ".marlow"
         marlow_home.mkdir()
         config_path = marlow_home / "config.yaml"
         config_path.write_text(
-            "telegram:\n"
-            "  proxy_url: http://from-config:8080\n",
-            encoding="utf-8",
+            "telegram:\n  proxy_url: http://from-config:8080\n", encoding="utf-8"
         )
-
         monkeypatch.setenv("MARLOW_HOME", str(marlow_home))
         monkeypatch.setenv("TELEGRAM_PROXY", "socks5://from-env:1080")
-
         load_gateway_config()
-
         import os
+
         assert os.environ.get("TELEGRAM_PROXY") == "socks5://from-env:1080"
 
 
@@ -753,42 +592,22 @@ class TestHomeChannelEnvOverrides:
                 ("C123", "Ops"),
             ),
             (
-                Platform.WHATSAPP,
-                PlatformConfig(enabled=True),
+                Platform.TELEGRAM,
+                PlatformConfig(enabled=True, token="telegram-token"),
                 {
-                    "WHATSAPP_HOME_CHANNEL": "1234567890@lid",
-                    "WHATSAPP_HOME_CHANNEL_NAME": "Owner DM",
+                    "TELEGRAM_HOME_CHANNEL": "123456",
+                    "TELEGRAM_HOME_CHANNEL_NAME": "Owner DM",
                 },
-                ("1234567890@lid", "Owner DM"),
+                ("123456", "Owner DM"),
             ),
             (
-                Platform.SIGNAL,
-                PlatformConfig(
-                    enabled=True,
-                    extra={"http_url": "http://localhost:9090", "account": "+15551234567"},
-                ),
-                {"SIGNAL_HOME_CHANNEL": "+1555000", "SIGNAL_HOME_CHANNEL_NAME": "Phone"},
-                ("+1555000", "Phone"),
-            ),
-            (
-                Platform.MATTERMOST,
-                PlatformConfig(
-                    enabled=True,
-                    token="mm-token",
-                    extra={"url": "https://mm.example.com"},
-                ),
-                {"MATTERMOST_HOME_CHANNEL": "ch_abc123", "MATTERMOST_HOME_CHANNEL_NAME": "General"},
-                ("ch_abc123", "General"),
-            ),
-            (
-                Platform.MATRIX,
-                PlatformConfig(
-                    enabled=True,
-                    token="syt_abc123",
-                    extra={"homeserver": "https://matrix.example.org"},
-                ),
-                {"MATRIX_HOME_ROOM": "!room123:example.org", "MATRIX_HOME_ROOM_NAME": "Bot Room"},
-                ("!room123:example.org", "Bot Room"),
+                Platform.DISCORD,
+                PlatformConfig(enabled=True, token="discord-token"),
+                {
+                    "DISCORD_HOME_CHANNEL": "987654",
+                    "DISCORD_HOME_CHANNEL_NAME": "General",
+                },
+                ("987654", "General"),
             ),
             (
                 Platform.EMAIL,
@@ -800,22 +619,28 @@ class TestHomeChannelEnvOverrides:
                         "smtp_host": "smtp.test.com",
                     },
                 ),
-                {"EMAIL_HOME_ADDRESS": "user@test.com", "EMAIL_HOME_ADDRESS_NAME": "Inbox"},
+                {
+                    "EMAIL_HOME_ADDRESS": "user@test.com",
+                    "EMAIL_HOME_ADDRESS_NAME": "Inbox",
+                },
                 ("user@test.com", "Inbox"),
             ),
             (
-                Platform.SMS,
-                PlatformConfig(enabled=True, api_key="token_abc"),
-                {"SMS_HOME_CHANNEL": "+15559876543", "SMS_HOME_CHANNEL_NAME": "My Phone"},
-                ("+15559876543", "My Phone"),
+                Platform.FEISHU,
+                PlatformConfig(enabled=True),
+                {
+                    "FEISHU_HOME_CHANNEL": "oc_123",
+                    "FEISHU_HOME_CHANNEL_NAME": "Bot Chat",
+                },
+                ("oc_123", "Bot Chat"),
             ),
         ]
-
         for platform, platform_config, env, expected in cases:
             config = GatewayConfig(platforms={platform: platform_config})
             with patch.dict(os.environ, env, clear=True):
                 _apply_env_overrides(config)
-
             home = config.platforms[platform].home_channel
-            assert home is not None, f"{platform.value}: home_channel should not be None"
+            assert home is not None, (
+                f"{platform.value}: home_channel should not be None"
+            )
             assert (home.chat_id, home.name) == expected, platform.value

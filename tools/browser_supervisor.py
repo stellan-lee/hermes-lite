@@ -54,9 +54,8 @@ FRAME_TREE_MAX_OOPIF_DEPTH = 2
 # Ring buffer of recent console-level events (used later by PR 2 diagnostics).
 CONSOLE_HISTORY_MAX = 50
 
-# Keep the last N closed dialogs in ``recent_dialogs`` so agents on backends
-# that auto-dismiss server-side (e.g. Browserbase) can still observe that a
-# dialog fired, even if they couldn't respond to it in time.
+# Keep the last N closed dialogs in ``recent_dialogs`` so agents can observe a
+# dialog that closed before they responded.
 RECENT_DIALOGS_MAX = 20
 
 # Magic host the injected dialog bridge XHRs to.  Intercepted via the CDP
@@ -67,9 +66,8 @@ DIALOG_BRIDGE_URL_PATTERN = f"http://{DIALOG_BRIDGE_HOST}/*"
 
 # Script injected into every frame via Page.addScriptToEvaluateOnNewDocument.
 # Overrides alert/confirm/prompt to round-trip through a sync XHR that we
-# intercept via Fetch.requestPaused. Works on Browserbase (whose CDP proxy
-# auto-dismisses REAL native dialogs) because the native dialogs never fire
-# in the first place — the overrides take precedence.
+# intercept via Fetch.requestPaused. The overrides take precedence over native
+# dialogs and give the agent a stable response path.
 _DIALOG_BRIDGE_SCRIPT = r"""
 (() => {
   if (window.__marlowDialogBridgeInstalled) return;
@@ -159,7 +157,7 @@ class DialogRecord:
     """A historical record of a dialog that was opened and then handled.
 
     Retained in ``recent_dialogs`` for a short window so agents on backends
-    that auto-dismiss dialogs server-side (Browserbase) can still observe
+    that auto-dismiss dialogs server-side can still observe
     that a dialog fired, even though they couldn't respond to it.
     """
 
@@ -602,10 +600,8 @@ class CDPSupervisor:
     async def _run(self) -> None:
         """Top-level supervisor coroutine.
 
-        Holds a reconnecting loop so we survive the remote closing the
-        WebSocket — Browserbase in particular tears down the CDP socket
-        every time a short-lived client (e.g. agent-browser's per-command
-        CDP client) disconnects.  We drop our state snapshot keys that
+        Holds a reconnecting loop so we survive the browser closing the
+        WebSocket. We drop our state snapshot keys that
         depend on specific CDP session ids, re-attach, and keep going.
         """
         attempt = 0
@@ -719,9 +715,8 @@ class CDPSupervisor:
             session_id=self._page_session_id,
         )
         # Install the dialog bridge — overrides native alert/confirm/prompt with
-        # a synchronous XHR we intercept via Fetch domain. This is how we make
-        # dialog response work on Browserbase (whose CDP proxy auto-dismisses
-        # real native dialogs before we can call handleJavaScriptDialog).
+        # a synchronous XHR we intercept via Fetch domain, giving the agent a
+        # stable response path before a native dialog blocks the page.
         await self._install_dialog_bridge(self._page_session_id)
 
     async def _install_dialog_bridge(self, session_id: str) -> None:
@@ -1021,7 +1016,7 @@ class CDPSupervisor:
         # ``userInput`` (string), not the original ``message``.  Match by
         # session id and clear the oldest dialog on that session — if Chrome
         # closed one on us (e.g. our disconnect auto-dismissed it, or the
-        # browser navigated, or Browserbase's CDP proxy auto-dismissed), there
+        # browser navigated), there
         # shouldn't be more than one in flight per session anyway because the
         # JS thread is blocked while a dialog is up.
         with self._state_lock:
@@ -1279,10 +1274,9 @@ class CDPSupervisor:
     def _on_target_detached(self, params: Dict[str, Any]) -> None:
         """Handle a child CDP session detaching.
 
-        We deliberately DO NOT drop frames from ``_frames`` here — Browserbase
-        fires transient detach events during page transitions even while the
-        iframe is still visible to the user, and dropping the record hides
-        OOPIFs from the agent between the detach and the next
+        We deliberately do not drop frames from ``_frames`` here because
+        browsers can fire transient detach events during page transitions,
+        and dropping the record hides OOPIFs between the detach and the next
         ``Target.attachedToTarget``. Instead, we just clear the session
         binding so stale ``cdp_session_id`` values aren't used for routing.
         If the iframe truly goes away, ``Page.frameDetached`` will clean up.

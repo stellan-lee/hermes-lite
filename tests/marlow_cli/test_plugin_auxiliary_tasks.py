@@ -103,7 +103,6 @@ def test_register_auxiliary_task_rejects_builtin_keys():
         "approval",
         "mcp",
         "title_generation",
-        "skills_hub",
         "curator",
     ):
         with pytest.raises(ValueError, match="reserved for a built-in task"):
@@ -204,12 +203,12 @@ def test_get_plugin_auxiliary_tasks_empty_when_none_registered(patched_manager):
 def test_all_aux_tasks_includes_plugin_registered(patched_manager):
     from marlow_cli.main import _AUX_TASKS, _all_aux_tasks
 
-    manifest = PluginManifest(name="hindsight")
+    manifest = PluginManifest(name="external-memory")
     ctx = PluginContext(manifest, patched_manager)
     ctx.register_auxiliary_task(
         key="memory_retain_filter",
         display_name="Memory retain filter",
-        description="hindsight pre-retain dedup/extract",
+        description="memory pre-retain dedup/extract",
     )
 
     merged = _all_aux_tasks()
@@ -223,7 +222,7 @@ def test_all_aux_tasks_includes_plugin_registered(patched_manager):
     assert plugin_entry == (
         "memory_retain_filter",
         "Memory retain filter",
-        "hindsight pre-retain dedup/extract",
+        "memory pre-retain dedup/extract",
     )
 
 
@@ -332,12 +331,12 @@ def test_get_auxiliary_task_config_user_config_wins_over_plugin_defaults(
     # User overrides timeout + provider via config.yaml
     cfg = load_config()
     aux = cfg.setdefault("auxiliary", {})
-    aux["my_filter"] = {"timeout": 90, "provider": "nous"}
+    aux["my_filter"] = {"timeout": 90, "provider": "custom"}
     save_config(cfg)
 
     resolved = _get_auxiliary_task_config("my_filter")
     assert resolved["timeout"] == 90  # user wins
-    assert resolved["provider"] == "nous"  # user wins
+    assert resolved["provider"] == "custom"  # user wins
 
 
 def test_get_auxiliary_task_config_unknown_task_returns_empty(

@@ -17,8 +17,8 @@ that instructs the live agent to:
 
 There is no separate distillation engine and no model-tool footprint: the
 agent does the work with its existing toolset, so this works identically on
-local, Docker, and remote terminal backends. Every surface (CLI ``/learn``,
-gateway ``/learn``, the dashboard "Learn a skill" panel) calls
+local, Docker, and remote terminal backends. Both CLI ``/learn`` and
+gateway ``/learn`` call
 :func:`build_learn_prompt` and feeds the result to the agent as a normal turn.
 """
 

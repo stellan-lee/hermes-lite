@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import closing
 import sqlite3
 import threading
 import time
@@ -52,7 +53,7 @@ from tools.thread_context import propagate_context_to_thread
 logger = logging.getLogger(__name__)
 
 # Back-compat alias — the daemon executor now lives in tools.daemon_pool so
-# other subsystems (tool_executor, memory_manager, delegate_tool, skills_hub)
+# other subsystems (tool_executor, memory_manager, delegate_tool)
 # can share it. Existing imports of ``_DaemonThreadPoolExecutor`` keep working.
 _DaemonThreadPoolExecutor = DaemonThreadPoolExecutor
 
@@ -110,7 +111,7 @@ def _connect() -> sqlite3.Connection:
 
 def _persist_dispatch(record: Dict[str, Any]) -> None:
     now = time.time()
-    with _DB_LOCK, _connect() as conn:
+    with _DB_LOCK, closing(_connect()) as conn, conn:
         conn.execute(
             """INSERT OR REPLACE INTO async_delegations
                (delegation_id, origin_session, origin_ui_session_id,
@@ -140,7 +141,7 @@ def _persist_dispatch(record: Dict[str, Any]) -> None:
 
 def _persist_completion(event: Dict[str, Any], result: Dict[str, Any]) -> None:
     now = time.time()
-    with _DB_LOCK, _connect() as conn:
+    with _DB_LOCK, closing(_connect()) as conn, conn:
         conn.execute(
             """UPDATE async_delegations SET state=?, completed_at=?, updated_at=?,
                event_json=?, result_json=?, delivery_state='pending'
@@ -151,7 +152,7 @@ def _persist_completion(event: Dict[str, Any], result: Dict[str, Any]) -> None:
 
 
 def _note_delivery_attempt(delegation_id: str) -> None:
-    with _DB_LOCK, _connect() as conn:
+    with _DB_LOCK, closing(_connect()) as conn, conn:
         conn.execute(
             "UPDATE async_delegations SET delivery_attempts=delivery_attempts+1, updated_at=? WHERE delegation_id=?",
             (time.time(), delegation_id),
@@ -160,7 +161,7 @@ def _note_delivery_attempt(delegation_id: str) -> None:
 
 def restore_undelivered_completions(target_queue) -> int:
     """Enqueue durable pending completions as fresh turns after process start."""
-    with _DB_LOCK, _connect() as conn:
+    with _DB_LOCK, closing(_connect()) as conn, conn:
         rows = conn.execute(
             """SELECT delegation_id, event_json FROM async_delegations
                WHERE state != 'running' AND delivery_state='pending' AND event_json IS NOT NULL
@@ -178,7 +179,7 @@ def restore_undelivered_completions(target_queue) -> int:
 def mark_completion_delivered(delegation_id: str) -> bool:
     """Atomically acknowledge successful injection of a durable completion."""
     now = time.time()
-    with _DB_LOCK, _connect() as conn:
+    with _DB_LOCK, closing(_connect()) as conn, conn:
         cur = conn.execute(
             """UPDATE async_delegations SET delivery_state='delivered', delivered_at=?, updated_at=?
                WHERE delegation_id=? AND delivery_state!='delivered'""",
@@ -188,7 +189,7 @@ def mark_completion_delivered(delegation_id: str) -> bool:
 
 
 def get_durable_delegation(delegation_id: str) -> Optional[Dict[str, Any]]:
-    with _DB_LOCK, _connect() as conn:
+    with _DB_LOCK, closing(_connect()) as conn, conn:
         row = conn.execute(
             """SELECT origin_session, state, dispatched_at, completed_at,
                       result_json, delivery_state, delivery_attempts

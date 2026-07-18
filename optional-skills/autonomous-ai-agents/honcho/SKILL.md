@@ -4,7 +4,7 @@ description: Configure and use Honcho memory with Marlow -- cross-session user m
 version: 2.0.0
 author: Marlow Agent
 license: MIT
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 metadata:
   marlow:
     tags: [Honcho, Memory, Profiles, Observation, Dialectic, User-Modeling, Session-Summary]

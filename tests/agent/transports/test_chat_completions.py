@@ -2,19 +2,18 @@
 
 import pytest
 from types import SimpleNamespace
-
 from agent.transports import get_transport
 from agent.transports.types import NormalizedResponse
 
 
 @pytest.fixture
 def transport():
-    import agent.transports.chat_completions  # noqa: F401
+    import agent.transports.chat_completions
+
     return get_transport("chat_completions")
 
 
 class TestChatCompletionsBasic:
-
     def test_api_mode(self, transport):
         assert transport.api_mode == "chat_completions"
 
@@ -28,21 +27,31 @@ class TestChatCompletionsBasic:
     def test_convert_messages_no_codex_leaks(self, transport):
         msgs = [{"role": "user", "content": "hi"}]
         result = transport.convert_messages(msgs)
-        assert result is msgs  # no copy needed
+        assert result is msgs
 
     def test_convert_messages_strips_codex_fields(self, transport):
         msgs = [
-            {"role": "assistant", "content": "ok", "codex_reasoning_items": [{"id": "rs_1"}],
-             "codex_message_items": [{"id": "msg_1", "type": "message"}],
-             "tool_calls": [{"id": "call_1", "call_id": "call_1", "response_item_id": "fc_1",
-                            "type": "function", "function": {"name": "t", "arguments": "{}"}}]},
+            {
+                "role": "assistant",
+                "content": "ok",
+                "codex_reasoning_items": [{"id": "rs_1"}],
+                "codex_message_items": [{"id": "msg_1", "type": "message"}],
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "call_id": "call_1",
+                        "response_item_id": "fc_1",
+                        "type": "function",
+                        "function": {"name": "t", "arguments": "{}"},
+                    }
+                ],
+            }
         ]
         result = transport.convert_messages(msgs)
         assert "codex_reasoning_items" not in result[0]
         assert "codex_message_items" not in result[0]
         assert "call_id" not in result[0]["tool_calls"][0]
         assert "response_item_id" not in result[0]["tool_calls"][0]
-        # Original list untouched (deepcopy-on-demand)
         assert "codex_reasoning_items" in msgs[0]
         assert "codex_message_items" in msgs[0]
 
@@ -53,17 +62,28 @@ class TestChatCompletionsBasic:
         """
         msgs = [
             {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": None,
-             "tool_calls": [{"id": "call_1", "type": "function",
-                             "function": {"name": "execute_code", "arguments": "{}"}}]},
-            {"role": "tool", "tool_call_id": "call_1", "tool_name": "execute_code",
-             "content": "result"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "execute_code", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "tool_name": "execute_code",
+                "content": "result",
+            },
         ]
         result = transport.convert_messages(msgs)
         assert "tool_name" not in result[2]
         assert result[2]["content"] == "result"
         assert result[2]["tool_call_id"] == "call_1"
-        # Original list untouched (deepcopy-on-demand)
         assert msgs[2]["tool_name"] == "execute_code"
 
     def test_convert_messages_strips_internal_scaffolding_markers(self, transport):
@@ -76,18 +96,24 @@ class TestChatCompletionsBasic:
         """
         msgs = [
             {"role": "user", "content": "run the task"},
-            {"role": "assistant", "content": "(empty)", "_empty_recovery_synthetic": True},
+            {
+                "role": "assistant",
+                "content": "(empty)",
+                "_empty_recovery_synthetic": True,
+            },
             {"role": "user", "content": "continue", "_empty_recovery_synthetic": True},
-            {"role": "assistant", "content": "done", "_thinking_prefill": True,
-             "_empty_terminal_sentinel": True},
+            {
+                "role": "assistant",
+                "content": "done",
+                "_thinking_prefill": True,
+                "_empty_terminal_sentinel": True,
+            },
         ]
         result = transport.convert_messages(msgs)
         for m in result:
-            assert not any(k.startswith("_") for k in m), m
-        # Visible content preserved
+            assert not any((k.startswith("_") for k in m)), m
         assert result[1]["content"] == "(empty)"
         assert result[2]["content"] == "continue"
-        # Original list untouched (deepcopy-on-demand)
         assert msgs[1]["_empty_recovery_synthetic"] is True
 
     def test_convert_messages_clean_list_is_identity(self, transport):
@@ -100,7 +126,6 @@ class TestChatCompletionsBasic:
 
 
 class TestChatCompletionsBuildKwargs:
-
     def test_basic_kwargs(self, transport):
         msgs = [{"role": "user", "content": "Hello"}]
         kw = transport.build_kwargs(model="gpt-4o", messages=msgs, timeout=30.0)
@@ -109,13 +134,23 @@ class TestChatCompletionsBuildKwargs:
         assert kw["timeout"] == 30.0
 
     def test_developer_role_swap(self, transport):
-        msgs = [{"role": "system", "content": "You are helpful"}, {"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(model="gpt-5.4", messages=msgs, model_lower="gpt-5.4")
+        msgs = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hi"},
+        ]
+        kw = transport.build_kwargs(
+            model="gpt-5.4", messages=msgs, model_lower="gpt-5.4"
+        )
         assert kw["messages"][0]["role"] == "developer"
 
     def test_no_developer_swap_for_non_gpt5(self, transport):
-        msgs = [{"role": "system", "content": "You are helpful"}, {"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(model="claude-sonnet-4", messages=msgs, model_lower="claude-sonnet-4")
+        msgs = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hi"},
+        ]
+        kw = transport.build_kwargs(
+            model="claude-sonnet-4", messages=msgs, model_lower="claude-sonnet-4"
+        )
         assert kw["messages"][0]["role"] == "system"
 
     def test_tools_included(self, transport):
@@ -124,115 +159,21 @@ class TestChatCompletionsBuildKwargs:
         kw = transport.build_kwargs(model="gpt-4o", messages=msgs, tools=tools)
         assert kw["tools"] == tools
 
-    def test_openrouter_provider_prefs(self, transport):
-        from providers import get_provider_profile
-        profile = get_provider_profile("openrouter")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gpt-4o", messages=msgs,
-            provider_profile=profile,
-            provider_preferences={"only": ["openai"]},
-        )
-        assert kw["extra_body"]["provider"] == {"only": ["openai"]}
-
-    def test_openrouter_pareto_min_coding_score(self, transport):
-        """Profile path: model=openrouter/pareto-code + score → plugins block."""
-        from providers import get_provider_profile
-        profile = get_provider_profile("openrouter")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="openrouter/pareto-code", messages=msgs,
-            provider_profile=profile,
-            openrouter_min_coding_score=0.65,
-        )
-        assert kw["extra_body"]["plugins"] == [
-            {"id": "pareto-router", "min_coding_score": 0.65}
-        ]
-
-    def test_openrouter_pareto_score_ignored_for_other_models(self, transport):
-        """Score must not be emitted for any model other than openrouter/pareto-code."""
-        from providers import get_provider_profile
-        profile = get_provider_profile("openrouter")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="anthropic/claude-sonnet-4.6", messages=msgs,
-            provider_profile=profile,
-            openrouter_min_coding_score=0.65,
-        )
-        assert "plugins" not in (kw.get("extra_body") or {})
-
-    def test_openrouter_pareto_score_omitted_when_unset(self, transport):
-        """No score → no plugins block (router uses its omission default = strongest coder)."""
-        from providers import get_provider_profile
-        profile = get_provider_profile("openrouter")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="openrouter/pareto-code", messages=msgs,
-            provider_profile=profile,
-            openrouter_min_coding_score=None,
-        )
-        assert "plugins" not in (kw.get("extra_body") or {})
-
-    def test_openrouter_pareto_score_out_of_range_dropped(self, transport):
-        """Out-of-range scores must be silently dropped, not forwarded."""
-        from providers import get_provider_profile
-        profile = get_provider_profile("openrouter")
-        msgs = [{"role": "user", "content": "Hi"}]
-        for bad in (1.5, -0.1, "not-a-number"):
-            kw = transport.build_kwargs(
-                model="openrouter/pareto-code", messages=msgs,
-                provider_profile=profile,
-                openrouter_min_coding_score=bad,
-            )
-            assert "plugins" not in (kw.get("extra_body") or {}), f"bad={bad!r}"
-
-    def test_openrouter_pareto_legacy_path(self, transport):
-        """Legacy flag path (no profile loaded) must also emit the plugins block."""
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="openrouter/pareto-code", messages=msgs,
-            is_openrouter=True,
-            openrouter_min_coding_score=0.8,
-        )
-        assert kw["extra_body"]["plugins"] == [
-            {"id": "pareto-router", "min_coding_score": 0.8}
-        ]
-
-    def test_nous_tags(self, transport):
-        from agent.portal_tags import nous_portal_tags
-        from providers import get_provider_profile
-        profile = get_provider_profile("nous")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(model="gpt-4o", messages=msgs, provider_profile=profile)
-        assert kw["extra_body"]["tags"] == nous_portal_tags()
-
     def test_reasoning_default(self, transport):
         msgs = [{"role": "user", "content": "Hi"}]
         kw = transport.build_kwargs(
-            model="gpt-4o", messages=msgs,
-            supports_reasoning=True,
+            model="gpt-4o", messages=msgs, supports_reasoning=True
         )
         assert kw["extra_body"]["reasoning"] == {"enabled": True, "effort": "medium"}
 
-    def test_nous_omits_disabled_reasoning(self, transport):
-        from providers import get_provider_profile
-        profile = get_provider_profile("nous")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gpt-4o", messages=msgs,
-            provider_profile=profile,
-            supports_reasoning=True,
-            reasoning_config={"enabled": False},
-        )
-        # Nous rejects enabled=false; reasoning omitted entirely
-        assert "reasoning" not in kw.get("extra_body", {})
-
     def test_ollama_num_ctx(self, transport):
         from providers import get_provider_profile
+
         profile = get_provider_profile("custom")
         msgs = [{"role": "user", "content": "Hi"}]
         kw = transport.build_kwargs(
-            model="llama3", messages=msgs,
+            model="llama3",
+            messages=msgs,
             provider_profile=profile,
             ollama_num_ctx=32768,
         )
@@ -240,181 +181,22 @@ class TestChatCompletionsBuildKwargs:
 
     def test_custom_think_false(self, transport):
         from providers import get_provider_profile
+
         profile = get_provider_profile("custom")
         msgs = [{"role": "user", "content": "Hi"}]
         kw = transport.build_kwargs(
-            model="qwen3", messages=msgs,
+            model="qwen3",
+            messages=msgs,
             provider_profile=profile,
             reasoning_config={"effort": "none"},
         )
         assert kw["extra_body"]["think"] is False
 
-    def test_gemini_native_without_explicit_reasoning_config_keeps_existing_behavior(self, transport):
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemini-3-flash-preview",
-            messages=msgs,
-            provider_name="gemini",
-            base_url="https://generativelanguage.googleapis.com/v1beta",
-        )
-        assert "thinking_config" not in kw.get("extra_body", {})
-        assert "google" not in kw.get("extra_body", {})
-        assert "extra_body" not in kw.get("extra_body", {})
-
-    def test_gemini_native_flash_reasoning_maps_to_top_level_thinking_config(self, transport):
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemini-3-flash-preview",
-            messages=msgs,
-            provider_name="gemini",
-            base_url="https://generativelanguage.googleapis.com/v1beta",
-            reasoning_config={"enabled": True, "effort": "high"},
-        )
-        assert kw["extra_body"]["thinking_config"] == {
-            "includeThoughts": True,
-            "thinkingLevel": "high",
-        }
-
-    def test_gemini_openai_compat_flash_reasoning_maps_to_nested_google_thinking_config(self, transport):
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemini-3-flash-preview",
-            messages=msgs,
-            provider_name="gemini",
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-            reasoning_config={"enabled": True, "effort": "high"},
-        )
-        assert "thinking_config" not in kw["extra_body"]
-        assert kw["extra_body"]["extra_body"]["google"]["thinking_config"] == {
-            "include_thoughts": True,
-            "thinking_level": "high",
-        }
-
-    def test_gemini_native_25_reasoning_only_enables_visible_thoughts(self, transport):
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemini-2.5-flash",
-            messages=msgs,
-            provider_name="gemini",
-            base_url="https://generativelanguage.googleapis.com/v1beta",
-            reasoning_config={"enabled": True, "effort": "high"},
-        )
-        assert kw["extra_body"]["thinking_config"] == {
-            "includeThoughts": True,
-        }
-
-    def test_gemini_openai_compat_pro_reasoning_clamps_to_supported_levels(self, transport):
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="google/gemini-3.1-pro-preview",
-            messages=msgs,
-            provider_name="gemini",
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-            reasoning_config={"enabled": True, "effort": "medium"},
-        )
-        assert kw["extra_body"]["extra_body"]["google"]["thinking_config"] == {
-            "include_thoughts": True,
-            "thinking_level": "low",
-        }
-
-    def test_gemini_native_disabled_reasoning_hides_thoughts(self, transport):
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemini-3-flash-preview",
-            messages=msgs,
-            provider_name="gemini",
-            base_url="https://generativelanguage.googleapis.com/v1beta",
-            reasoning_config={"enabled": False},
-        )
-        assert kw["extra_body"]["thinking_config"] == {
-            "includeThoughts": False,
-        }
-
-    def test_gemini_openai_compat_xhigh_clamps_to_high(self, transport):
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemini-3-flash-preview",
-            messages=msgs,
-            provider_name="gemini",
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-            reasoning_config={"enabled": True, "effort": "xhigh"},
-        )
-        assert kw["extra_body"]["extra_body"]["google"]["thinking_config"]["thinking_level"] == "high"
-
-    def test_google_gemini_cli_keeps_top_level_thinking_config(self, transport):
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemini-3-flash-preview",
-            messages=msgs,
-            provider_name="google-gemini-cli",
-            reasoning_config={"enabled": True, "effort": "high"},
-        )
-        assert kw["extra_body"]["thinking_config"] == {
-            "includeThoughts": True,
-            "thinkingLevel": "high",
-        }
-        assert "google" not in kw["extra_body"]
-
-    def test_gemini_flash_minimal_clamps_to_low(self, transport):
-        # Gemini 3 Flash documents low/medium/high; "minimal" isn't accepted,
-        # so clamp it down to "low" rather than forwarding it verbatim.
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemini-3-flash-preview",
-            messages=msgs,
-            provider_name="gemini",
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-            reasoning_config={"enabled": True, "effort": "minimal"},
-        )
-        assert kw["extra_body"]["extra_body"]["google"]["thinking_config"] == {
-            "include_thoughts": True,
-            "thinking_level": "low",
-        }
-
-    def test_gemma_does_not_receive_thinking_config(self, transport):
-        # The `gemini` provider also serves Gemma (e.g. `gemma-4-31b-it`),
-        # but Gemma rejects `thinking_config` with HTTP 400 (#17426). Even
-        # when Marlow has reasoning enabled, the field must be omitted for
-        # non-Gemini models on this provider.
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemma-4-31b-it",
-            messages=msgs,
-            provider_name="gemini",
-            reasoning_config={"enabled": True, "effort": "high"},
-        )
-        assert "thinking_config" not in kw.get("extra_body", {})
-
-    def test_gemma_disabled_reasoning_still_omits_thinking_config(self, transport):
-        # The `Unknown name 'thinking_config': Cannot find field` rejection
-        # fires even on `{"includeThoughts": False}` — the entire field must
-        # be absent, not just disabled. (#17426)
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gemma-4-31b-it",
-            messages=msgs,
-            provider_name="gemini",
-            reasoning_config={"enabled": False},
-        )
-        assert "thinking_config" not in kw.get("extra_body", {})
-
-    def test_google_prefixed_gemma_also_omits_thinking_config(self, transport):
-        # OpenRouter-style `google/gemma-...` IDs hit the same provider path
-        # and must also omit `thinking_config`. The existing `google/`
-        # prefix-stripping must not accidentally classify Gemma as Gemini.
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="google/gemma-4-31b-it",
-            messages=msgs,
-            provider_name="gemini",
-            reasoning_config={"enabled": True, "effort": "medium"},
-        )
-        assert "thinking_config" not in kw.get("extra_body", {})
-
     def test_max_tokens_with_fn(self, transport):
         msgs = [{"role": "user", "content": "Hi"}]
         kw = transport.build_kwargs(
-            model="gpt-4o", messages=msgs,
+            model="gpt-4o",
+            messages=msgs,
             max_tokens=4096,
             max_tokens_param_fn=lambda n: {"max_tokens": n},
         )
@@ -423,64 +205,31 @@ class TestChatCompletionsBuildKwargs:
     def test_ephemeral_overrides_max_tokens(self, transport):
         msgs = [{"role": "user", "content": "Hi"}]
         kw = transport.build_kwargs(
-            model="gpt-4o", messages=msgs,
+            model="gpt-4o",
+            messages=msgs,
             max_tokens=4096,
             ephemeral_max_output_tokens=2048,
             max_tokens_param_fn=lambda n: {"max_tokens": n},
         )
         assert kw["max_tokens"] == 2048
 
-    def test_nvidia_default_max_tokens(self, transport):
-        """NVIDIA max_tokens=16384 is now set via ProviderProfile, not legacy flag."""
-        from providers import get_provider_profile
-
-        profile = get_provider_profile("nvidia")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="nvidia/llama-3.1-405b-instruct",
-            messages=msgs,
-            max_tokens_param_fn=lambda n: {"max_tokens": n},
-            provider_profile=profile,
-        )
-        assert kw["max_tokens"] == 16384
-
-    def test_qwen_default_max_tokens(self, transport):
-        from providers import get_provider_profile
-        profile = get_provider_profile("qwen-oauth")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="qwen3-coder-plus", messages=msgs,
-            provider_profile=profile,
-            max_tokens_param_fn=lambda n: {"max_tokens": n},
-        )
-        # Qwen default: 65536 from profile.default_max_tokens
-        assert kw["max_tokens"] == 65536
-
-    def test_anthropic_max_output_for_claude_on_aggregator(self, transport):
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="anthropic/claude-sonnet-4.6", messages=msgs,
-            is_openrouter=True,
-            anthropic_max_output=64000,
-        )
-        # Set as plain max_tokens (not via fn) because the aggregator proxies to
-        # Anthropic Messages API which requires the field.
-        assert kw["max_tokens"] == 64000
-
     def test_request_overrides_last(self, transport):
         msgs = [{"role": "user", "content": "Hi"}]
         kw = transport.build_kwargs(
-            model="gpt-4o", messages=msgs,
-            request_overrides={"service_tier": "priority"},
+            model="gpt-4o",
+            messages=msgs,
+            request_overrides={"custom_option": "value"},
         )
-        assert kw["service_tier"] == "priority"
+        assert kw["custom_option"] == "value"
 
     def test_fixed_temperature(self, transport):
         """Fixed temperature is now set via ProviderProfile.fixed_temperature."""
         from providers.base import ProviderProfile
+
         msgs = [{"role": "user", "content": "Hi"}]
         kw = transport.build_kwargs(
-            model="gpt-4o", messages=msgs,
+            model="gpt-4o",
+            messages=msgs,
             provider_profile=ProviderProfile(name="_t", fixed_temperature=0.6),
         )
         assert kw["temperature"] == 0.6
@@ -488,120 +237,20 @@ class TestChatCompletionsBuildKwargs:
     def test_omit_temperature(self, transport):
         """Omit temperature is set via ProviderProfile with OMIT_TEMPERATURE sentinel."""
         from providers.base import ProviderProfile, OMIT_TEMPERATURE
+
         msgs = [{"role": "user", "content": "Hi"}]
         kw = transport.build_kwargs(
-            model="gpt-4o", messages=msgs,
-            provider_profile=ProviderProfile(name="_t", fixed_temperature=OMIT_TEMPERATURE),
+            model="gpt-4o",
+            messages=msgs,
+            provider_profile=ProviderProfile(
+                name="_t", fixed_temperature=OMIT_TEMPERATURE
+            ),
         )
         assert "temperature" not in kw
 
 
 class TestChatCompletionsKimi:
     """Regression tests for the Kimi/Moonshot quirks migrated into the transport."""
-
-    def test_kimi_max_tokens_default(self, transport):
-        from providers import get_provider_profile
-        profile = get_provider_profile("kimi-coding")
-        kw = transport.build_kwargs(
-            model="kimi-k2", messages=[{"role": "user", "content": "Hi"}],
-            provider_profile=profile,
-            max_tokens_param_fn=lambda n: {"max_tokens": n},
-        )
-        # Kimi CLI default: 32000 from KimiProfile.default_max_tokens
-        assert kw["max_tokens"] == 32000
-
-    def test_kimi_reasoning_effort_top_level(self, transport):
-        from providers import get_provider_profile
-        profile = get_provider_profile("kimi-coding")
-        kw = transport.build_kwargs(
-            model="kimi-k2", messages=[{"role": "user", "content": "Hi"}],
-            provider_profile=profile,
-            reasoning_config={"effort": "high"},
-            max_tokens_param_fn=lambda n: {"max_tokens": n},
-        )
-        # Kimi requires reasoning_effort as a top-level parameter
-        assert kw["reasoning_effort"] == "high"
-
-    def test_kimi_reasoning_effort_omitted_when_thinking_disabled(self, transport):
-        kw = transport.build_kwargs(
-            model="kimi-k2", messages=[{"role": "user", "content": "Hi"}],
-            is_kimi=True,
-            reasoning_config={"enabled": False},
-            max_tokens_param_fn=lambda n: {"max_tokens": n},
-        )
-        # Mirror Kimi CLI: omit reasoning_effort entirely when thinking off
-        assert "reasoning_effort" not in kw
-
-    def test_kimi_thinking_enabled_extra_body(self, transport):
-        from providers import get_provider_profile
-        profile = get_provider_profile("kimi-coding")
-        kw = transport.build_kwargs(
-            model="kimi-k2", messages=[{"role": "user", "content": "Hi"}],
-            provider_profile=profile,
-            max_tokens_param_fn=lambda n: {"max_tokens": n},
-        )
-        assert kw["extra_body"]["thinking"] == {"type": "enabled"}
-
-    def test_kimi_thinking_disabled_extra_body(self, transport):
-        from providers import get_provider_profile
-        profile = get_provider_profile("kimi-coding")
-        kw = transport.build_kwargs(
-            model="kimi-k2", messages=[{"role": "user", "content": "Hi"}],
-            provider_profile=profile,
-            reasoning_config={"enabled": False},
-            max_tokens_param_fn=lambda n: {"max_tokens": n},
-        )
-        assert kw["extra_body"]["thinking"] == {"type": "disabled"}
-
-    def test_moonshot_tool_schemas_are_sanitized_by_model_name(self, transport):
-        """Aggregator routes (Nous, OpenRouter) hit Moonshot by model name, not base URL."""
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "search",
-                    "description": "Search",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "q": {"description": "query"},  # missing type
-                        },
-                    },
-                },
-            },
-        ]
-        kw = transport.build_kwargs(
-            model="moonshotai/kimi-k2.6",
-            messages=[{"role": "user", "content": "Hi"}],
-            tools=tools,
-            max_tokens_param_fn=lambda n: {"max_tokens": n},
-        )
-        assert kw["tools"][0]["function"]["parameters"]["properties"]["q"]["type"] == "string"
-
-    def test_non_moonshot_tools_are_not_mutated(self, transport):
-        """Other models don't go through the Moonshot sanitizer."""
-        original_params = {
-            "type": "object",
-            "properties": {"q": {"description": "query"}},  # missing type
-        }
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "search",
-                    "description": "Search",
-                    "parameters": original_params,
-                },
-            },
-        ]
-        kw = transport.build_kwargs(
-            model="anthropic/claude-sonnet-4.6",
-            messages=[{"role": "user", "content": "Hi"}],
-            tools=tools,
-            max_tokens_param_fn=lambda n: {"max_tokens": n},
-        )
-        # The parameters dict is passed through untouched (no synthetic type)
-        assert "type" not in kw["tools"][0]["function"]["parameters"]["properties"]["q"]
 
 
 class TestChatCompletionsLmStudioReasoning:
@@ -614,7 +263,8 @@ class TestChatCompletionsLmStudioReasoning:
 
     def test_omits_effort_when_high_not_allowed_toggle(self, transport):
         kw = transport.build_kwargs(
-            model="gpt-oss", messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-oss",
+            messages=[{"role": "user", "content": "Hi"}],
             is_lmstudio=True,
             supports_reasoning=True,
             reasoning_config={"effort": "high"},
@@ -624,7 +274,8 @@ class TestChatCompletionsLmStudioReasoning:
 
     def test_omits_effort_when_high_not_allowed_minimal_low(self, transport):
         kw = transport.build_kwargs(
-            model="gpt-oss", messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-oss",
+            messages=[{"role": "user", "content": "Hi"}],
             is_lmstudio=True,
             supports_reasoning=True,
             reasoning_config={"effort": "high"},
@@ -634,7 +285,8 @@ class TestChatCompletionsLmStudioReasoning:
 
     def test_passes_through_when_effort_allowed(self, transport):
         kw = transport.build_kwargs(
-            model="gpt-oss", messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-oss",
+            messages=[{"role": "user", "content": "Hi"}],
             is_lmstudio=True,
             supports_reasoning=True,
             reasoning_config={"effort": "high"},
@@ -643,11 +295,9 @@ class TestChatCompletionsLmStudioReasoning:
         assert kw["reasoning_effort"] == "high"
 
     def test_passes_through_aliased_on_for_toggle(self, transport):
-        # User has reasoning enabled at the default "medium"; toggle model
-        # publishes ["off","on"] which aliases to {"none","medium"}, so the
-        # default request is honorable and gets sent.
         kw = transport.build_kwargs(
-            model="gpt-oss", messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-oss",
+            messages=[{"role": "user", "content": "Hi"}],
             is_lmstudio=True,
             supports_reasoning=True,
             reasoning_config={"effort": "medium"},
@@ -657,7 +307,8 @@ class TestChatCompletionsLmStudioReasoning:
 
     def test_disabled_keeps_none_when_off_allowed(self, transport):
         kw = transport.build_kwargs(
-            model="gpt-oss", messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-oss",
+            messages=[{"role": "user", "content": "Hi"}],
             is_lmstudio=True,
             supports_reasoning=True,
             reasoning_config={"enabled": False},
@@ -666,10 +317,9 @@ class TestChatCompletionsLmStudioReasoning:
         assert kw["reasoning_effort"] == "none"
 
     def test_no_options_falls_back_to_legacy_behavior(self, transport):
-        # When the probe failed or returned nothing, allowed_options is unknown;
-        # send whatever the user picked rather than blocking the request.
         kw = transport.build_kwargs(
-            model="gpt-oss", messages=[{"role": "user", "content": "Hi"}],
+            model="gpt-oss",
+            messages=[{"role": "user", "content": "Hi"}],
             is_lmstudio=True,
             supports_reasoning=True,
             reasoning_config={"effort": "high"},
@@ -679,7 +329,6 @@ class TestChatCompletionsLmStudioReasoning:
 
 
 class TestChatCompletionsValidate:
-
     def test_none(self, transport):
         assert transport.validate_response(None) is False
 
@@ -692,19 +341,26 @@ class TestChatCompletionsValidate:
         assert transport.validate_response(r) is False
 
     def test_valid(self, transport):
-        r = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="hi"))])
+        r = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="hi"))]
+        )
         assert transport.validate_response(r) is True
 
 
 class TestChatCompletionsNormalize:
-
     def test_text_response(self, transport):
         r = SimpleNamespace(
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(content="Hello", tool_calls=None, reasoning_content=None),
-                finish_reason="stop",
-            )],
-            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="Hello", tool_calls=None, reasoning_content=None
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=10, completion_tokens=5, total_tokens=15
+            ),
         )
         nr = transport.normalize_response(r)
         assert isinstance(nr, NormalizedResponse)
@@ -718,11 +374,17 @@ class TestChatCompletionsNormalize:
             function=SimpleNamespace(name="terminal", arguments='{"command": "ls"}'),
         )
         r = SimpleNamespace(
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(content=None, tool_calls=[tc], reasoning_content=None),
-                finish_reason="tool_calls",
-            )],
-            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None, tool_calls=[tc], reasoning_content=None
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=10, completion_tokens=20, total_tokens=30
+            ),
         )
         nr = transport.normalize_response(r)
         assert len(nr.tool_calls) == 1
@@ -740,10 +402,14 @@ class TestChatCompletionsNormalize:
             extra_content={"google": {"thought_signature": "SIG_ABC123"}},
         )
         r = SimpleNamespace(
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(content=None, tool_calls=[tc], reasoning_content=None),
-                finish_reason="tool_calls",
-            )],
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None, tool_calls=[tc], reasoning_content=None
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
             usage=None,
         )
         nr = transport.normalize_response(r)
@@ -756,14 +422,17 @@ class TestChatCompletionsNormalize:
         Don't merge them — the thinking-prefill retry check reads each field
         separately."""
         r = SimpleNamespace(
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(
-                    content=None, tool_calls=None,
-                    reasoning="summary text",
-                    reasoning_content="detailed scratchpad",
-                ),
-                finish_reason="stop",
-            )],
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None,
+                        tool_calls=None,
+                        reasoning="summary text",
+                        reasoning_content="detailed scratchpad",
+                    ),
+                    finish_reason="stop",
+                )
+            ],
             usage=None,
         )
         nr = transport.normalize_response(r)
@@ -773,15 +442,17 @@ class TestChatCompletionsNormalize:
     def test_empty_reasoning_content_preserved(self, transport):
         """DeepSeek can require an explicit empty reasoning_content replay field."""
         r = SimpleNamespace(
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(
-                    content=None,
-                    tool_calls=None,
-                    reasoning=None,
-                    reasoning_content="",
-                ),
-                finish_reason="stop",
-            )],
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None,
+                        tool_calls=None,
+                        reasoning=None,
+                        reasoning_content="",
+                    ),
+                    finish_reason="stop",
+                )
+            ],
             usage=None,
         )
         nr = transport.normalize_response(r)
@@ -791,15 +462,17 @@ class TestChatCompletionsNormalize:
     def test_reasoning_content_preserved_from_model_extra(self, transport):
         """OpenAI SDK can expose provider-specific DeepSeek fields via model_extra."""
         r = SimpleNamespace(
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(
-                    content=None,
-                    tool_calls=None,
-                    reasoning=None,
-                    model_extra={"reasoning_content": "model-extra scratchpad"},
-                ),
-                finish_reason="stop",
-            )],
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None,
+                        tool_calls=None,
+                        reasoning=None,
+                        model_extra={"reasoning_content": "model-extra scratchpad"},
+                    ),
+                    finish_reason="stop",
+                )
+            ],
             usage=None,
         )
         nr = transport.normalize_response(r)
@@ -807,7 +480,6 @@ class TestChatCompletionsNormalize:
 
 
 class TestChatCompletionsCacheStats:
-
     def test_no_usage(self, transport):
         r = SimpleNamespace(usage=None)
         assert transport.extract_cache_stats(r) is None

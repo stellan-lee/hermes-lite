@@ -185,63 +185,13 @@ describe('createSlashHandler', () => {
     })
   })
 
-  it('opens the skills hub locally for bare /skills', () => {
+  it('routes /skills to the local slash worker', () => {
     const ctx = buildCtx()
 
     expect(createSlashHandler(ctx)('/skills')).toBe(true)
-    expect(getOverlayState().skillsHub).toBe(true)
-    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
-    expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
-  })
-
-  it('routes /skills install <name> to skills.manage without opening overlay', () => {
-    const ctx = buildCtx()
-
-    expect(createSlashHandler(ctx)('/skills install foo')).toBe(true)
-    expect(getOverlayState().skillsHub).toBe(false)
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('skills.manage', {
-      action: 'install',
-      query: 'foo'
-    })
-  })
-
-  it('routes /skills inspect <name> to skills.manage', () => {
-    const ctx = buildCtx()
-
-    createSlashHandler(ctx)('/skills inspect my-skill')
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('skills.manage', {
-      action: 'inspect',
-      query: 'my-skill'
-    })
-  })
-
-  it('routes /skills search <query> to skills.manage', () => {
-    const ctx = buildCtx()
-
-    createSlashHandler(ctx)('/skills search vibe')
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('skills.manage', {
-      action: 'search',
-      query: 'vibe'
-    })
-  })
-
-  it('routes /skills browse [page] to skills.manage with a numeric page', () => {
-    const ctx = buildCtx()
-
-    createSlashHandler(ctx)('/skills browse 3')
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('skills.manage', {
-      action: 'browse',
-      page: 3
-    })
-  })
-
-  it('delegates non-native /skills subcommands to slash.exec', () => {
-    const ctx = buildCtx()
-
-    createSlashHandler(ctx)('/skills check')
     expect(ctx.gateway.rpc).not.toHaveBeenCalled()
     expect(ctx.gateway.gw.request).toHaveBeenCalledWith('slash.exec', {
-      command: 'skills check',
+      command: 'skills',
       session_id: null
     })
   })
@@ -419,7 +369,6 @@ describe('createSlashHandler', () => {
     ['/reload-mcp', 'reload.mcp', { session_id: null }],
     ['/reload', 'reload.env', {}],
     ['/stop', 'process.stop', {}],
-    ['/fast status', 'config.get', { key: 'fast', session_id: null }],
     ['/busy status', 'config.get', { key: 'busy' }],
     ['/indicator', 'config.get', { key: 'indicator' }]
   ])('routes %s through native RPC (no slash worker)', (command, method, params) => {

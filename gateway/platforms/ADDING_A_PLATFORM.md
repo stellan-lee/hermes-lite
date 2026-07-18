@@ -42,20 +42,14 @@ status display, gateway setup, and more.
   wizard surfaces proper descriptions, prompts, password flags, and URLs.
 
 **Subclassing for platform-specific UX.** When a platform has a hard
-time-window constraint that the base adapter can't anticipate (LINE's
-60s single-use reply token, WhatsApp's 24h session window, etc.), an
+time-window constraint that the base adapter cannot anticipate, an
 adapter can override `_keep_typing` to layer a mid-flight bubble at a
 threshold without expanding the kwarg surface. Always
 `await super()._keep_typing(...)` so the typing heartbeat keeps running,
-and tear down your side task in `finally`. See `plugins/platforms/line/`
-for the full pattern (Template Buttons postback at 45s, `RequestCache`
-state machine, `interrupt_session_activity` override for `/stop`
-orphans) and the developer-guide page for the prose walkthrough.
+and tear down your side task in `finally`.
 
-See `plugins/platforms/irc/`, `plugins/platforms/teams/`, and
-`plugins/platforms/google_chat/` for complete working examples, and
-https://marlow-agent.nousresearch.com/docs/developer-guide/adding-platform-adapters for the full
-plugin guide with code examples and hook documentation.
+See the retained adapters in this directory and the platform plugins for
+complete working examples.
 
 ---
 
@@ -138,7 +132,7 @@ if your_token:
 ```
 
 Update `get_connected_platforms()` if your platform doesn't use token/api_key
-(e.g., WhatsApp uses `enabled` flag, Signal uses `extra` dict).
+(for example, one platform may use an `enabled` flag while another uses `extra`).
 
 ---
 
@@ -277,7 +271,7 @@ If your platform can't enumerate chats (most can't), add it to the
 session-based discovery list:
 
 ```python
-for plat_name in ("telegram", "whatsapp", "signal", "your_platform"):
+for plat_name in ("telegram", "discord", "slack", "your_platform"):
 ```
 
 ---
@@ -368,7 +362,7 @@ After implementing everything, verify with:
 python -m pytest tests/ -q
 
 # Grep for your platform name to find any missed integration points
-grep -r "telegram\|discord\|whatsapp\|slack" gateway/ tools/ agent/ cron/ marlow_cli/ toolsets.py \
+grep -r "telegram\|discord\|slack\|feishu" gateway/ tools/ agent/ cron/ marlow_cli/ toolsets.py \
   --include="*.py" -l | sort -u
 # Check each file in the output — if it mentions other platforms but not yours, you missed it
 ```

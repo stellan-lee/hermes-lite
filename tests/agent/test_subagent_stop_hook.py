@@ -61,7 +61,6 @@ def _stub_child_builder(monkeypatch):
     def _fake_build_child(task_index, **kwargs):
         child = MagicMock()
         child._delegate_saved_tool_names = []
-        child._credential_pool = None
         return child
 
     monkeypatch.setattr(

@@ -2,11 +2,7 @@
 """
 Browser Tool Module
 
-This module provides browser automation tools using agent-browser CLI.  It
-supports multiple backends — **Browser Use** (cloud, default for Nous
-subscribers), **Browserbase** (cloud, direct credentials), and **local
-Chromium** — with identical agent-facing behaviour.  The backend is
-auto-detected from config and available credentials.
+This module provides local Chromium automation using agent-browser CLI.
 
 The tool uses agent-browser's accessibility tree (ariaSnapshot) for text-based
 page representation, making it ideal for LLM agents without vision capabilities.
@@ -17,24 +13,11 @@ Features:
   ``agent-browser install`` (downloads Chromium) or
   ``agent-browser install --with-deps`` (also installs system libraries for
   Debian/Ubuntu/Docker).
-- **Cloud mode**: Browserbase or Browser Use cloud execution when configured.
 - Session isolation per task ID
 - Text-based page snapshots using accessibility tree
 - Element interaction via ref selectors (@e1, @e2, etc.)
 - Task-aware content extraction using LLM summarization
 - Automatic cleanup of browser sessions
-
-Environment Variables:
-- BROWSERBASE_API_KEY: API key for direct Browserbase cloud mode
-- BROWSERBASE_PROJECT_ID: Project ID for direct Browserbase cloud mode
-- BROWSER_USE_API_KEY: API key for direct Browser Use cloud mode
-- BROWSERBASE_PROXIES: Enable/disable residential proxies (default: "true")
-- BROWSERBASE_ADVANCED_STEALTH: Enable advanced stealth mode with custom Chromium,
-  requires Scale Plan (default: "false")
-- BROWSERBASE_KEEP_ALIVE: Enable keepAlive for session reconnection after disconnects,
-  requires paid plan (default: "true")
-- BROWSERBASE_SESSION_TIMEOUT: Custom session timeout in seconds (max 21600 = 6h).
-  Set to extend beyond project default. Common values: 600 (10min), 1800 (30min) (default: none)
 
 Usage:
     from tools.browser_tool import browser_navigate, browser_snapshot, browser_click
@@ -66,7 +49,6 @@ from typing import Dict, Any, Optional, List, Tuple, Union
 from pathlib import Path
 from agent.auxiliary_client import call_llm
 from marlow_constants import get_marlow_home
-from utils import is_truthy_value
 from marlow_cli.config import cfg_get
 
 try:
@@ -74,65 +56,12 @@ try:
 except Exception:
     check_website_access = lambda url: None  # noqa: E731 — fail-open if policy module unavailable
 
-try:
-    from tools.url_safety import (
-        is_safe_url as _is_safe_url,
-        is_always_blocked_url as _is_always_blocked_url,
-    )
-except Exception:
-    _is_safe_url = lambda url: False  # noqa: E731 — fail-closed: block all if safety module unavailable
-    _is_always_blocked_url = lambda url: True  # noqa: E731 — fail-closed on the floor too
-# Browser-provider ABC + registry — PR #25214 moved the per-vendor providers
-# (Browserbase / Browser Use / Firecrawl) out of ``tools/browser_providers/``
-# and into ``plugins/browser/<vendor>/``. The dispatcher consults the
-# registry; the legacy class names are re-exported below as backward-compat
-# shims for callers that import them from this module.
-from agent.browser_provider import BrowserProvider as CloudBrowserProvider  # noqa: F401  (legacy alias)
-from agent.browser_registry import (  # noqa: F401  (test-patchable surface)
-    get_provider as _registry_get_browser_provider,
-)
-# Cloud browser providers ship as optional plugins under
-# plugins/browser/<vendor>/. Guard each import so a missing or removed
-# provider plugin degrades gracefully — the name resolves to ``None`` and is
-# simply omitted from ``_PROVIDER_REGISTRY`` below — instead of breaking the
-# import of the whole browser tool. (firecrawl was dropped in the lite build;
-# selecting ``browser.cloud_provider: firecrawl`` now yields a clear
-# "not registered" path rather than an ImportError.)
-try:
-    from plugins.browser.browserbase.provider import (  # noqa: F401  (legacy import surface)
-        BrowserbaseBrowserProvider as BrowserbaseProvider,
-    )
-except ImportError:
-    BrowserbaseProvider = None  # type: ignore[assignment,misc]
-try:
-    from plugins.browser.browser_use.provider import (  # noqa: F401
-        BrowserUseBrowserProvider as BrowserUseProvider,
-    )
-except ImportError:
-    BrowserUseProvider = None  # type: ignore[assignment,misc]
-try:
-    from plugins.browser.firecrawl.provider import (  # noqa: F401
-        FirecrawlBrowserProvider as FirecrawlProvider,
-    )
-except ImportError:
-    FirecrawlProvider = None  # type: ignore[assignment,misc]
-from tools.tool_backend_helpers import normalize_browser_cloud_provider
-# Camofox local anti-detection browser backend (optional).
-# When CAMOFOX_URL is set, all browser operations route through the
-# camofox REST API instead of the agent-browser CLI.
-try:
-    from tools.browser_camofox import is_camofox_mode as _is_camofox_mode
-except ImportError:
-    _is_camofox_mode = lambda: False  # noqa: E731
-
 logger = logging.getLogger(__name__)
 
 # Standard PATH entries for environments with minimal PATH (e.g. systemd services).
-# Includes Android/Termux and macOS Homebrew locations needed for agent-browser,
-# npx, node, and Android's glibc runner (grun).
+# Includes macOS Homebrew and standard Unix locations needed for agent-browser,
+# npx, and node.
 _SANE_PATH_DIRS = (
-    "/data/data/com.termux/files/usr/bin",
-    "/data/data/com.termux/files/usr/sbin",
     "/opt/homebrew/bin",
     "/opt/homebrew/sbin",
     "/usr/local/sbin",
@@ -302,9 +231,8 @@ def _get_cdp_override() -> str:
     1. ``BROWSER_CDP_URL`` env var (live override from ``/browser connect``)
     2. ``browser.cdp_url`` in config.yaml (persistent config)
 
-    When either is set, we skip both Browserbase and the local headless
-    launcher and connect directly to the supplied Chrome DevTools Protocol
-    endpoint.
+    When either is set, Marlow skips its local launcher and connects directly
+    to the supplied Chrome DevTools Protocol endpoint.
     """
     env_override = os.environ.get("BROWSER_CDP_URL", "").strip()
     if env_override:
@@ -368,25 +296,13 @@ def _ensure_cdp_supervisor(task_id: str) -> None:
     ``browser_navigate`` / ``/browser connect`` without worrying about
     double-attach.
 
-    Resolves the CDP URL in this order:
-      1. ``BROWSER_CDP_URL`` / ``browser.cdp_url`` — covers ``/browser connect``
-         and config-set overrides.
-      2. ``_active_sessions[task_id]["cdp_url"]`` — covers Browserbase + any
-         other cloud provider whose ``create_session`` returns a raw CDP URL.
+    Resolves the CDP URL from ``BROWSER_CDP_URL`` or ``browser.cdp_url``.
 
     Swallows all errors — failing to attach the supervisor must not break
     the browser session itself.  The agent simply won't see
     ``pending_dialogs`` / ``frame_tree`` fields in snapshots.
     """
     cdp_url = _get_cdp_override()
-    if not cdp_url:
-        # Fallback: active session may carry a per-session CDP URL from a
-        # cloud provider (Browserbase sets this).
-        with _cleanup_lock:
-            session_info = _active_sessions.get(task_id, {})
-        maybe = str(session_info.get("cdp_url") or "")
-        if maybe:
-            cdp_url = _resolve_cdp_override(maybe)
     if not cdp_url:
         return
     try:
@@ -417,244 +333,28 @@ def _stop_cdp_supervisor(task_id: str) -> None:
         logger.debug("CDP supervisor stop for task=%s failed (non-fatal): %s", task_id, exc)
 
 
-# ============================================================================
-# Cloud Provider Registry
-# ============================================================================
-#
-# Per-vendor browser providers (Browserbase / Browser Use / Firecrawl) live as
-# plugins under ``plugins/browser/<vendor>/`` and self-register through
-# :mod:`agent.browser_registry` at plugin-discovery time. The legacy
-# class-name registry below is preserved as a backward-compat shim so test
-# fixtures that ``monkeypatch.setattr(browser_tool, "_PROVIDER_REGISTRY", ...)``
-# keep working — but ``_get_cloud_provider()`` now consults
-# :mod:`agent.browser_registry` for the actual lookup.
-#
-# When the test patches ``_PROVIDER_REGISTRY``, we honour it (so the cache
-# unit tests still drive the function); otherwise the registry-backed path
-# wins. This keeps the test surface stable while letting third-party
-# plugins drop in under ``~/.marlow/plugins/browser/<vendor>/``.
-
-# Only register providers whose plugin actually imported (see guarded imports
-# above). A provider whose plugin is absent is left out entirely, so lookups
-# return None and resolution falls through to the registry / a clear error.
-_PROVIDER_REGISTRY: Dict[str, type] = {
-    name: cls
-    for name, cls in (
-        ("browserbase", BrowserbaseProvider),
-        ("browser-use", BrowserUseProvider),
-        ("firecrawl", FirecrawlProvider),
-    )
-    if cls is not None
-}
-# Frozen copy of the import-time _PROVIDER_REGISTRY, used by
-# ``_is_legacy_provider_registry_overridden`` to detect test-time
-# monkeypatching. NEVER mutate this dict.
-_DEFAULT_PROVIDER_REGISTRY: Dict[str, type] = dict(_PROVIDER_REGISTRY)
-
-_cached_cloud_provider: Optional[CloudBrowserProvider] = None
-_cloud_provider_resolved = False
-_allow_private_urls_resolved = False
-_cached_allow_private_urls: Optional[bool] = None
 _cached_agent_browser: Optional[str] = None
 _agent_browser_resolved = False
 
-# Lightpanda engine support — cached like _get_cloud_provider().
+# Lightpanda engine support.
 # agent-browser v0.25.3+ supports ``--engine lightpanda`` natively.
 _cached_browser_engine: Optional[str] = None
 _browser_engine_resolved = False
 
 
-def _is_legacy_provider_registry_overridden() -> bool:
-    """Return True when a test has patched ``_PROVIDER_REGISTRY`` to a custom value.
-
-    Detected by spotting any registered class that *isn't* the canonical
-    plugin-backed class for that name. Tests that
-    ``monkeypatch.setattr(browser_tool, "_PROVIDER_REGISTRY", ...)`` install
-    custom factories (`exploding_factory`, `lambda: fake_provider`, etc.);
-    those entries fail the canonical-class identity check below.
-
-    Note: a future maintainer adding a 4th built-in provider only needs to
-    extend ``_DEFAULT_PROVIDER_REGISTRY`` below — they do NOT need to update
-    a hardcoded set of keys here. The detection just compares each registered
-    value against the corresponding canonical class.
-    """
-    try:
-        for key, default_cls in _DEFAULT_PROVIDER_REGISTRY.items():
-            if _PROVIDER_REGISTRY.get(key) is not default_cls:
-                return True
-        # Extra keys not in the default registry → also an override.
-        return len(_PROVIDER_REGISTRY) != len(_DEFAULT_PROVIDER_REGISTRY)
-    except Exception:
-        return False
-
-
-def _ensure_browser_plugins_loaded() -> None:
-    """Idempotently trigger plugin discovery so the browser registry is populated.
-
-    Normally `model_tools` is imported early in any session and that
-    triggers `discover_plugins()` as a side effect. But `_get_cloud_provider`
-    can be called from contexts that haven't gone through `model_tools` —
-    standalone scripts, certain unit-test paths, the parity-sweep harness.
-    Make discovery idempotent and side-effect-only here so users always
-    see registered plugins regardless of import order. Cheap: subsequent
-    calls early-return inside `_ensure_plugins_discovered`.
-    """
-    try:
-        from marlow_cli.plugins import _ensure_plugins_discovered
-
-        _ensure_plugins_discovered()
-    except Exception as exc:
-        logger.debug("Browser plugin discovery failed (non-fatal): %s", exc)
-
-
-def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
-    """Return the configured cloud browser provider, or None for local mode.
-
-    Reads ``config["browser"]["cloud_provider"]`` once and caches the result
-    for the process lifetime. An explicit ``local`` provider disables cloud
-    fallback. If unset, fall back to Browser Use (managed Nous gateway or
-    direct API key) and then Browserbase (direct credentials only) — the
-    historic auto-detect order, now expressed as the
-    :data:`agent.browser_registry._LEGACY_PREFERENCE` walk.
-
-    Selection routes through :mod:`agent.browser_registry` so third-party
-    browser plugins (``~/.marlow/plugins/browser/<vendor>/``) participate
-    in explicit-config resolution. Test fixtures that override
-    ``_PROVIDER_REGISTRY`` or ``BrowserUseProvider`` / ``BrowserbaseProvider``
-    on this module still drive the function — see
-    ``_is_legacy_provider_registry_overridden``.
-    """
-    global _cached_cloud_provider, _cloud_provider_resolved
-    if _cloud_provider_resolved:
-        return _cached_cloud_provider
-
-    resolved: Optional[CloudBrowserProvider] = None
-    try:
-        from marlow_cli.config import read_raw_config
-        cfg = read_raw_config()
-        browser_cfg = cfg.get("browser", {})
-        provider_key = None
-        if isinstance(browser_cfg, dict) and "cloud_provider" in browser_cfg:
-            provider_key = normalize_browser_cloud_provider(
-                browser_cfg.get("cloud_provider")
-            )
-            if provider_key == "local":
-                _cached_cloud_provider = None
-                _cloud_provider_resolved = True
-                return None
-        if provider_key:
-            try:
-                if _is_legacy_provider_registry_overridden():
-                    # Test fixture path: honour the patched dict so the
-                    # cache-policy unit tests keep working.
-                    factory = _PROVIDER_REGISTRY.get(provider_key)
-                    if factory is not None:
-                        resolved = factory()
-                else:
-                    # Ensure plugins are discovered so the registry is
-                    # populated. Idempotent — cheap on subsequent calls.
-                    _ensure_browser_plugins_loaded()
-                    resolved = _registry_get_browser_provider(provider_key)
-                    if resolved is None:
-                        # Explicit config name unknown to the registry —
-                        # might be a typo, an uninstalled plugin, or a
-                        # registry-population failure. Warn the user
-                        # (legacy code would have surfaced a typed
-                        # credentials error via direct class instantiation;
-                        # post-migration we surface this WARNING instead).
-                        logger.warning(
-                            "browser.cloud_provider=%r is not a registered "
-                            "browser plugin; falling back to auto-detect "
-                            "(install the corresponding plugin or fix the "
-                            "config key spelling).",
-                            provider_key,
-                        )
-            except Exception:
-                logger.warning(
-                    "Failed to instantiate explicit cloud_provider %r; will retry on next call",
-                    provider_key,
-                    exc_info=True,
-                )
-                return None
-    except Exception as e:
-        # Config file may be temporarily unreadable; still try auto-detect so
-        # env-based / managed-gateway credentials can resolve. Don't pin cache.
-        logger.debug("Could not read cloud_provider from config: %s", e)
-
-    if resolved is None:
-        # Auto-detect path: Browser Use first (managed Nous gateway or
-        # direct API key), then Browserbase (direct credentials). Uses
-        # the legacy class names imported at the top of this module so
-        # tests that ``monkeypatch.setattr(browser_tool, "BrowserUseProvider", ...)``
-        # keep driving this branch deterministically. Third-party browser
-        # plugins are intentionally NOT reachable from auto-detect — they
-        # participate only via explicit ``browser.cloud_provider: <name>``,
-        # mirroring the firecrawl gate documented on
-        # :data:`agent.browser_registry._LEGACY_PREFERENCE`.
-        try:
-            if BrowserUseProvider is not None:
-                fallback_provider = BrowserUseProvider()
-                if fallback_provider.is_configured():
-                    resolved = fallback_provider
-            if resolved is None and BrowserbaseProvider is not None:
-                fallback_provider = BrowserbaseProvider()
-                if fallback_provider.is_configured():
-                    resolved = fallback_provider
-        except Exception:  # pragma: no cover - defensive: never poison cache
-            logger.debug("Cloud provider auto-detect failed", exc_info=True)
-            return None
-
-    if resolved is None:
-        # Transient None — credentials may self-heal. Don't poison the cache.
-        return None
-
-    _cached_cloud_provider = resolved
-    _cloud_provider_resolved = True
-    return _cached_cloud_provider
-
-
-from marlow_constants import is_termux as _is_termux_environment
-
-
 def _browser_install_hint() -> str:
-    if _is_termux_environment():
-        return "npm install -g agent-browser && agent-browser install"
     return "npm install -g agent-browser && agent-browser install --with-deps"
 
 
-def _requires_real_termux_browser_install(browser_cmd: str) -> bool:
-    return _is_termux_environment() and _is_local_mode() and browser_cmd.strip() == "npx agent-browser"
 
 
-def _termux_browser_install_error() -> str:
-    return (
-        "Local browser automation on Termux cannot rely on the bare npx fallback. "
-        f"Install agent-browser explicitly first: {_browser_install_hint()}"
-    )
 
 
 def _is_local_mode() -> bool:
-    """Return True when the browser tool will use a local browser backend."""
-    if _get_cdp_override():
-        return False
-    return _get_cloud_provider() is None
+    """Return True when Marlow launches its own local browser."""
+    return not bool(_get_cdp_override())
 
 
-def _is_local_backend() -> bool:
-    """Return True when the browser runs locally (no cloud provider).
-
-    SSRF protection is only meaningful for cloud backends (Browserbase,
-    BrowserUse) where the agent could reach internal resources on a remote
-    machine.  For local backends — Camofox, or the built-in headless
-    Chromium without a cloud provider — the user already has full terminal
-    and network access on the same machine, so the check adds no security
-    value.
-    """
-    return _is_camofox_mode() or _get_cloud_provider() is None
-
-
-_auto_local_for_private_urls_resolved = False
-_cached_auto_local_for_private_urls: bool = True
 
 
 def _get_browser_engine() -> str:
@@ -708,12 +408,10 @@ def _get_browser_engine() -> str:
 def _should_inject_engine(engine: str) -> bool:
     """Return True when the engine flag should be added to agent-browser commands.
 
-    Only inject ``--engine`` for non-cloud, non-camofox local sessions where
-    the engine is explicitly set (not ``auto``).
+    Only inject ``--engine`` for locally launched sessions where the engine is
+    explicitly set (not ``auto``).
     """
     if engine == "auto":
-        return False
-    if _is_camofox_mode():
         return False
     return _is_local_mode()
 
@@ -867,11 +565,7 @@ def _run_chrome_fallback_command(
             )
         return {"success": False, "error": hint}
 
-    # On Windows npx is npx.cmd — use shutil.which so CreateProcessW can
-    # execute the batch shim.  shutil.which honours PATHEXT on Windows and
-    # returns the plain executable on POSIX.  If npx isn't on PATH (Termux,
-    # bare container), fall back to the bare name and let Popen raise with
-    # a readable "FileNotFoundError: 'npx'" rather than WinError 193.
+    # Resolve npx when possible and otherwise let Popen report it as missing.
     if browser_cmd == "npx agent-browser":
         _npx_bin = shutil.which("npx") or "npx"
         cmd_prefix = [_npx_bin, "agent-browser"]
@@ -896,45 +590,9 @@ def _run_chrome_fallback_command(
         stdout_fd = os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         stderr_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            # On Windows, launch the child in a new process group so parent
-            # console Ctrl+C doesn't kill it with STATUS_CONTROL_C_EXIT
-            # (0xC000013A = rc 3221225786), AND insulate its stdio + handle
-            # inheritance from the parent.
-            #
-            # Additional Windows hardening beyond CREATE_NEW_PROCESS_GROUP:
-            # * STARTF_USESTDHANDLES + explicit handles → CreateProcess hands
-            #   the child ONLY our three chosen handles (DEVNULL stdin +
-            #   temp-file stdout/stderr). Without this, some parents leak
-            #   console handles that break downstream grandchild spawns — the
-            #   agent-browser Rust binary spawns a detached daemon grandchild,
-            #   and that grandchild's CreateProcess dies silently
-            #   ("Daemon process exited during startup with no error output")
-            #   when inherited parent handles are in a weird state. Observed
-            #   in the Marlow CLI where sys.stdout and sys.stderr both report
-            #   fileno=1 (stderr dup'd onto stdout at the OS level).
-            # * close_fds=True → block inheritance of every other handle.
-            #   (Default on POSIX; must be explicit on Windows for stdio.)
-            _popen_extra: dict = {}
-            if os.name == "nt":
-                # CREATE_NO_WINDOW → don't attach a console (cmd.exe would
-                # otherwise briefly allocate one for the .cmd shim).
-                # Do NOT add CREATE_NEW_PROCESS_GROUP: on Python 3.11 Windows
-                # it interacts with asyncio's ProactorEventLoop such that the
-                # subprocess creation cancels the running loop task, which
-                # surfaces as KeyboardInterrupt in app.run() and tears down
-                # the CLI mid-turn. The agent thread's subprocess spawn
-                # unwound MainThread's prompt_toolkit loop that way — see
-                # diag log: "asyncio.CancelledError → KeyboardInterrupt".
-                _CREATE_NO_WINDOW = 0x08000000
-                _popen_extra["creationflags"] = _CREATE_NO_WINDOW
-                _popen_extra["close_fds"] = True
-                _si = subprocess.STARTUPINFO()
-                _si.dwFlags |= subprocess.STARTF_USESTDHANDLES
-                _popen_extra["startupinfo"] = _si
             proc = subprocess.Popen(
                 full, stdout=stdout_fd, stderr=stderr_fd,
                 stdin=subprocess.DEVNULL, env=browser_env,
-                **_popen_extra,
             )
         finally:
             os.close(stdout_fd)
@@ -990,131 +648,14 @@ def _chrome_fallback_screenshot(
     return _run_chrome_fallback_command(task_id, "screenshot", args, timeout)
 
 
-def _auto_local_for_private_urls() -> bool:
-    """Return whether a cloud-configured install should auto-spawn a local
-    Chromium for LAN/localhost URLs.
-
-    Reads ``browser.auto_local_for_private_urls`` once (default ``True``) and
-    caches it for the process lifetime.  When enabled, ``browser_navigate``
-    routes URLs whose host resolves to a private/loopback/LAN address to a
-    local headless Chromium sidecar even when a cloud provider (Browserbase
-    / Browser-Use / Firecrawl) is configured globally.  Public URLs continue
-    to use the cloud provider in the same conversation.
-    """
-    global _auto_local_for_private_urls_resolved, _cached_auto_local_for_private_urls
-    if _auto_local_for_private_urls_resolved:
-        return _cached_auto_local_for_private_urls
-
-    _auto_local_for_private_urls_resolved = True
-    try:
-        from marlow_cli.config import read_raw_config
-        cfg = read_raw_config()
-        browser_cfg = cfg.get("browser", {})
-        if isinstance(browser_cfg, dict) and "auto_local_for_private_urls" in browser_cfg:
-            _cached_auto_local_for_private_urls = bool(
-                browser_cfg.get("auto_local_for_private_urls")
-            )
-    except Exception as e:
-        logger.debug("Could not read auto_local_for_private_urls from config: %s", e)
-    return _cached_auto_local_for_private_urls
 
 
-def _url_is_private(url: str) -> bool:
-    """Return True when the URL's host resolves to a private/LAN/loopback address.
-
-    Reuses ``tools.url_safety.is_safe_url`` as the oracle — if the SSRF check
-    would reject the URL, we treat it as "private" for routing purposes.  DNS
-    resolution failures are treated as NOT private (fall through to whatever
-    backend is configured, which will surface the DNS error naturally).
-    """
-    try:
-        # is_safe_url returns False for private/loopback/link-local/CGNAT AND
-        # for DNS failures.  We only want the private-network case here, so
-        # we parse + check the host shape as a DNS-failure sieve first.
-        from urllib.parse import urlparse
-        import ipaddress
-        import socket
-        parsed = urlparse(url)
-        hostname = (parsed.hostname or "").strip().lower().rstrip(".")
-        if not hostname:
-            return False
-        # Literal IP → check directly
-        try:
-            ip = ipaddress.ip_address(hostname)
-            return (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                # 172.16.0.0/12: only covered by ip.is_private on Python
-                # ≥3.11 (bpo-40791).  Explicit check keeps 3.10 runtimes
-                # routing these to the local sidecar correctly.
-                or ip in ipaddress.ip_network("172.16.0.0/12")
-                or ip in ipaddress.ip_network("100.64.0.0/10")
-            )
-        except ValueError:
-            pass
-        # Hostname — must resolve to confirm it's private (bare "localhost"
-        # resolves to 127.0.0.1 via /etc/hosts).  Short-circuit on obvious
-        # names to avoid a DNS hop.
-        if hostname in {"localhost",} or hostname.endswith(".localhost"):
-            return True
-        if hostname.endswith(".local") or hostname.endswith(".lan") or hostname.endswith(".internal"):
-            return True
-        try:
-            addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        except socket.gaierror:
-            return False  # DNS fail → not private, let the normal path fail
-        for _, _, _, _, sockaddr in addr_info:
-            try:
-                ip = ipaddress.ip_address(sockaddr[0])
-            except ValueError:
-                continue
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip in ipaddress.ip_network("100.64.0.0/10")
-            ):
-                return True
-        return False
-    except Exception as exc:
-        logger.debug("URL-privacy check failed for %s: %s", url, exc)
-        return False
 
 
 def _navigation_session_key(task_id: str, url: str) -> str:
-    """Pick the session key that should handle ``url`` for ``task_id``.
-
-    Returns the bare task_id unless ALL of these are true:
-      1. A cloud provider is configured (``_get_cloud_provider()`` is not None).
-      2. Auto-local routing is enabled (``browser.auto_local_for_private_urls``,
-         default True).
-      3. The URL resolves to a private/LAN/loopback address.
-      4. A CDP override is not active (that path owns the whole session).
-      5. Camofox mode is not active (Camofox is already local-only).
-
-    When all are true, returns ``f"{task_id}::local"`` so the hybrid-routing
-    path spawns a local Chromium sidecar while the cloud session (if any)
-    continues to serve public URLs.
-    """
-    if task_id is None:
-        task_id = "default"
-    if _get_cdp_override():
-        return task_id
-    if _is_camofox_mode():
-        return task_id
-    if _get_cloud_provider() is None:
-        return task_id
-    if not _auto_local_for_private_urls():
-        return task_id
-    if not _url_is_private(url):
-        return task_id
-    return f"{task_id}{_LOCAL_SUFFIX}"
-
-
-def _is_local_sidecar_key(session_key: str) -> bool:
-    """Return True when ``session_key`` is a hybrid-routing local sidecar."""
-    return session_key.endswith(_LOCAL_SUFFIX)
+    """Return the single retained session key for a task."""
+    del url
+    return task_id or "default"
 
 
 def _last_session_key(task_id: str) -> str:
@@ -1130,29 +671,6 @@ def _last_session_key(task_id: str) -> str:
     return _last_active_session_key.get(task_id, task_id)
 
 
-def _allow_private_urls() -> bool:
-    """Return whether the browser is allowed to navigate to private/internal addresses.
-
-    Reads ``config["browser"]["allow_private_urls"]`` once and caches the result
-    for the process lifetime.  Defaults to ``False`` (SSRF protection active).
-    """
-    global _cached_allow_private_urls, _allow_private_urls_resolved
-    if _allow_private_urls_resolved:
-        return _cached_allow_private_urls
-
-    _allow_private_urls_resolved = True
-    _cached_allow_private_urls = False  # safe default
-    try:
-        from marlow_cli.config import read_raw_config
-        cfg = read_raw_config()
-        browser_cfg = cfg.get("browser", {})
-        if isinstance(browser_cfg, dict):
-            _cached_allow_private_urls = is_truthy_value(
-                browser_cfg.get("allow_private_urls"), default=False
-            )
-    except Exception as e:
-        logger.debug("Could not read allow_private_urls from config: %s", e)
-    return _cached_allow_private_urls
 
 
 def _socket_safe_tmpdir() -> str:
@@ -1172,25 +690,10 @@ def _socket_safe_tmpdir() -> str:
     return tempfile.gettempdir()
 
 
-# Track active sessions per "session key".
-#
-# A "session key" is either the bare task_id (cloud/default path) OR a composite
-# like f"{task_id}::local" when the hybrid-routing feature spawns a local sidecar
-# browser for a LAN/localhost URL while a cloud provider is configured globally.
-# Both forms flow through the same _active_sessions / _run_browser_command /
-# cleanup_browser code paths — the key is opaque to those internals.
-#
-# Stores: session_name (always), bb_session_id + cdp_url (cloud mode only)
-_active_sessions: Dict[str, Dict[str, str]] = {}  # session_key -> {session_name, ...}
-_recording_sessions: set = set()  # session_keys with active recordings
-
-# Tracks the most recent session_key used per task_id. Set by browser_navigate()
-# after it chooses a backend for a URL; read by every non-nav browser tool
-# (snapshot/click/fill/eval/...) so they target the session that served the last
-# navigation.  Without this, a task that navigated to localhost on the local
-# sidecar would fall back to the cloud session on its next snapshot call.
-_last_active_session_key: Dict[str, str] = {}  # task_id -> session_key
-_LOCAL_SUFFIX = "::local"
+# Track local or attached-CDP sessions per task ID.
+_active_sessions: Dict[str, Dict[str, str]] = {}
+_recording_sessions: set = set()
+_last_active_session_key: Dict[str, str] = {}
 
 # Flag to track if cleanup has been done
 _cleanup_done = False
@@ -1271,8 +774,7 @@ def _cleanup_inactive_browser_sessions():
     Clean up browser sessions that have been inactive for longer than the timeout.
 
     This function is called periodically by the background cleanup thread to
-    automatically close sessions that haven't been used recently, preventing
-    orphaned sessions (local or Browserbase) from accumulating.
+    automatically close sessions that haven't been used recently.
     """
     current_time = time.time()
     sessions_to_cleanup = []
@@ -1342,9 +844,6 @@ def _reap_orphaned_browser_sessions():
     socket_dirs = glob.glob(pattern)
     # Also pick up CDP sessions
     socket_dirs += glob.glob(os.path.join(tmpdir, "agent-browser-cdp_*"))
-    # Also pick up cloud-provider sessions (browser-use/browserbase/firecrawl)
-    socket_dirs += glob.glob(os.path.join(tmpdir, "agent-browser-marlow_*"))
-
     if not socket_dirs:
         return
 
@@ -1370,8 +869,6 @@ def _reap_orphaned_browser_sessions():
         if os.path.isfile(owner_pid_file):
             try:
                 owner_pid = int(Path(owner_pid_file).read_text(encoding="utf-8").strip())
-                # ``os.kill(pid, 0)`` is NOT a no-op on Windows (bpo-14484).
-                # Use the cross-platform existence check.
                 from gateway.status import _pid_exists
                 owner_alive = _pid_exists(owner_pid)
             except (ValueError, OSError):
@@ -1400,8 +897,7 @@ def _reap_orphaned_browser_sessions():
             shutil.rmtree(socket_dir, ignore_errors=True)
             continue
 
-        # Check if the daemon is still alive. ``os.kill(pid, 0)`` on Windows
-        # is NOT a no-op — use the handle-based existence check.
+        # Check if the daemon is still alive.
         from gateway.status import _pid_exists
         if not _pid_exists(daemon_pid):
             shutil.rmtree(socket_dir, ignore_errors=True)
@@ -1652,7 +1148,6 @@ def _create_local_session(task_id: str) -> Dict[str, str]:
                 session_name, task_id)
     return {
         "session_name": session_name,
-        "bb_session_id": None,
         "cdp_url": None,
         "features": {"local": True},
     }
@@ -1666,108 +1161,37 @@ def _create_cdp_session(task_id: str, cdp_url: str) -> Dict[str, str]:
                 session_name, cdp_url, task_id)
     return {
         "session_name": session_name,
-        "bb_session_id": None,
         "cdp_url": cdp_url,
         "features": {"cdp_override": True},
     }
 
 
 def _get_session_info(task_id: Optional[str] = None) -> Dict[str, str]:
-    """
-    Get or create session info for the given session key.
-
-    In cloud mode, creates a Browserbase session with proxies enabled.
-    In local mode, generates a session name for agent-browser --session.
-    Also starts the inactivity cleanup thread and updates activity tracking.
-    Thread-safe: multiple subagents can call this concurrently.
-
-    Args:
-        task_id: Session key.  Normally the task_id as-is, but may carry the
-            ``::local`` suffix for the hybrid-routing local sidecar — in that
-            case the cloud provider is skipped even when one is configured,
-            and a local Chromium session is created instead.
-
-    Returns:
-        Dict with session_name (always), bb_session_id + cdp_url (cloud only)
-    """
-    if task_id is None:
-        task_id = "default"
-
-    # Start the cleanup thread if not running (handles inactivity timeouts)
+    """Get or create a local or user-supplied CDP browser session."""
+    task_id = task_id or "default"
     _start_browser_cleanup_thread()
-
-    # Update activity timestamp for this session
     _update_session_activity(task_id)
 
     with _cleanup_lock:
-        # Check if we already have a session for this task
-        if task_id in _active_sessions:
-            return _active_sessions[task_id]
+        existing = _active_sessions.get(task_id)
+        if existing is not None:
+            return existing
 
-    # Hybrid routing: session keys ending with ``::local`` force a local
-    # Chromium regardless of the globally-configured cloud provider.  Public
-    # URLs in the same conversation continue to use the cloud session under
-    # the bare task_id key.
-    force_local = _is_local_sidecar_key(task_id)
-
-    # Create session outside the lock (network call in cloud mode)
     cdp_override = _get_cdp_override()
-    if cdp_override and not force_local:
-        session_info = _create_cdp_session(task_id, cdp_override)
-    elif force_local:
-        session_info = _create_local_session(task_id)
-    else:
-        provider = _get_cloud_provider()
-        if provider is None:
-            session_info = _create_local_session(task_id)
-        else:
-            try:
-                session_info = provider.create_session(task_id)
-                # Validate cloud provider returned a usable session
-                if not session_info or not isinstance(session_info, dict):
-                    raise ValueError(f"Cloud provider returned invalid session: {session_info!r}")
-                if session_info.get("cdp_url"):
-                    # Some cloud providers (including Browser-Use v3) return an HTTP
-                    # CDP discovery URL instead of a raw websocket endpoint.
-                    session_info = dict(session_info)
-                    session_info["cdp_url"] = _resolve_cdp_override(str(session_info["cdp_url"]))
-            except Exception as e:
-                provider_name = type(provider).__name__
-                logger.warning(
-                    "Cloud provider %s failed (%s); attempting fallback to local "
-                    "Chromium for task %s",
-                    provider_name, e, task_id,
-                    exc_info=True,
-                )
-                try:
-                    session_info = _create_local_session(task_id)
-                except Exception as local_error:
-                    raise RuntimeError(
-                        f"Cloud provider {provider_name} failed ({e}) and local "
-                        f"fallback also failed ({local_error})"
-                    ) from e
-                # Mark session as degraded for observability
-                if isinstance(session_info, dict):
-                    session_info = dict(session_info)
-                    session_info["fallback_from_cloud"] = True
-                    session_info["fallback_reason"] = str(e)
-                    session_info["fallback_provider"] = provider_name
+    session_info = (
+        _create_cdp_session(task_id, cdp_override)
+        if cdp_override
+        else _create_local_session(task_id)
+    )
 
     with _cleanup_lock:
-        # Double-check: another thread may have created a session while we
-        # were doing the network call. Use the existing one to avoid leaking
-        # orphan cloud sessions.
-        if task_id in _active_sessions:
-            return _active_sessions[task_id]
+        existing = _active_sessions.get(task_id)
+        if existing is not None:
+            return existing
         _active_sessions[task_id] = session_info
 
-    # Lazy-start the CDP supervisor now that the session exists (if the
-    # backend surfaces a CDP URL via override or session_info["cdp_url"]).
-    # Idempotent; swallows errors. See _ensure_cdp_supervisor for details.
-    # Skip for local sidecars — they have no CDP URL.
-    if not force_local:
+    if cdp_override:
         _ensure_cdp_supervisor(task_id)
-
     return session_info
 
 
@@ -1808,7 +1232,7 @@ def _find_agent_browser() -> str:
         return which_result
 
     # Build an extended search PATH including Marlow-managed Node, macOS
-    # versioned Homebrew installs, and fallback system dirs like Termux.
+    # versioned Homebrew installs, and fallback system directories.
     extended_path = _merge_browser_path("")
     if extended_path:
         which_result = shutil.which("agent-browser", path=extended_path)
@@ -1818,13 +1242,6 @@ def _find_agent_browser() -> str:
             return which_result
 
     # Check local node_modules/.bin/ (npm install in repo root).
-    # On Windows, npm drops three shims in .bin: an extensionless POSIX shell
-    # script (for Git Bash / WSL), `agent-browser.cmd` (for cmd/PowerShell),
-    # and `agent-browser.ps1` (for PowerShell). CreateProcess (used by Python's
-    # subprocess on Windows) cannot execute the extensionless shim — it raises
-    # WinError 193 "%1 is not a valid Win32 application". We must resolve to the
-    # `.cmd` shim instead. `shutil.which` consults PATHEXT, so we delegate to it
-    # with an explicit path so POSIX hosts still pick the extensionless shim.
     repo_root = Path(__file__).parent.parent
     local_bin_dir = repo_root / "node_modules" / ".bin"
     if local_bin_dir.is_dir():
@@ -1904,7 +1321,7 @@ def _run_browser_command(
     _engine_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Run an agent-browser CLI command using our pre-created Browserbase session.
+    Run an agent-browser CLI command using a local or attached CDP session.
 
     Args:
         task_id: Task identifier to get the right session
@@ -1930,11 +1347,6 @@ def _run_browser_command(
         logger.warning("agent-browser CLI not found: %s", e)
         return {"success": False, "error": str(e)}
 
-    if _requires_real_termux_browser_install(browser_cmd):
-        error = _termux_browser_install_error()
-        logger.warning("browser command blocked on Termux: %s", error)
-        return {"success": False, "error": error}
-
     # Local mode with no Chromium on disk: fail fast with an actionable
     # message instead of hanging for _command_timeout seconds per call.
     # Skip when engine=lightpanda — LP doesn't need Chromium for navigation.
@@ -1958,19 +1370,16 @@ def _run_browser_command(
     if is_interrupted():
         return {"success": False, "error": "Interrupted"}
 
-    # Get session info (creates Browserbase session with proxies if needed)
+    # Get or create the session.
     try:
         session_info = _get_session_info(task_id)
     except Exception as e:
         logger.warning("Failed to create browser session for task=%s: %s", task_id, e)
         return {"success": False, "error": f"Failed to create browser session: {str(e)}"}
 
-    # Build the command with the appropriate backend flag.
-    # Cloud mode: --cdp <websocket_url> connects to Browserbase.
-    # Local mode: --session <name> launches a local headless Chromium.
+    # Build the command for an attached CDP browser or local launch.
     # The rest of the command (--json, command, args) is identical.
     if session_info.get("cdp_url"):
-        # Cloud mode — connect to remote Browserbase browser via CDP
         # IMPORTANT: Do NOT use --session with --cdp. In agent-browser >=0.13,
         # --session creates a local browser instance and silently ignores --cdp.
         backend_args = ["--cdp", session_info["cdp_url"]]
@@ -1978,17 +1387,14 @@ def _run_browser_command(
         # Local mode — launch a headless Chromium instance
         backend_args = ["--session", session_info["session_name"]]
 
-    # Lightpanda engine injection (local mode only, agent-browser v0.25.3+).
-    # Use the resolved session backend rather than global cloud-provider state:
-    # hybrid private-URL routing can create a local sidecar while a cloud
-    # provider remains configured for public URLs.
+    # Lightpanda engine injection (local launch only, agent-browser v0.25.3+).
     engine = _engine_override or _get_browser_engine()
-    if engine != "auto" and not _is_camofox_mode() and not session_info.get("cdp_url"):
+    if engine != "auto" and not session_info.get("cdp_url"):
         backend_args += ["--engine", engine]
 
     # Keep concrete executable paths intact, even when they contain spaces.
     # Only the synthetic npx fallback needs to expand into multiple argv items.
-    # shutil.which resolves npx → npx.cmd on Windows; bare "npx" stays on POSIX.
+    # Resolve npx from PATH when available.
     if browser_cmd == "npx agent-browser":
         _npx_bin = shutil.which("npx") or "npx"
         cmd_prefix = [_npx_bin, "agent-browser"]
@@ -2075,30 +1481,12 @@ def _run_browser_command(
         stdout_fd = os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         stderr_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            # See matching comment at the other Popen site above — on
-            # Windows we put agent-browser in its own process group, force
-            # STARTF_USESTDHANDLES so CreateProcess hands the child ONLY our
-            # three explicit handles (no leaked parent-console handles to
-            # confuse the Rust binary's daemon-spawn), and close_fds=True to
-            # block inheritance of everything else.
-            _popen_extra: dict = {}
-            if os.name == "nt":
-                # See matching block at the other Popen site — CREATE_NO_WINDOW
-                # only, NO CREATE_NEW_PROCESS_GROUP (cancels asyncio loop task
-                # on Python 3.11 Windows → KeyboardInterrupt in CLI MainThread).
-                _CREATE_NO_WINDOW = 0x08000000
-                _popen_extra["creationflags"] = _CREATE_NO_WINDOW
-                _popen_extra["close_fds"] = True
-                _si = subprocess.STARTUPINFO()
-                _si.dwFlags |= subprocess.STARTF_USESTDHANDLES
-                _popen_extra["startupinfo"] = _si
             proc = subprocess.Popen(
                 cmd_parts,
                 stdout=stdout_fd,
                 stderr=stderr_fd,
                 stdin=subprocess.DEVNULL,
                 env=browser_env,
-                **_popen_extra,
             )
         finally:
             os.close(stdout_fd)
@@ -2335,40 +1723,8 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
                      "Secrets must not be sent in URLs.",
         })
 
-    # SSRF protection — block private/internal addresses before navigating.
-    # Skipped for local backends (Camofox, headless Chromium without a cloud
-    # provider) because the agent already has full local network access via
-    # the terminal tool.  Also skipped when hybrid routing will auto-spawn a
-    # local Chromium sidecar for this URL (cloud provider configured +
-    # private URL + ``browser.auto_local_for_private_urls`` enabled) — the
-    # cloud provider never sees the URL in that case.  Can also be opted
-    # out globally via ``browser.allow_private_urls`` in config.
     effective_task_id = task_id or "default"
     nav_session_key = _navigation_session_key(effective_task_id, url)
-    auto_local_this_nav = _is_local_sidecar_key(nav_session_key)
-
-    # Always-blocked floor: cloud metadata / IMDS endpoints are denied
-    # regardless of backend, hybrid routing, or allow_private_urls.
-    # There's no legitimate agent use case for navigating to
-    # 169.254.169.254 / metadata.google.internal / ECS task metadata
-    # via a browser, and routing those to a local Chromium sidecar
-    # on an EC2/GCP/Azure host exfiltrates IAM credentials (#16234).
-    if not _is_local_backend() and _is_always_blocked_url(url):
-        return json.dumps({
-            "success": False,
-            "error": "Blocked: URL targets a cloud metadata endpoint",
-        })
-
-    if (
-        not _is_local_backend()
-        and not auto_local_this_nav
-        and not _allow_private_urls()
-        and not _is_safe_url(url)
-    ):
-        return json.dumps({
-            "success": False,
-            "error": "Blocked: URL targets a private or internal address",
-        })
 
     # Website policy check — block before navigating
     blocked = check_website_access(url)
@@ -2378,20 +1734,6 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
             "error": blocked["message"],
             "blocked_by_policy": {"host": blocked["host"], "rule": blocked["rule"], "source": blocked["source"]},
         })
-
-    # Camofox backend — delegate after safety checks pass
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_navigate
-        return camofox_navigate(url, task_id)
-
-    if auto_local_this_nav:
-        logger.info(
-            "browser_navigate: auto-routing %s to local Chromium sidecar "
-            "(cloud provider %s stays on cloud for public URLs; "
-            "set browser.auto_local_for_private_urls: false to disable)",
-            url,
-            type(_get_cloud_provider()).__name__ if _get_cloud_provider() else "none",
-        )
 
     # Get session info to check if this is a new session
     # (will create one with features logged if not exists)
@@ -2405,49 +1747,13 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
 
     result = _run_browser_command(nav_session_key, "open", [url], timeout=max(_get_command_timeout(), 60))
 
-    # Remember which session served this nav so snapshot/click/fill/...
-    # on the same task_id hit it (critical when hybrid routing has both a
-    # cloud session and a local sidecar alive concurrently).
+    # Remember which session served this navigation.
     _last_active_session_key[effective_task_id] = nav_session_key
 
     if result.get("success"):
         data = result.get("data", {})
         title = data.get("title", "")
         final_url = data.get("url", url)
-
-        # Post-redirect SSRF check — if the browser followed a redirect to a
-        # private/internal address, block the result so the model can't read
-        # internal content via subsequent browser_snapshot calls.
-        # Skipped for local backends (same rationale as the pre-nav check),
-        # and for the hybrid local sidecar (we're already on a local browser
-        # hitting a private URL by design).
-        # Always-blocked floor (cloud metadata / IMDS) is enforced even
-        # when auto_local_this_nav is true — see pre-nav check for
-        # rationale (#16234).
-        if (
-            not _is_local_backend()
-            and final_url
-            and final_url != url
-            and _is_always_blocked_url(final_url)
-        ):
-            _run_browser_command(nav_session_key, "open", ["about:blank"], timeout=10)
-            return json.dumps({
-                "success": False,
-                "error": "Blocked: redirect landed on a cloud metadata endpoint",
-            })
-
-        if (
-            not _is_local_backend()
-            and not auto_local_this_nav
-            and not _allow_private_urls()
-            and final_url and final_url != url and not _is_safe_url(final_url)
-        ):
-            # Navigate away to a blank page to prevent snapshot leaks
-            _run_browser_command(nav_session_key, "open", ["about:blank"], timeout=10)
-            return json.dumps({
-                "success": False,
-                "error": "Blocked: redirect landed on a private/internal address",
-            })
 
         response = {
             "success": True,
@@ -2470,19 +1776,13 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
             response["bot_detection_warning"] = (
                 f"Page title '{title}' suggests bot detection. The site may have blocked this request. "
                 "Options: 1) Try adding delays between actions, 2) Access different pages first, "
-                "3) Enable advanced stealth (BROWSERBASE_ADVANCED_STEALTH=true, requires Scale plan), "
-                "4) Some sites have very aggressive bot detection that may be unavoidable."
+                "3) Some sites have very aggressive bot detection that may be unavoidable."
             )
 
         # Include feature info on first navigation so model knows what's active
         if is_first_nav and "features" in session_info:
             features = session_info["features"]
             active_features = [k for k, v in features.items() if v]
-            if not features.get("proxies"):
-                response["stealth_warning"] = (
-                    "Running WITHOUT residential proxies. Bot detection may be more aggressive. "
-                    "Consider upgrading Browserbase plan for proxy support."
-                )
             response["stealth_features"] = active_features
 
         # Auto-take a compact snapshot so the model can act immediately
@@ -2526,9 +1826,6 @@ def browser_snapshot(
     Returns:
         JSON string with page snapshot
     """
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_snapshot
-        return camofox_snapshot(full, task_id, user_task)
 
     effective_task_id = _last_session_key(task_id or "default")
 
@@ -2590,9 +1887,6 @@ def browser_click(ref: str, task_id: Optional[str] = None) -> str:
     Returns:
         JSON string with click result
     """
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_click
-        return camofox_click(ref, task_id)
 
     effective_task_id = _last_session_key(task_id or "default")
 
@@ -2628,9 +1922,6 @@ def browser_type(ref: str, text: str, task_id: Optional[str] = None) -> str:
     Returns:
         JSON string with type result
     """
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_type
-        return camofox_type(ref, text, task_id)
 
     effective_task_id = _last_session_key(task_id or "default")
 
@@ -2679,14 +1970,6 @@ def browser_scroll(direction: str, task_id: Optional[str] = None) -> str:
     # ~500px is roughly half a viewport of travel.
     _SCROLL_PIXELS = 500
 
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_scroll
-        # Camofox REST API doesn't support pixel args; use repeated calls
-        _SCROLL_REPEATS = 5
-        result = None
-        for _ in range(_SCROLL_REPEATS):
-            result = camofox_scroll(direction, task_id)
-        return result
 
     effective_task_id = _last_session_key(task_id or "default")
 
@@ -2715,9 +1998,6 @@ def browser_back(task_id: Optional[str] = None) -> str:
     Returns:
         JSON string with navigation result
     """
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_back
-        return camofox_back(task_id)
 
     effective_task_id = _last_session_key(task_id or "default")
     result = _run_browser_command(effective_task_id, "back", [])
@@ -2748,9 +2028,6 @@ def browser_press(key: str, task_id: Optional[str] = None) -> str:
     Returns:
         JSON string with key press result
     """
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_press
-        return camofox_press(key, task_id)
 
     effective_task_id = _last_session_key(task_id or "default")
     result = _run_browser_command(effective_task_id, "press", [key])
@@ -2792,9 +2069,6 @@ def browser_console(clear: bool = False, expression: Optional[str] = None, task_
         return _browser_eval(expression, task_id)
 
     # --- Console output mode (original behaviour) ---
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_console
-        return camofox_console(clear, task_id)
 
     effective_task_id = _last_session_key(task_id or "default")
 
@@ -2836,8 +2110,6 @@ def browser_console(clear: bool = False, expression: Optional[str] = None, task_
 
 def _browser_eval(expression: str, task_id: Optional[str] = None) -> str:
     """Evaluate a JavaScript expression in the page context and return the result."""
-    if _is_camofox_mode():
-        return _camofox_eval(expression, task_id)
 
     effective_task_id = _last_session_key(task_id or "default")
 
@@ -2940,38 +2212,6 @@ def _browser_eval(expression: str, task_id: Optional[str] = None) -> str:
     return json.dumps(_copy_fallback_warning(response, result), ensure_ascii=False, default=str)
 
 
-def _camofox_eval(expression: str, task_id: Optional[str] = None) -> str:
-    """Evaluate JS via Camofox's /tabs/{tab_id}/eval endpoint (if available)."""
-    from tools.browser_camofox import _ensure_tab, _post
-    try:
-        tab_info = _ensure_tab(task_id or "default")
-        tab_id = tab_info.get("tab_id") or tab_info.get("id")
-        resp = _post(f"/tabs/{tab_id}/evaluate", body={"expression": expression, "userId": tab_info["user_id"]})
-
-        # Camofox returns the result in a JSON envelope
-        raw_result = resp.get("result") if isinstance(resp, dict) else resp
-        parsed = raw_result
-        if isinstance(raw_result, str):
-            try:
-                parsed = json.loads(raw_result)
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        return json.dumps({
-            "success": True,
-            "result": parsed,
-            "result_type": type(parsed).__name__,
-        }, ensure_ascii=False, default=str)
-    except Exception as e:
-        error_msg = str(e)
-        # Graceful degradation — server may not support eval
-        if any(code in error_msg for code in ("404", "405", "501")):
-            return json.dumps({
-                "success": False,
-                "error": "JavaScript evaluation is not supported by this Camofox server. "
-                         "Use browser_snapshot or browser_vision to inspect page state.",
-            })
-        return tool_error(error_msg, success=False)
 
 
 def _maybe_start_recording(task_id: str):
@@ -3033,9 +2273,6 @@ def browser_get_images(task_id: Optional[str] = None) -> str:
     Returns:
         JSON string with list of images (src and alt)
     """
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_get_images
-        return camofox_get_images(task_id)
 
     effective_task_id = _last_session_key(task_id or "default")
 
@@ -3107,9 +2344,6 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         A JSON string with vision analysis results and screenshot_path, or a
         multimodal tool-result envelope carrying the screenshot and metadata.
     """
-    if _is_camofox_mode():
-        from tools.browser_camofox import camofox_vision
-        return camofox_vision(question, annotate, task_id)
 
     import base64
     import uuid as uuid_mod
@@ -3199,11 +2433,9 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
 
         if not result.get("success"):
             error_detail = result.get("error", "Unknown error")
-            _cp = _get_cloud_provider()
-            mode = "local" if _cp is None else f"cloud ({_cp.provider_name()})"
             error_response = {
                 "success": False,
-                "error": f"Failed to take screenshot ({mode} mode): {error_detail}"
+                "error": f"Failed to take screenshot: {error_detail}"
             }
             return json.dumps(_copy_fallback_warning(error_response, result), ensure_ascii=False)
 
@@ -3213,12 +2445,10 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
 
         # Check if screenshot file was created
         if not screenshot_path.exists():
-            _cp = _get_cloud_provider()
-            mode = "local" if _cp is None else f"cloud ({_cp.provider_name()})"
             return json.dumps({
                 "success": False,
                 "error": (
-                    f"Screenshot file was not created at {screenshot_path} ({mode} mode). "
+                    f"Screenshot file was not created at {screenshot_path}. "
                     f"This may indicate a socket path issue (macOS /var/folders/), "
                     f"a missing Chromium install ('agent-browser install'), "
                     f"or a stale daemon process."
@@ -3405,44 +2635,10 @@ def _cleanup_old_recordings(max_age_hours=72):
 # ============================================================================
 
 def cleanup_browser(task_id: Optional[str] = None) -> None:
-    """
-    Clean up browser session(s) for a task.
-
-    Called automatically when a task completes or when inactivity timeout is reached.
-    Closes both the agent-browser/Browserbase session and Camofox sessions.
-
-    When ``task_id`` is a bare task identifier (no ``::local`` suffix), reaps
-    BOTH the cloud/primary session AND any hybrid-routing local sidecar that
-    may have been spawned for LAN/localhost URLs in the same task.  When
-    ``task_id`` already carries a ``::local`` suffix (called from the inactivity
-    cleanup loop against a specific session key), reaps only that one.
-
-    Args:
-        task_id: Task identifier (or explicit session key)
-    """
-    if task_id is None:
-        task_id = "default"
-
-    # Expand to the full set of session keys to reap. For a bare task_id
-    # that includes the cloud/primary key + the local sidecar if one exists.
-    if _is_local_sidecar_key(task_id):
-        session_keys = [task_id]
-        bare_task_id = task_id[: -len(_LOCAL_SUFFIX)]
-    else:
-        session_keys = [task_id]
-        sidecar_key = f"{task_id}{_LOCAL_SUFFIX}"
-        with _cleanup_lock:
-            if sidecar_key in _active_sessions:
-                session_keys.append(sidecar_key)
-        bare_task_id = task_id
-
-    for session_key in session_keys:
-        _cleanup_single_browser_session(session_key)
-
-    # Drop the last-active pointer only when the bare task is being cleaned
-    # (i.e. not when we're only reaping a sidecar mid-task).
-    if not _is_local_sidecar_key(task_id):
-        _last_active_session_key.pop(bare_task_id, None)
+    """Close and forget the browser session for a task."""
+    task_id = task_id or "default"
+    _cleanup_single_browser_session(task_id)
+    _last_active_session_key.pop(task_id, None)
 
 
 def _cleanup_single_browser_session(task_id: str) -> None:
@@ -3450,18 +2646,6 @@ def _cleanup_single_browser_session(task_id: str) -> None:
     # Stop the CDP supervisor for this task FIRST so we close our WebSocket
     # before the backend tears down the underlying CDP endpoint.
     _stop_cdp_supervisor(task_id)
-
-    # Also clean up Camofox session if running in Camofox mode.
-    # Skip full close when managed persistence is enabled — the browser
-    # profile (and its session cookies) must survive across agent tasks.
-    # The inactivity reaper still frees idle resources.
-    if _is_camofox_mode():
-        try:
-            from tools.browser_camofox import camofox_close, camofox_soft_cleanup
-            if not camofox_soft_cleanup(task_id):
-                camofox_close(task_id)
-        except Exception as e:
-            logger.debug("Camofox cleanup for task %s: %s", task_id, e)
 
     logger.debug("cleanup_browser called for task_id: %s", task_id)
     logger.debug("Active sessions: %s", list(_active_sessions.keys()))
@@ -3472,8 +2656,7 @@ def _cleanup_single_browser_session(task_id: str) -> None:
         session_info = _active_sessions.get(task_id)
 
     if session_info:
-        bb_session_id = session_info.get("bb_session_id", "unknown")
-        logger.debug("Found session for task %s: bb_session_id=%s", task_id, bb_session_id)
+        logger.debug("Found browser session for task %s", task_id)
 
         # Stop auto-recording before closing (saves the file)
         _maybe_stop_recording(task_id)
@@ -3489,16 +2672,6 @@ def _cleanup_single_browser_session(task_id: str) -> None:
         with _cleanup_lock:
             _active_sessions.pop(task_id, None)
             _session_last_activity.pop(task_id, None)
-
-        # Cloud mode: close the cloud browser session via provider API.
-        # Local sidecars have bb_session_id=None so this no-ops for them.
-        if bb_session_id:
-            provider = _get_cloud_provider()
-            if provider is not None:
-                try:
-                    provider.close_session(bb_session_id)
-                except Exception as e:
-                    logger.warning("Could not close cloud browser session: %s", e)
 
         # Kill the daemon process and clean up socket directory
         session_name = session_info.get("session_name", "")
@@ -3572,8 +2745,6 @@ def _chromium_search_roots() -> List[str]:
        ``/opt/marlow/.playwright``).
     2. ``~/.cache/ms-playwright`` — Playwright's default on Linux/macOS.
     3. ``~/Library/Caches/ms-playwright`` — Playwright's default on macOS.
-    4. ``%USERPROFILE%\\AppData\\Local\\ms-playwright`` — Playwright's default
-       on Windows.
     """
     roots: List[str] = []
     env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
@@ -3583,11 +2754,6 @@ def _chromium_search_roots() -> List[str]:
     roots.append(os.path.join(home, ".cache", "ms-playwright"))
     if sys.platform == "darwin":
         roots.append(os.path.join(home, "Library", "Caches", "ms-playwright"))
-    if sys.platform == "win32":
-        local = os.environ.get("LOCALAPPDATA") or os.path.join(
-            home, "AppData", "Local"
-        )
-        roots.append(os.path.join(local, "ms-playwright"))
     return roots
 
 
@@ -3665,48 +2831,18 @@ def _running_in_docker() -> bool:
 
 
 def check_browser_requirements() -> bool:
-    """
-    Check if browser tool requirements are met.
-
-    In **local mode** (no cloud provider configured): the ``agent-browser``
-    CLI must be findable. Chrome/Chromium is required for the default Chrome
-    engine and for fallback/screenshot paths, but not for Lightpanda-only text
-    navigation/snapshot workflows.
-
-    In **cloud mode** (Browserbase, Browser Use, or Firecrawl): the CLI
-    and the provider's required credentials must be present. The cloud
-    provider hosts its own Chromium, so no local browser binary is needed.
-
-    Returns:
-        True if all requirements are met, False otherwise
-    """
-    # Camofox backend — only needs the server URL, no agent-browser CLI
-    if _is_camofox_mode():
-        return True
+    """Return whether local launch or an attached CDP browser is usable."""
 
     # CDP override mode can connect to an existing remote/local browser endpoint
     # without requiring the local agent-browser binary on PATH.
     if _get_cdp_override():
         return True
 
-    # The agent-browser CLI is required for local launch and cloud-provider flows.
+    # The agent-browser CLI is required for local launch.
     try:
-        browser_cmd = _find_agent_browser()
+        _find_agent_browser()
     except FileNotFoundError:
         return False
-
-    # On Termux, the bare npx fallback is too fragile to treat as a satisfied
-    # local browser dependency. Require a real install (global or local) so the
-    # browser tool is not advertised as available when it will likely fail on
-    # first use.
-    if _requires_real_termux_browser_install(browser_cmd):
-        return False
-
-    # In cloud mode, also require provider credentials. Cloud browsers
-    # don't need a local Chromium binary.
-    provider = _get_cloud_provider()
-    if provider is not None:
-        return provider.is_configured()
 
     # Local mode with Lightpanda can provide text/navigation tools without a
     # local Chromium install. Chrome fallback, screenshots, and browser_vision
@@ -3751,9 +2887,7 @@ if __name__ == "__main__":
     print("🌐 Browser Tool Module")
     print("=" * 40)
 
-    _cp = _get_cloud_provider()
-    mode = "local" if _cp is None else f"cloud ({_cp.provider_name()})"
-    print(f"   Mode: {mode}")
+    print("   Mode: attached CDP" if _get_cdp_override() else "   Mode: local")
 
     # Check requirements
     if check_browser_requirements():
@@ -3761,11 +2895,8 @@ if __name__ == "__main__":
     else:
         print("❌ Missing requirements:")
         try:
-            browser_cmd = _find_agent_browser()
-            if _requires_real_termux_browser_install(browser_cmd):
-                print("   - bare npx fallback found (insufficient on Termux local mode)")
-                print(f"     Install: {_browser_install_hint()}")
-            elif _cp is None and not _chromium_installed():
+            _find_agent_browser()
+            if not _get_cdp_override() and not _chromium_installed():
                 print("   - Chromium browser binary not found")
                 searched = ", ".join(_chromium_search_roots()) or "(no candidate paths)"
                 print(f"     Searched: {searched}")
@@ -3782,9 +2913,6 @@ if __name__ == "__main__":
         except FileNotFoundError:
             print("   - agent-browser CLI not found")
             print(f"     Install: {_browser_install_hint()}")
-        if _cp is not None and not _cp.is_configured():
-            print(f"   - {_cp.provider_name()} credentials not configured")
-            print("   Tip: set browser.cloud_provider to 'local' to use free local mode instead")
 
     print("\n📋 Available Browser Tools:")
     for schema in BROWSER_TOOL_SCHEMAS:

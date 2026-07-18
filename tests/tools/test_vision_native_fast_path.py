@@ -32,26 +32,8 @@ _TINY_PNG = base64.b64decode(
 
 
 class TestSupportsMediaInToolResults:
-    def test_anthropic_native_yes(self):
-        assert _supports_media_in_tool_results("anthropic", "claude-opus-4-6") is True
-
-    def test_openrouter_yes(self):
-        assert _supports_media_in_tool_results("openrouter", "anthropic/claude-opus-4.6") is True
-
-    def test_nous_yes(self):
-        assert _supports_media_in_tool_results("nous", "anthropic/claude-sonnet-4.6") is True
-
-    def test_openai_chat_yes(self):
-        assert _supports_media_in_tool_results("openai", "gpt-5.4") is True
-
     def test_openai_codex_yes(self):
         assert _supports_media_in_tool_results("openai-codex", "gpt-5-codex") is True
-
-    def test_gemini_3_yes(self):
-        assert _supports_media_in_tool_results("google", "gemini-3-flash-preview") is True
-
-    def test_gemini_2_no(self):
-        assert _supports_media_in_tool_results("google", "gemini-2.5-pro") is False
 
     def test_unknown_provider_conservative_no(self):
         assert _supports_media_in_tool_results("brand-new-provider", "any-model") is False
@@ -189,9 +171,9 @@ class TestHandleVisionAnalyzeFastPath:
         img = tmp_path / "x.png"
         img.write_bytes(_TINY_PNG)
 
-        # Set runtime override so the handler thinks we're on opus@openrouter
+        # Set the retained Codex runtime as the active native-vision model.
         from agent.auxiliary_client import set_runtime_main, clear_runtime_main
-        set_runtime_main("openrouter", "anthropic/claude-opus-4.6")
+        set_runtime_main("openai-codex", "gpt-5-codex")
         try:
             # Mock decide_image_input_mode to always return "native" so the
             # fast path fires regardless of model-catalog state in CI.
@@ -217,7 +199,7 @@ class TestHandleVisionAnalyzeFastPath:
             return '{"sentinel": "aux-path"}'
 
         from agent.auxiliary_client import set_runtime_main, clear_runtime_main
-        set_runtime_main("openrouter", "qwen/qwen3-coder")
+        set_runtime_main("custom", "text-only-model")
         try:
             with patch("tools.vision_tools.vision_analyze_tool", side_effect=_aux_sentinel):
                 coro = _handle_vision_analyze({"image_url": str(img), "question": "?"})

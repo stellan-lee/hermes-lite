@@ -4,7 +4,7 @@ Skill Manager Tool -- Agent-Managed Skill Creation & Editing
 
 Allows the agent to create, update, and delete skills, turning successful
 approaches into reusable procedural knowledge. New skills are created in
-~/.marlow/skills/. Existing skills (bundled, hub-installed, or user-created)
+~/.marlow/skills/. Existing skills (bundled or user-created)
 can be modified or deleted wherever they live.
 
 Skills are the agent's procedural memory: they capture *how to do a specific
@@ -42,64 +42,9 @@ from pathlib import Path
 from marlow_constants import get_marlow_home, display_marlow_home
 from typing import Dict, Any, List, Optional, Tuple
 
-from utils import atomic_replace, is_truthy_value
-from marlow_cli.config import cfg_get
+from utils import atomic_replace
 
 logger = logging.getLogger(__name__)
-
-# Import security scanner — external hub installs always get scanned;
-# agent-created skills only get scanned when skills.guard_agent_created is on.
-try:
-    from tools.skills_guard import scan_skill, should_allow_install, format_scan_report
-    _GUARD_AVAILABLE = True
-except ImportError:
-    _GUARD_AVAILABLE = False
-
-
-def _guard_agent_created_enabled() -> bool:
-    """Read skills.guard_agent_created from config (default False).
-
-    Off by default because the agent can already execute the same code
-    paths via terminal() with no gate, so the scan adds friction without
-    meaningful security.  Users who want belt-and-suspenders can turn it
-    on via `marlow config set skills.guard_agent_created true`.
-    """
-    try:
-        from marlow_cli.config import load_config
-        cfg = load_config()
-        return is_truthy_value(
-            cfg_get(cfg, "skills", "guard_agent_created"),
-            default=False,
-        )
-    except Exception:
-        return False
-
-
-def _security_scan_skill(skill_dir: Path) -> Optional[str]:
-    """Scan a skill directory after write. Returns error string if blocked, else None.
-
-    No-op when skills.guard_agent_created is disabled (the default).
-    """
-    if not _GUARD_AVAILABLE:
-        return None
-    if not _guard_agent_created_enabled():
-        return None
-    try:
-        result = scan_skill(skill_dir, source="agent-created")
-        allowed, reason = should_allow_install(result)
-        if allowed is False:
-            report = format_scan_report(result)
-            return f"Security scan blocked this skill ({reason}):\n{report}"
-        if allowed is None:
-            # "ask" verdict — for agent-created skills this means dangerous
-            # findings were detected.  Surface as an error so the agent can
-            # retry with the flagged content removed.
-            report = format_scan_report(result)
-            logger.warning("Agent-created skill blocked (dangerous findings): %s", reason)
-            return f"Security scan blocked this skill ({reason}):\n{report}"
-    except Exception as e:
-        logger.warning("Security scan failed for %s: %s", skill_dir, e, exc_info=True)
-    return None
 
 import yaml
 
@@ -509,12 +454,6 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
     skill_md = skill_dir / "SKILL.md"
     _atomic_write_text(skill_md, content)
 
-    # Security scan — roll back on block
-    scan_error = _security_scan_skill(skill_dir)
-    if scan_error:
-        shutil.rmtree(skill_dir, ignore_errors=True)
-        return {"success": False, "error": scan_error}
-
     result = {
         "success": True,
         "message": f"Skill '{name}' created.",
@@ -545,16 +484,7 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
         return {"success": False, "error": _skill_not_found_error(name)}
 
     skill_md = existing["path"] / "SKILL.md"
-    # Back up original content for rollback
-    original_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else None
     _atomic_write_text(skill_md, content)
-
-    # Security scan — roll back on block
-    scan_error = _security_scan_skill(existing["path"])
-    if scan_error:
-        if original_content is not None:
-            _atomic_write_text(skill_md, original_content)
-        return {"success": False, "error": scan_error}
 
     return {
         "success": True,
@@ -642,14 +572,7 @@ def _patch_skill(
                 "error": f"Patch would break SKILL.md structure: {err}",
             }
 
-    original_content = content  # for rollback
     _atomic_write_text(target, new_content)
-
-    # Security scan — roll back on block
-    scan_error = _security_scan_skill(skill_dir)
-    if scan_error:
-        _atomic_write_text(target, original_content)
-        return {"success": False, "error": scan_error}
 
     return {
         "success": True,
@@ -746,18 +669,7 @@ def _write_file(name: str, file_path: str, file_content: str) -> Dict[str, Any]:
     if err:
         return {"success": False, "error": err}
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Back up for rollback
-    original_content = target.read_text(encoding="utf-8") if target.exists() else None
     _atomic_write_text(target, file_content)
-
-    # Security scan — roll back on block
-    scan_error = _security_scan_skill(existing["path"])
-    if scan_error:
-        if original_content is not None:
-            _atomic_write_text(target, original_content)
-        else:
-            target.unlink(missing_ok=True)
-        return {"success": False, "error": scan_error}
 
     return {
         "success": True,
@@ -871,19 +783,10 @@ def skill_manage(
             clear_skills_system_prompt_cache(clear_snapshot=True)
         except Exception:
             pass
-        # Curator telemetry: bump patch_count on edit/patch/write_file (the actions
-        # that mutate an existing skill's guidance), drop the record on delete.
-        # Only mark a skill as agent-created when the background self-improvement
-        # review fork creates it — foreground `skill_manage(create)` calls are
-        # user-directed, and those skills belong to the user (the curator must
-        # not touch them). Best-effort; telemetry failures never break the tool.
+        # Curator telemetry: bump mutation counts and forget deleted skills.
         try:
-            from tools.skill_usage import bump_patch, forget, mark_agent_created
-            from tools.skill_provenance import is_background_review
-            if action == "create":
-                if is_background_review():
-                    mark_agent_created(name)
-            elif action in {"patch", "edit", "write_file", "remove_file"}:
+            from tools.skill_usage import bump_patch, forget
+            if action in {"patch", "edit", "write_file", "remove_file"}:
                 bump_patch(name)
             elif action == "delete":
                 forget(name)

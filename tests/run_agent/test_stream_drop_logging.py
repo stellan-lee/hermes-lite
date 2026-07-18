@@ -61,8 +61,6 @@ def test_stream_diag_capture_response_collects_known_headers():
     diag = AIAgent._stream_diag_init()
     resp = _FakeResponse({
         "cf-ray": "8f1a2b3c4d5e6f7g-LAX",
-        "x-openrouter-provider": "Anthropic",
-        "x-openrouter-id": "gen-abc123",
         "x-request-id": "req-xyz",
         "server": "cloudflare",
         "irrelevant-header": "ignored",
@@ -70,8 +68,7 @@ def test_stream_diag_capture_response_collects_known_headers():
     agent._stream_diag_capture_response(diag, resp)
     assert diag["http_status"] == 200
     assert diag["headers"]["cf-ray"] == "8f1a2b3c4d5e6f7g-LAX"
-    assert diag["headers"]["x-openrouter-provider"] == "Anthropic"
-    assert diag["headers"]["x-openrouter-id"] == "gen-abc123"
+    assert diag["headers"]["x-request-id"] == "req-xyz"
     assert diag["headers"]["server"] == "cloudflare"
     # Headers not in _STREAM_DIAG_HEADERS must not be captured (PII surface).
     assert "irrelevant-header" not in diag["headers"]

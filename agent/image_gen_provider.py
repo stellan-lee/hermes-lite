@@ -18,10 +18,8 @@ One tool — ``image_generate`` — covers **text-to-image** and
 ``image_url`` (and/or ``reference_image_urls``): if any source image is
 provided, the provider routes to its image-to-image / edit endpoint; if
 omitted, the provider routes to text-to-image. Users pick one **model**
-(e.g. nano-banana-pro, gpt-image-2, grok-imagine-image); the provider
-handles which underlying endpoint to hit. This mirrors the ``video_gen``
-provider design (``agent/video_gen_provider.py``) so the two surfaces
-stay learnable together.
+(for example gpt-image-2); the provider
+handles which underlying endpoint to hit.
 
 Response shape
 --------------
@@ -75,7 +73,7 @@ class ImageGenProvider(abc.ABC):
     def name(self) -> str:
         """Stable short identifier used in ``image_gen.provider`` config.
 
-        Lowercase, no spaces. Examples: ``fal``, ``openai``, ``replicate``.
+        Lowercase, no spaces. Example: ``openai-codex``.
         """
 
     @property
@@ -280,7 +278,7 @@ def save_url_image(
 ) -> Path:
     """Download an image URL and write it under ``$MARLOW_HOME/cache/images/``.
 
-    Used by providers (xAI, fallback OpenAI) whose API returns an *ephemeral*
+    Used by providers whose API returns an *ephemeral*
     URL instead of inline base64 — those URLs frequently expire before a
     downstream consumer (Telegram ``send_photo``, browser fetch) can resolve
     them, so we materialise the bytes locally at tool-completion time.

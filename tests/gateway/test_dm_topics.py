@@ -537,7 +537,7 @@ def test_cache_dm_topic_from_message_no_overwrite():
     assert adapter._dm_topics["111:General"] == 100  # unchanged
 
 
-# ── _build_message_event: auto_skill binding ──
+# ── _build_message_event: topic metadata ──
 
 
 def _make_mock_message(chat_id=111, chat_type="private", text="hello", thread_id=None,
@@ -577,15 +577,15 @@ def _make_mock_message(chat_id=111, chat_type="private", text="hello", thread_id
     return msg
 
 
-def test_build_message_event_sets_auto_skill():
-    """When topic has a skill binding, auto_skill should be set on the event."""
+def test_build_message_event_sets_topic_name():
+    """A configured topic name is included in the event source."""
     from gateway.platforms.base import MessageType
 
     adapter = _make_adapter([
         {
             "chat_id": 111,
             "topics": [
-                {"name": "My Project", "skill": "accessibility-auditor", "thread_id": 100},
+                {"name": "My Project", "thread_id": 100},
             ],
         }
     ])
@@ -594,13 +594,11 @@ def test_build_message_event_sets_auto_skill():
     msg = _make_mock_message(chat_id=111, thread_id=100, text="check this page")
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill == "accessibility-auditor"
-    # chat_topic should be the clean topic name, no [skill: ...] suffix
     assert event.source.chat_topic == "My Project"
 
 
-def test_build_message_event_no_auto_skill_without_binding():
-    """Topics without skill binding should have auto_skill=None."""
+def test_build_message_event_topic_name_without_binding():
+    """Topics resolve their configured display name."""
     from gateway.platforms.base import MessageType
 
     adapter = _make_adapter([
@@ -616,19 +614,18 @@ def test_build_message_event_no_auto_skill_without_binding():
     msg = _make_mock_message(chat_id=111, thread_id=200)
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill is None
     assert event.source.chat_topic == "General"
 
 
-def test_build_message_event_no_auto_skill_without_thread():
-    """Regular DM messages (no thread_id) should have auto_skill=None."""
+def test_build_message_event_without_thread():
+    """Regular DM messages need no topic metadata."""
     from gateway.platforms.base import MessageType
 
     adapter = _make_adapter()
     msg = _make_mock_message(chat_id=111, thread_id=None)
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill is None
+    assert event.source.thread_id is None
 
 
 def test_build_message_event_filters_non_topic_dm_thread_id():
@@ -641,7 +638,6 @@ def test_build_message_event_filters_non_topic_dm_thread_id():
 
     assert event.source.thread_id is None
     assert event.source.chat_topic is None
-    assert event.auto_skill is None
 
 
 def test_build_message_event_preserves_true_dm_topic_thread_id():
@@ -665,7 +661,7 @@ def test_build_message_event_preserves_true_dm_topic_thread_id():
     assert event.source.chat_topic == "General"
 
 
-# ── _build_message_event: group_topics skill binding ──
+# ── _build_message_event: group topic metadata ──
 
 # The telegram mock sets sys.modules["telegram.constants"] = telegram_mod (root mock),
 # so `from telegram.constants import ChatType` in telegram.py resolves to
@@ -674,16 +670,16 @@ def test_build_message_event_preserves_true_dm_topic_thread_id():
 from telegram.constants import ChatType as _ChatType  # noqa: E402
 
 
-def test_group_topic_skill_binding():
-    """Group topic with skill config should set auto_skill on the event."""
+def test_group_topic_name():
+    """A group topic resolves its configured name."""
     from gateway.platforms.base import MessageType
 
     adapter = _make_adapter(group_topics_config=[
         {
             "chat_id": -1001234567890,
             "topics": [
-                {"name": "Engineering", "thread_id": 5, "skill": "software-development"},
-                {"name": "Sales", "thread_id": 12, "skill": "sales-framework"},
+                {"name": "Engineering", "thread_id": 5},
+                {"name": "Sales", "thread_id": 12},
             ],
         }
     ])
@@ -698,20 +694,19 @@ def test_group_topic_skill_binding():
     )
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill == "software-development"
     assert event.source.chat_topic == "Engineering"
 
 
-def test_group_topic_skill_binding_second_topic():
-    """A different thread_id in the same group should resolve its own skill."""
+def test_group_topic_second_name():
+    """A different thread id resolves its own topic name."""
     from gateway.platforms.base import MessageType
 
     adapter = _make_adapter(group_topics_config=[
         {
             "chat_id": -1001234567890,
             "topics": [
-                {"name": "Engineering", "thread_id": 5, "skill": "software-development"},
-                {"name": "Sales", "thread_id": 12, "skill": "sales-framework"},
+                {"name": "Engineering", "thread_id": 5},
+                {"name": "Sales", "thread_id": 12},
             ],
         }
     ])
@@ -726,12 +721,11 @@ def test_group_topic_skill_binding_second_topic():
     )
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill == "sales-framework"
     assert event.source.chat_topic == "Sales"
 
 
-def test_group_topic_no_skill_binding():
-    """Group topic without a skill key should have auto_skill=None but set chat_topic."""
+def test_group_topic_without_extra_metadata():
+    """A basic group topic still sets chat_topic."""
     from gateway.platforms.base import MessageType
 
     adapter = _make_adapter(group_topics_config=[
@@ -753,19 +747,18 @@ def test_group_topic_no_skill_binding():
     )
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill is None
     assert event.source.chat_topic == "General"
 
 
 def test_group_topic_unmapped_thread_id():
-    """Thread ID not in config should fall through — no skill, no topic name."""
+    """Thread ID not in config should fall through with no topic name."""
     from gateway.platforms.base import MessageType
 
     adapter = _make_adapter(group_topics_config=[
         {
             "chat_id": -1001234567890,
             "topics": [
-                {"name": "Engineering", "thread_id": 5, "skill": "software-development"},
+                {"name": "Engineering", "thread_id": 5},
             ],
         }
     ])
@@ -780,7 +773,6 @@ def test_group_topic_unmapped_thread_id():
     )
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill is None
     assert event.source.chat_topic is None
 
 
@@ -792,7 +784,7 @@ def test_group_topic_unmapped_chat_id():
         {
             "chat_id": -1001234567890,
             "topics": [
-                {"name": "Engineering", "thread_id": 5, "skill": "software-development"},
+                {"name": "Engineering", "thread_id": 5},
             ],
         }
     ])
@@ -807,12 +799,11 @@ def test_group_topic_unmapped_chat_id():
     )
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill is None
     assert event.source.chat_topic is None
 
 
 def test_group_topic_no_config():
-    """No group_topics config at all should be fine — no skill, no topic."""
+    """No group_topics config at all should be fine."""
     from gateway.platforms.base import MessageType
 
     adapter = _make_adapter()  # no group_topics_config
@@ -822,7 +813,6 @@ def test_group_topic_no_config():
     )
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill is None
     assert event.source.chat_topic is None
 
 
@@ -834,7 +824,7 @@ def test_group_topic_chat_id_int_string_coercion():
         {
             "chat_id": "-1001234567890",  # string, not int
             "topics": [
-                {"name": "Dev", "thread_id": "7", "skill": "marlow-agent-dev"},
+                {"name": "Dev", "thread_id": "7"},
             ],
         }
     ])
@@ -849,7 +839,6 @@ def test_group_topic_chat_id_int_string_coercion():
     )
     event = adapter._build_message_event(msg, MessageType.TEXT)
 
-    assert event.auto_skill == "marlow-agent-dev"
     assert event.source.chat_topic == "Dev"
 
 

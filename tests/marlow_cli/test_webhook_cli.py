@@ -30,7 +30,6 @@ def _make_args(**kwargs):
         "prompt": "",
         "events": "",
         "description": "",
-        "skills": "",
         "deliver": "log",
         "deliver_chat_id": "",
         "secret": "",

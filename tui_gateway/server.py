@@ -139,7 +139,7 @@ _DETAIL_MODES = frozenset({"hidden", "collapsed", "expanded"})
 # ── Async RPC dispatch (#12546) ──────────────────────────────────────
 # A handful of handlers block the dispatcher loop in entry.py for seconds
 # to minutes (slash.exec, cli.exec, shell.exec, session.resume,
-# session.branch, session.compress, skills.manage).  While they're running, inbound RPCs —
+# session.branch and session.compress). While they're running, inbound RPCs —
 # notably approval.respond and session.interrupt — sit unread in the
 # stdin pipe.  We route only those slow handlers onto a small thread pool;
 # everything else stays on the main thread so ordering stays sane for the
@@ -154,7 +154,6 @@ _LONG_HANDLERS = frozenset(
         "session.resume",
         "shell.exec",
         "learning.frames",
-        "skills.manage",
         "slash.exec",
     }
 )
@@ -631,15 +630,6 @@ def _sess(params, rid):
 
 def _normalize_completion_path(path_part: str) -> str:
     expanded = os.path.expanduser(path_part)
-    if os.name != "nt":
-        normalized = expanded.replace("\\", "/")
-        if (
-            len(normalized) >= 3
-            and normalized[1] == ":"
-            and normalized[2] == "/"
-            and normalized[0].isalpha()
-        ):
-            return f"/mnt/{normalized[0].lower()}/{normalized[3:]}"
     return expanded
 
 
@@ -924,7 +914,7 @@ def _resolve_model() -> str:
         return str(m.get("default", "") or "").strip()
     if isinstance(m, str) and m:
         return m.strip()
-    return "anthropic/claude-sonnet-4"
+    return ""
 
 
 def _resolve_startup_runtime() -> tuple[str, str | None]:
@@ -1038,19 +1028,6 @@ def _load_reasoning_config() -> dict | None:
         (_load_cfg().get("agent") or {}).get("reasoning_effort", "") or ""
     ).strip()
     return parse_reasoning_effort(effort)
-
-
-def _load_service_tier() -> str | None:
-    raw = (
-        str((_load_cfg().get("agent") or {}).get("service_tier", "") or "")
-        .strip()
-        .lower()
-    )
-    if not raw or raw in {"normal", "default", "standard", "off", "none"}:
-        return None
-    if raw in {"fast", "priority", "on"}:
-        return "priority"
-    return None
 
 
 def _load_show_reasoning() -> bool:
@@ -1262,8 +1239,7 @@ def _apply_model_switch(sid: str, session: dict, raw_input: str) -> dict:
         current_provider = str(runtime.get("provider", "") or "")
         current_model = _resolve_model()
         current_base_url = str(runtime.get("base_url", "") or "")
-        # Preserve a callable api_key (Azure Foundry Entra ID bearer
-        # provider) unchanged — ``str(...)`` would produce
+        # Preserve a callable api_key unchanged — ``str(...)`` would produce
         # ``"<function ...>"`` and poison downstream switch_model
         # validation. Match the agent-present branch's behavior at the
         # top of this block.
@@ -1278,11 +1254,11 @@ def _apply_model_switch(sid: str, session: dict, raw_input: str) -> dict:
     user_provs = None
     custom_provs = None
     try:
-        from marlow_cli.config import get_compatible_custom_providers, load_config
+        from marlow_cli.config import load_config, load_custom_provider_entries
 
         cfg = load_config()
         user_provs = cfg.get("providers")
-        custom_provs = get_compatible_custom_providers(cfg)
+        custom_provs = load_custom_provider_entries(cfg)
     except Exception:
         pass
 
@@ -1314,8 +1290,8 @@ def _apply_model_switch(sid: str, session: dict, raw_input: str) -> dict:
     os.environ["MARLOW_MODEL"] = result.new_model
     os.environ["MARLOW_INFERENCE_MODEL"] = result.new_model
     # Keep the process-level provider env vars in sync with the user's
-    # explicit choice so any ambient re-resolution (credential pool refresh,
-    # compressor rebuild, aux clients) and startup re-resolution on /new
+    # explicit choice so any ambient re-resolution (compressor rebuild,
+    # auxiliary clients) and startup re-resolution on /new
     # both pick up the new provider instead of the original one persisted
     # in config or env.
     #
@@ -1590,12 +1566,9 @@ def _session_info(agent, session: dict | None = None) -> dict:
         and reasoning_config.get("enabled") is not False
     ):
         reasoning_effort = str(reasoning_config.get("effort", "") or "")
-    service_tier = getattr(agent, "service_tier", None) or ""
     info: dict = {
         "model": getattr(agent, "model", ""),
         "reasoning_effort": reasoning_effort,
-        "service_tier": service_tier,
-        "fast": service_tier == "priority",
         "tools": {},
         "skills": {},
         "cwd": cwd,
@@ -2106,19 +2079,7 @@ def _cfg_max_turns(cfg: dict, default: int) -> int:
     except (TypeError, ValueError):
         pass
     agent_cfg = cfg.get("agent") or {}
-    return int(agent_cfg.get("max_turns") or cfg.get("max_turns") or default)
-
-
-def _parse_tui_skills_env() -> list[str]:
-    raw = os.environ.get("MARLOW_TUI_SKILLS", "")
-    skills: list[str] = []
-    seen: set[str] = set()
-    for part in raw.replace("\n", ",").split(","):
-        item = part.strip()
-        if item and item not in seen:
-            seen.add(item)
-            skills.append(item)
-    return skills
+    return int(agent_cfg.get("max_turns") or default)
 
 
 def _background_agent_kwargs(agent, task_id: str) -> dict:
@@ -2129,8 +2090,6 @@ def _background_agent_kwargs(agent, task_id: str) -> dict:
         "api_key": getattr(agent, "api_key", None) or None,
         "provider": getattr(agent, "provider", None) or None,
         "api_mode": getattr(agent, "api_mode", None) or None,
-        "acp_command": getattr(agent, "acp_command", None) or None,
-        "acp_args": getattr(agent, "acp_args", None) or None,
         "model": getattr(agent, "model", None) or _resolve_model(),
         "max_iterations": _cfg_max_turns(cfg, 25),
         "enabled_toolsets": getattr(agent, "enabled_toolsets", None)
@@ -2139,23 +2098,13 @@ def _background_agent_kwargs(agent, task_id: str) -> dict:
         "verbose_logging": False,
         "ephemeral_system_prompt": getattr(agent, "ephemeral_system_prompt", None)
         or None,
-        "providers_allowed": getattr(agent, "providers_allowed", None),
-        "providers_ignored": getattr(agent, "providers_ignored", None),
-        "providers_order": getattr(agent, "providers_order", None),
-        "provider_sort": getattr(agent, "provider_sort", None),
-        "provider_require_parameters": getattr(
-            agent, "provider_require_parameters", False
-        ),
-        "provider_data_collection": getattr(agent, "provider_data_collection", None),
-        "openrouter_min_coding_score": getattr(agent, "openrouter_min_coding_score", None),
         "session_id": task_id,
         "reasoning_config": getattr(agent, "reasoning_config", None)
         or _load_reasoning_config(),
-        "service_tier": getattr(agent, "service_tier", None) or _load_service_tier(),
         "request_overrides": dict(getattr(agent, "request_overrides", {}) or {}),
         "platform": "tui",
         "session_db": _get_db(),
-        "fallback_model": getattr(agent, "_fallback_model", None),
+        "fallback_providers": getattr(agent, "_fallback_chain", None),
     }
 
 
@@ -2331,20 +2280,6 @@ def _make_agent(sid: str, key: str, session_id: str | None = None):
     cfg = _load_cfg()
     agent_cfg = cfg.get("agent") or {}
     system_prompt = _prompt_text(agent_cfg.get("system_prompt", ""))
-    startup_skills = _parse_tui_skills_env()
-    if startup_skills:
-        from agent.skill_commands import build_preloaded_skills_prompt
-
-        skills_prompt, _loaded_skills, missing_skills = build_preloaded_skills_prompt(
-            startup_skills,
-            task_id=session_id or key,
-        )
-        if missing_skills:
-            raise ValueError(f"Unknown skill(s): {', '.join(missing_skills)}")
-        if skills_prompt:
-            system_prompt = "\n\n".join(
-                part for part in (system_prompt, skills_prompt) if part
-            ).strip()
     model, requested_provider = _resolve_startup_runtime()
     runtime = resolve_runtime_provider(
         requested=requested_provider,
@@ -2357,9 +2292,6 @@ def _make_agent(sid: str, key: str, session_id: str | None = None):
         base_url=runtime.get("base_url"),
         api_key=runtime.get("api_key"),
         api_mode=runtime.get("api_mode"),
-        acp_command=runtime.get("command"),
-        acp_args=runtime.get("args"),
-        credential_pool=runtime.get("credential_pool"),
         quiet_mode=True,
         # verbose_logging controls DEBUG-level agent logging; it is intentionally
         # independent of tool_progress_mode (which only controls per-tool
@@ -2367,7 +2299,6 @@ def _make_agent(sid: str, key: str, session_id: str | None = None):
         # change on the classic CLI side.
         verbose_logging=False,
         reasoning_config=_load_reasoning_config(),
-        service_tier=_load_service_tier(),
         enabled_toolsets=_load_enabled_toolsets(),
         platform="tui",
         session_id=session_id or key,
@@ -2402,8 +2333,7 @@ def _init_session(sid: str, key: str, agent, history: list, cols: int = 80):
         "tool_progress_mode": _load_tool_progress_mode(),
         "edit_snapshots": {},
         "tool_started_at": {},
-        # Pin async event emissions to whichever transport created the
-        # session (stdio for Ink, JSON-RPC WS for the dashboard sidebar).
+        # Pin async event emissions to the transport that created the session.
         "transport": current_transport() or _stdio_transport,
     }
     db = _get_db()
@@ -2874,7 +2804,7 @@ def _(rid, params: dict) -> dict:
     try:
         # Resume picker should surface human conversation sessions from every
         # user-facing surface — CLI, TUI, all gateway platforms (including new
-        # ones not enumerated here), ACP adapter clients, webhook sessions,
+        # ones not enumerated here) and webhook sessions,
         # custom `MARLOW_SESSION_SOURCE` values, and older installs with
         # different source labels. We deny-list only the noisy internal
         # sources (``tool`` sub-agent runs) rather than allow-listing a
@@ -5078,66 +5008,6 @@ def _(rid, params: dict) -> dict:
         except Exception as e:
             return _err(rid, 5001, str(e))
 
-    if key == "fast":
-        raw = str(value or "").strip().lower()
-        agent = session.get("agent") if session else None
-        if agent is not None:
-            current_fast = getattr(agent, "service_tier", None) == "priority"
-        else:
-            current_fast = _load_service_tier() == "priority"
-
-        if raw in {"status"}:
-            return _ok(
-                rid,
-                {"key": key, "value": "fast" if current_fast else "normal"},
-            )
-
-        if raw in {"", "toggle"}:
-            nv = "normal" if current_fast else "fast"
-        elif raw in {"fast", "on"}:
-            nv = "fast"
-        elif raw in {"normal", "off"}:
-            nv = "normal"
-        else:
-            return _err(rid, 4002, f"unknown fast mode: {value}")
-
-        overrides = None
-        if nv == "fast":
-            from marlow_cli.models import resolve_fast_mode_overrides
-
-            target_model = (
-                getattr(agent, "model", None) if agent is not None else _resolve_model()
-            )
-            if not target_model:
-                return _err(
-                    rid,
-                    4002,
-                    "fast mode is not available without a selected model",
-                )
-            overrides = resolve_fast_mode_overrides(target_model)
-            if overrides is None:
-                return _err(
-                    rid,
-                    4002,
-                    "fast mode is not available for this model",
-                )
-
-        _write_config_key("agent.service_tier", nv)
-        if agent is not None:
-            agent.service_tier = "priority" if nv == "fast" else None
-            current_overrides = dict(getattr(agent, "request_overrides", {}) or {})
-            current_overrides.pop("service_tier", None)
-            current_overrides.pop("speed", None)
-            if nv == "fast":
-                current_overrides.update(overrides)
-            agent.request_overrides = current_overrides
-            _emit(
-                "session.info",
-                params.get("session_id", ""),
-                _session_info(agent, session),
-            )
-        return _ok(rid, {"key": key, "value": nv})
-
     if key == "busy":
         raw = str(value or "").strip().lower()
         if raw in {"", "status"}:
@@ -5499,19 +5369,6 @@ def _(rid, params: dict) -> dict:
             else "hide"
         )
         return _ok(rid, {"value": effort, "display": display})
-    if key == "fast":
-        return _ok(
-            rid,
-            {
-                "value": (
-                    "fast"
-                    if (session := _sessions.get(params.get("session_id", "")))
-                    and getattr(session.get("agent"), "service_tier", None)
-                    == "priority"
-                    else ("fast" if _load_service_tier() == "priority" else "normal")
-                ),
-            },
-        )
     if key == "busy":
         return _ok(rid, {"value": _load_busy_input_mode()})
     if key == "details_mode":
@@ -5584,9 +5441,8 @@ def _(rid, params: dict) -> dict:
 def _(rid, params: dict) -> dict:
     """Strict provider check: does the configured/default model actually resolve to a usable runtime?
 
-    Unlike setup.status (which returns True if ANY provider auth state is
-    discoverable, including indirect fallbacks like ``gh auth token`` for
-    Copilot), this runs the same resolve_runtime_provider() call the agent
+    Unlike setup.status (which returns True if any provider auth state is
+    discoverable), this runs the same resolve_runtime_provider() call the agent
     uses on session creation. It returns ok=False with the auth error message
     when the user's configured model cannot actually be served, so UIs can
     surface onboarding before the user submits a doomed prompt.
@@ -5600,20 +5456,6 @@ def _(rid, params: dict) -> dict:
         provider_configured = bool(_has_any_provider_configured())
         provider = runtime.get("provider") or "provider"
         source = str(runtime.get("source") or "")
-        if not provider_configured and provider == "bedrock" and source in {
-            "iam-role",
-            "aws-sdk-default-chain",
-        }:
-            return _ok(
-                rid,
-                {
-                    "ok": False,
-                    "provider": provider,
-                    "model": runtime.get("model"),
-                    "source": source,
-                    "error": "No Marlow provider is configured.",
-                },
-            )
 
         api_key = runtime.get("api_key")
         api_key_text = "" if callable(api_key) else str(api_key or "").strip()
@@ -5759,7 +5601,7 @@ def _(rid, params: dict) -> dict:
     handler.  Newly added API keys take effect on the next agent call
     without restarting the TUI.
 
-    The credential pool / provider routing for any *already-constructed*
+    Provider routing for any *already-constructed*
     agent does not auto-rebuild — that's the same behaviour as classic
     CLI's ``/reload``.  Users who want a brand-new credential resolution
     should follow with ``/new``.
@@ -6756,11 +6598,8 @@ def _(rid, params: dict) -> dict:
         from prompt_toolkit.formatted_text import to_plain_text
 
         from agent.skill_commands import get_skill_commands
-        from agent.skill_bundles import get_skill_bundles
-
         completer = SlashCommandCompleter(
             skill_commands_provider=lambda: get_skill_commands(),
-            skill_bundles_provider=lambda: get_skill_bundles(),
         )
         doc = Document(text, len(text))
         items = [
@@ -6868,7 +6707,7 @@ def _(rid, params: dict) -> dict:
     """Save an API key for a provider, then return its refreshed model list.
 
     Params:
-        slug: provider slug (e.g. "deepseek", "xai")
+        slug: provider slug (for example ``lmstudio``)
         api_key: the key value to save
 
     Returns the provider dict with models populated (same shape as
@@ -6909,8 +6748,8 @@ def _(rid, params: dict) -> dict:
         os.environ[env_var] = api_key
 
         # Refresh provider data via the shared inventory builder so this
-        # surface stays in lock-step with model.options + dashboard
-        # /api/model/options. picker_hints=True ensures the returned row
+        # surface stays in lock-step with model.options. picker_hints=True
+        # ensures the returned row
         # carries `authenticated` for the TUI frontend.
         session = _sessions.get(params.get("session_id", ""))
         agent = session.get("agent") if session else None
@@ -6950,7 +6789,7 @@ def _(rid, params: dict) -> dict:
     """Remove credentials for a provider.
 
     Params:
-        slug: provider slug (e.g. "deepseek", "xai")
+        slug: provider slug (for example ``lmstudio``)
 
     Returns success status and the provider's slug.
     """
@@ -6972,7 +6811,7 @@ def _(rid, params: dict) -> dict:
                 if remove_env_value(ev):
                     cleared_env = True
 
-        # Clear OAuth / credential pool state
+        # Clear persisted provider auth state.
         cleared_auth = clear_provider_auth(slug)
 
         if not cleared_env and not cleared_auth:
@@ -7029,13 +6868,6 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
         elif name == "compress" and agent:
             _compress_session_history(session, arg)
             _sync_session_key_after_compress(sid, session)
-            _emit("session.info", sid, _session_info(agent, session))
-        elif name == "fast" and agent:
-            mode = arg.lower()
-            if mode in {"fast", "on"}:
-                agent.service_tier = "priority"
-            elif mode in {"normal", "off"}:
-                agent.service_tier = None
             _emit("session.info", sid, _session_info(agent, session))
         elif name == "reload-mcp" and agent and hasattr(agent, "reload_mcp_tools"):
             agent.reload_mcp_tools()
@@ -7594,7 +7426,7 @@ def _probe_urls(parsed) -> list[str]:
 
 
 def _normalize_cdp_url(parsed) -> str:
-    # Concrete ``/devtools/browser/<id>`` endpoints (Browserbase et al.)
+    # Concrete ``/devtools/browser/<id>`` endpoints
     # are connectable as-is. Discovery-style inputs collapse to bare
     # ``scheme://host:port`` so ``_resolve_cdp_override`` can append
     # ``/json/version`` later without doubling the path.
@@ -8104,65 +7936,6 @@ def _(rid, params: dict) -> dict:
         )
     except Exception as exc:
         return _err(rid, 5000, f"learning.edit failed: {exc}")
-
-
-@method("skills.manage")
-def _(rid, params: dict) -> dict:
-    action, query = params.get("action", "list"), params.get("query", "")
-    try:
-        if action == "list":
-            from marlow_cli.banner import get_available_skills
-
-            return _ok(rid, {"skills": get_available_skills()})
-        if action == "search":
-            from tools.skills_hub import (
-                GitHubAuth,
-                create_source_router,
-                unified_search,
-            )
-
-            raw = (
-                unified_search(
-                    query,
-                    create_source_router(GitHubAuth()),
-                    source_filter="all",
-                    limit=20,
-                )
-                or []
-            )
-            return _ok(
-                rid,
-                {
-                    "results": [
-                        {"name": r.name, "description": r.description} for r in raw
-                    ]
-                },
-            )
-        if action == "install":
-            from marlow_cli.skills_hub import do_install
-
-            class _Q:
-                def print(self, *a, **k):
-                    pass
-
-            do_install(query, skip_confirm=True, console=_Q())
-            return _ok(rid, {"installed": True, "name": query})
-        if action == "browse":
-            from marlow_cli.skills_hub import browse_skills
-
-            pg = int(params.get("page", 0) or 0) or (
-                int(query) if query.isdigit() else 1
-            )
-            return _ok(
-                rid, browse_skills(page=pg, page_size=int(params.get("page_size", 20)))
-            )
-        if action == "inspect":
-            from marlow_cli.skills_hub import inspect_skill
-
-            return _ok(rid, {"info": inspect_skill(query) or {}})
-        return _err(rid, 4017, f"unknown skills action: {action}")
-    except Exception as e:
-        return _err(rid, 5024, str(e))
 
 
 @method("skills.reload")

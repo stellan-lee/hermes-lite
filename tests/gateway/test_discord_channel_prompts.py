@@ -72,9 +72,8 @@ def _make_runner():
     runner._ephemeral_system_prompt = "Global prompt"
     runner._prefill_messages = []
     runner._reasoning_config = None
-    runner._service_tier = None
     runner._provider_routing = {}
-    runner._fallback_model = None
+    runner._fallback_providers = None
     runner._running_agents = {}
     runner._pending_model_notes = {}
     runner._session_db = None

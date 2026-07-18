@@ -20,17 +20,6 @@ Usage:
     response = agent.run_conversation("Tell me about the latest Python updates")
 """
 
-# IMPORTANT: marlow_bootstrap must be the very first import — UTF-8 stdio
-# on Windows.  No-op on POSIX.  See marlow_bootstrap.py for full rationale.
-try:
-    import marlow_bootstrap  # noqa: F401
-except ModuleNotFoundError:
-    # Graceful fallback when marlow_bootstrap isn't registered in the venv
-    # yet — happens during partial ``marlow update`` where git-reset landed
-    # new code but ``uv pip install -e .`` didn't finish.  Missing bootstrap
-    # means UTF-8 stdio setup is skipped on Windows; POSIX is unaffected.
-    pass
-
 import asyncio
 import base64
 import copy
@@ -122,7 +111,6 @@ from agent.prompt_builder import (  # noqa: F401  # re-exported via _ra() / mock
     build_skills_system_prompt,
     build_context_files_prompt,
     build_environment_hints,
-    build_nous_subscription_prompt,
     load_soul_md,
 )
 from agent.process_bootstrap import _get_proxy_from_env  # noqa: F401
@@ -176,94 +164,21 @@ from utils import atomic_json_write, base_url_host_matches, base_url_hostname
 
 _MAX_TOOL_WORKERS = 8
 
-# Guard so the OpenRouter metadata pre-warm thread is only spawned once per
-# process, not once per AIAgent instantiation.  Without this, long-running
-# gateway processes leak one OS thread per incoming message and eventually
-# exhaust the system thread limit (RuntimeError: can't start new thread).
-_openrouter_prewarm_done = threading.Event()
-
 # =========================================================================
 # Large tool result handler — save oversized output to temp file
 # =========================================================================
 
 
-# =========================================================================
-# Qwen Portal headers — mimics QwenCode CLI for portal.qwen.ai compatibility.
-# Extracted as a module-level helper so both __init__ and
-# _apply_client_headers_for_base_url can share it.
-# =========================================================================
-_QWEN_CODE_VERSION = "0.14.1"
-
-
-def _routermint_headers() -> dict:
-    """Return the User-Agent RouterMint needs to avoid Cloudflare 1010 blocks."""
-    from marlow_cli import __version__ as _MARLOW_VERSION
-
-    return {
-        "User-Agent": f"MarlowAgent/{_MARLOW_VERSION}",
-    }
-
-
-def _pool_may_recover_from_rate_limit(
-    pool, *, provider: str | None = None, base_url: str | None = None
-) -> bool:
-    """Decide whether to wait for credential-pool rotation instead of falling back.
-
-    The existing pool-rotation path requires the pool to (1) exist and (2) have
-    at least one entry not currently in exhaustion cooldown.  But rotation is
-    only meaningful when the pool has more than one entry.
-
-    With a single-credential pool (common for Gemini OAuth, Vertex service
-    accounts, and any "one personal key" configuration), the primary entry
-    just 429'd and there is nothing to rotate to.  Waiting for the pool
-    cooldown to expire means retrying against the same exhausted quota — the
-    daily-quota 429 will recur immediately, and the retry budget is burned.
-
-    Additionally, Google CloudCode / Gemini CLI rate limits are ACCOUNT-level
-    throttles — even a multi-entry pool shares the same quota window, so
-    rotation won't recover.  Skip straight to the fallback for those (#13636).
-
-    In those cases we must fall back to the configured ``fallback_model``
-    instead.  Returns True only when rotation has somewhere to go.
-
-    See issues #11314 and #13636.
-    """
-    if pool is None:
-        return False
-    if not pool.has_available():
-        return False
-    # CloudCode / Gemini CLI quotas are account-wide — all pool entries share
-    # the same throttle window, so rotation can't recover.  Prefer fallback.
-    if provider == "google-gemini-cli" or str(base_url or "").startswith("cloudcode-pa://"):
-        return False
-    return len(pool.entries()) > 1
-
-
-def _qwen_portal_headers() -> dict:
-    """Return default HTTP headers required by Qwen Portal API."""
-    import platform as _plat
-
-    _ua = f"QwenCode/{_QWEN_CODE_VERSION} ({_plat.system().lower()}; {_plat.machine()})"
-    return {
-        "User-Agent": _ua,
-        "X-DashScope-CacheControl": "enable",
-        "X-DashScope-UserAgent": _ua,
-        "X-DashScope-AuthType": "qwen-oauth",
-    }
-
-
 class _StreamErrorEvent(Exception):
     """Synthesized provider error surfaced from a Responses ``error`` SSE frame.
 
-    Some Codex-style Responses backends (xAI for subscription/quota
-    failures, custom relays under malformed-tool-call conditions) emit a
+    Some Responses-compatible relays emit a
     standalone ``type=error`` frame instead of routing the failure
     through ``response.failed`` or returning an HTTP 4xx.  The fallback
     streaming path raises this exception so ``_summarize_api_error`` and
     ``_extract_api_error_context`` see a familiar ``.body`` /
     ``.status_code`` shape and the entitlement detector can match the
-    underlying provider message ("do not have an active Grok
-    subscription", etc.).
+    provider error message.
     """
 
     def __init__(
@@ -320,10 +235,6 @@ class AIAgent:
         api_key: str = None,
         provider: str = None,
         api_mode: str = None,
-        acp_command: str = None,
-        acp_args: list[str] | None = None,
-        command: str = None,
-        args: list[str] | None = None,
         model: str = "",
         max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
         tool_delay: float = 1.0,
@@ -335,13 +246,6 @@ class AIAgent:
         ephemeral_system_prompt: str = None,
         log_prefix_chars: int = 100,
         log_prefix: str = "",
-        providers_allowed: List[str] = None,
-        providers_ignored: List[str] = None,
-        providers_order: List[str] = None,
-        provider_sort: str = None,
-        provider_require_parameters: bool = False,
-        provider_data_collection: str = None,
-        openrouter_min_coding_score: Optional[float] = None,
         session_id: str = None,
         tool_progress_callback: callable = None,
         tool_start_callback: callable = None,
@@ -356,7 +260,6 @@ class AIAgent:
         status_callback: callable = None,
         max_tokens: int = None,
         reasoning_config: Dict[str, Any] = None,
-        service_tier: str = None,
         request_overrides: Dict[str, Any] = None,
         prefill_messages: List[Dict[str, Any]] = None,
         platform: str = None,
@@ -374,8 +277,7 @@ class AIAgent:
         session_db=None,
         parent_session_id: str = None,
         iteration_budget: "IterationBudget" = None,
-        fallback_model: Dict[str, Any] = None,
-        credential_pool=None,
+        fallback_providers: List[Dict[str, Any]] = None,
         checkpoints_enabled: bool = False,
         checkpoint_max_snapshots: int = 20,
         checkpoint_max_total_size_mb: int = 500,
@@ -390,10 +292,6 @@ class AIAgent:
             api_key=api_key,
             provider=provider,
             api_mode=api_mode,
-            acp_command=acp_command,
-            acp_args=acp_args,
-            command=command,
-            args=args,
             model=model,
             max_iterations=max_iterations,
             tool_delay=tool_delay,
@@ -405,13 +303,6 @@ class AIAgent:
             ephemeral_system_prompt=ephemeral_system_prompt,
             log_prefix_chars=log_prefix_chars,
             log_prefix=log_prefix,
-            providers_allowed=providers_allowed,
-            providers_ignored=providers_ignored,
-            providers_order=providers_order,
-            provider_sort=provider_sort,
-            provider_require_parameters=provider_require_parameters,
-            provider_data_collection=provider_data_collection,
-            openrouter_min_coding_score=openrouter_min_coding_score,
             session_id=session_id,
             tool_progress_callback=tool_progress_callback,
             tool_start_callback=tool_start_callback,
@@ -426,7 +317,6 @@ class AIAgent:
             status_callback=status_callback,
             max_tokens=max_tokens,
             reasoning_config=reasoning_config,
-            service_tier=service_tier,
             request_overrides=request_overrides,
             prefill_messages=prefill_messages,
             platform=platform,
@@ -444,8 +334,7 @@ class AIAgent:
             session_db=session_db,
             parent_session_id=parent_session_id,
             iteration_budget=iteration_budget,
-            fallback_model=fallback_model,
-            credential_pool=credential_pool,
+            fallback_providers=fallback_providers,
             checkpoints_enabled=checkpoints_enabled,
             checkpoint_max_snapshots=checkpoint_max_snapshots,
             checkpoint_max_total_size_mb=checkpoint_max_total_size_mb,
@@ -703,7 +592,7 @@ class AIAgent:
 
         In headless/stdio-protocol environments, a raw spinner with no custom
         ``_print_fn`` falls back to ``sys.stdout`` and can corrupt protocol
-        streams such as ACP JSON-RPC. Allow quiet spinners only when either:
+        streams such as JSON-RPC. Allow quiet spinners only when either:
         - output is explicitly rerouted via ``_print_fn``; or
         - stdout is a real TTY.
         """
@@ -901,24 +790,6 @@ class AIAgent:
         from agent.stream_diag import flatten_exception_chain
         return flatten_exception_chain(error)
 
-    def _is_provider_stream_parse_error(self, error: BaseException) -> bool:
-        """Return True for malformed provider streaming data from SDK parsers.
-
-        Some Anthropic-compatible streaming providers can send a malformed
-        event-stream frame.  The Anthropic SDK surfaces that as a plain
-        ``ValueError`` such as ``expected ident at line 1 column 149``.  That
-        is provider wire-format trouble, not local request validation, so it
-        should follow the same retry path as a truncated JSON body.
-        """
-        if getattr(self, "api_mode", None) != "anthropic_messages":
-            return False
-        if not isinstance(error, ValueError):
-            return False
-        if isinstance(error, (UnicodeEncodeError, json.JSONDecodeError)):
-            return False
-        message = str(error).strip().lower()
-        return "expected ident at line" in message
-
     def _log_stream_retry(
         self,
         *,
@@ -985,42 +856,6 @@ class AIAgent:
         """Forwarder — see ``agent.conversation_compression.replay_compression_warning``."""
         from agent.conversation_compression import replay_compression_warning
         replay_compression_warning(self)
-
-    def _is_direct_openai_url(self, base_url: str = None) -> bool:
-        """Return True when a base URL targets OpenAI's native API."""
-        if base_url is not None:
-            hostname = base_url_hostname(base_url)
-        else:
-            hostname = getattr(self, "_base_url_hostname", "") or base_url_hostname(
-                getattr(self, "_base_url_lower", "")
-            )
-        return hostname == "api.openai.com"
-
-    def _is_azure_openai_url(self, base_url: str = None) -> bool:
-        """Return True when a base URL targets Azure OpenAI.
-
-        Azure OpenAI exposes an OpenAI-compatible endpoint at
-        ``{resource}.openai.azure.com/openai/v1`` that accepts the
-        standard ``openai`` Python client.  Unlike api.openai.com it
-        does NOT support the Responses API — gpt-5.x models are served
-        on the regular ``/chat/completions`` path — so routing decisions
-        must treat Azure separately from direct OpenAI.
-        """
-        if base_url is not None:
-            url = str(base_url).lower()
-        else:
-            url = getattr(self, "_base_url_lower", "") or ""
-        return "openai.azure.com" in url
-
-    def _is_github_copilot_url(self, base_url: str = None) -> bool:
-        """Return True when a base URL targets GitHub Copilot's OpenAI-compatible API."""
-        if base_url is not None:
-            hostname = base_url_hostname(base_url)
-        else:
-            hostname = getattr(self, "_base_url_hostname", "") or base_url_hostname(
-                getattr(self, "_base_url_lower", "")
-            )
-        return hostname == "api.githubcopilot.com"
 
     def _resolved_api_call_timeout(self) -> float:
         """Resolve the effective per-call request timeout in seconds.
@@ -1143,70 +978,8 @@ class AIAgent:
             "See marlow-agent#21444 for symptom history."
         )
 
-    def _is_openrouter_url(self) -> bool:
-        """Return True when the base URL targets OpenRouter."""
-        return base_url_host_matches(self._base_url_lower, "openrouter.ai")
-
-    def _anthropic_prompt_cache_policy(
-        self,
-        *,
-        provider: Optional[str] = None,
-        base_url: Optional[str] = None,
-        api_mode: Optional[str] = None,
-        model: Optional[str] = None,
-    ) -> tuple[bool, bool]:
-        """Forwarder — see ``agent.agent_runtime_helpers.anthropic_prompt_cache_policy``."""
-        from agent.agent_runtime_helpers import anthropic_prompt_cache_policy
-        return anthropic_prompt_cache_policy(self, provider=provider, base_url=base_url, api_mode=api_mode, model=model)
-
-    @staticmethod
-    def _model_requires_responses_api(model: str) -> bool:
-        """Return True for models that require the Responses API path.
-
-        GPT-5.x models are rejected on /v1/chat/completions by both
-        OpenAI and OpenRouter (error: ``unsupported_api_for_model``).
-        Detect these so the correct api_mode is set regardless of
-        which provider is serving the model.
-        """
-        m = model.lower()
-        # Strip vendor prefix (e.g. "openai/gpt-5.4" → "gpt-5.4")
-        if "/" in m:
-            m = m.rsplit("/", 1)[-1]
-        return m.startswith("gpt-5")
-
-    @staticmethod
-    def _provider_model_requires_responses_api(
-        model: str,
-        *,
-        provider: Optional[str] = None,
-    ) -> bool:
-        """Return True when this provider/model pair should use Responses API."""
-        normalized_provider = (provider or "").strip().lower()
-        # Nous serves GPT-5.x models via its OpenAI-compatible chat
-        # completions endpoint; its /v1/responses endpoint returns 404.
-        if normalized_provider == "nous":
-            return False
-        if normalized_provider == "copilot":
-            try:
-                from marlow_cli.models import _should_use_copilot_responses_api
-                return _should_use_copilot_responses_api(model)
-            except Exception:
-                # Fall back to the generic GPT-5 rule if Copilot-specific
-                # logic is unavailable for any reason.
-                pass
-        return AIAgent._model_requires_responses_api(model)
-
     def _max_tokens_param(self, value: int) -> dict:
-        """Return the correct max tokens kwarg for the current provider.
-
-        OpenAI's newer models (gpt-4o, o-series, gpt-5+) require
-        'max_completion_tokens'. Azure OpenAI also requires
-        'max_completion_tokens' for gpt-5.x models served via the
-        OpenAI-compatible endpoint. OpenRouter, local models, and older
-        OpenAI models use 'max_tokens'.
-        """
-        if self._is_direct_openai_url() or self._is_azure_openai_url() or self._is_github_copilot_url():
-            return {"max_completion_tokens": value}
+        """Return the standard output-token limit for compatible endpoints."""
         return {"max_tokens": value}
 
     @staticmethod
@@ -1596,131 +1369,6 @@ class AIAgent:
         _save_trajectory_to_file(trajectory, self.model, completed)
 
     @staticmethod
-    def _is_entitlement_failure(
-        error_context: Optional[Dict[str, Any]],
-        status_code: Optional[int],
-    ) -> bool:
-        """Detect subscription/entitlement 403s that masquerade as auth failures.
-
-        Returned True only when the body text matches a known entitlement
-        shape AND the status is 401/403.  Refreshing an OAuth token cannot
-        fix an unsubscribed account, so callers should surface the error
-        instead of looping the credential pool.
-
-        Current matches:
-          * xAI OAuth: "do not have an active Grok subscription" /
-            "out of available resources" / "does not have permission" + "grok"
-
-        Disambiguator for xAI (#29344): the same ``code`` text ("The caller
-        does not have permission to execute the specified operation") is
-        returned for BOTH an unsubscribed account AND a stale OAuth access
-        token.  xAI ships an explicit signal in the ``error`` field that
-        tells the two apart: a ``[WKE=unauthenticated:...]`` suffix (and/or
-        the ``OAuth2 access token could not be validated`` phrasing) means
-        the credentials failed validation — that's recoverable by refreshing
-        the token, NOT by surfacing an entitlement message.  When either
-        signal is present we return False eagerly so the credential-pool
-        refresh path runs, letting long-running TUI sessions recover from
-        stale tokens without an exit/reopen cycle.
-
-        Extend here for new providers as we discover them (Anthropic's
-        Claude Max OAuth entitlement errors look distinct enough today that
-        the existing 1M-context-beta branch handles them; revisit if other
-        subscription tiers start producing the same loop signature).
-        """
-        if status_code not in {401, 403, None}:
-            return False
-        if not isinstance(error_context, dict):
-            return False
-        # Build a single lowercase haystack covering every field shape the
-        # body might land in.  ``_extract_api_error_context`` normalises to
-        # ``message``/``reason``, but callers (and the test suite) may also
-        # hand us the raw body with ``code``/``error`` keys; cover both so
-        # the WKE disambiguator below fires regardless of entry point.
-        message = str(error_context.get("message") or "").lower()
-        reason = str(error_context.get("reason") or "").lower()
-        code = str(error_context.get("code") or "").lower()
-        err = str(error_context.get("error") or "").lower()
-        haystack = f"{message} {reason} {code} {err}"
-        if not haystack.strip():
-            return False
-        # xAI's authoritative disambiguator for "stale token" vs
-        # "unsubscribed account".  Both conditions share the same
-        # permission-denied ``code`` text; only one carries this suffix.
-        # Bail out before the entitlement keyword checks so a stale OAuth
-        # token routes through the credential-refresh path instead of the
-        # surface-error-as-entitlement path.  See #29344 for the long-
-        # running TUI failure mode this closes.
-        if "[wke=unauthenticated:" in haystack:
-            return False
-        if "oauth2 access token could not be validated" in haystack:
-            return False
-        if "do not have an active grok subscription" in haystack:
-            return True
-        if "out of available resources" in haystack and "grok" in haystack:
-            return True
-        if "does not have permission" in haystack and "grok" in haystack:
-            return True
-        return False
-
-    @staticmethod
-    def _decorate_xai_entitlement_error(detail: str) -> str:
-        """Append a neutral hint when xAI's OAuth surface returns the
-        permission-denied 403.
-
-        xAI's ``/v1/responses`` endpoint replies to several distinct failure
-        modes with the SAME body::
-
-            {"code": "The caller does not have permission to execute the
-             specified operation", "error": "You have either run out of
-             available resources or do not have an active Grok subscription.
-             Manage subscriptions at https://grok.com/?_s=usage or subscribe
-             at https://grok.com/supergrok"}
-
-        That body covers several real causes we cannot distinguish without
-        more info from xAI.  The most common (and least obvious) one is
-        that **X Premium+ does NOT include API access** — only standalone
-        SuperGrok subscribers can use Marlow against xai-oauth.  Lots of
-        users see Grok in their X app, assume it works here too, and hit
-        this 403 with no idea why.  Lead the hint with that.
-
-        Other possible causes:
-          * No Grok subscription at all
-          * SuperGrok tier doesn't include the requested model (e.g.
-            grok-4.3 may need a higher tier)
-          * Monthly quota exhausted (the ``?_s=usage`` URL hints at this)
-
-        Surface the raw xAI text verbatim and point at
-        https://grok.com/?_s=usage where the user can see WHICH applies.
-
-        Matched once per detail string — won't double-decorate if the
-        upstream already concatenated the same text.
-        """
-        if not detail:
-            return detail
-        lower = detail.lower()
-        is_entitlement = (
-            "do not have an active grok subscription" in lower
-            or ("out of available resources" in lower and "grok" in lower)
-            or ("does not have permission" in lower and "grok" in lower)
-        )
-        if not is_entitlement:
-            return detail
-        hint = (
-            " — xAI rejected this OAuth account. NOTE: X Premium+ does NOT "
-            "include xAI API access — only standalone SuperGrok subscribers "
-            "can use this provider. Other possible causes: no Grok "
-            "subscription, your tier doesn't include this model, or your "
-            "quota is exhausted. Check https://grok.com/?_s=usage to see "
-            "which, or run `/model` to switch providers."
-        )
-        # Idempotency: detect prior decoration by a substring unique to the
-        # hint (not present in xAI's own body text).
-        if "X Premium+ does NOT include" in detail:
-            return detail
-        return f"{detail}{hint}"
-
-    @staticmethod
     def _sanitize_api_error_text(value: Any, *, fallback: str = "") -> str:
         """Return an API-error-derived string safe for disclosure."""
         from agent.agent_runtime_helpers import sanitize_api_error_text
@@ -1762,7 +1410,7 @@ class AIAgent:
                 parts.append(f"Ray {ray_id}")
             return " — ".join(parts)
 
-        # JSON body errors from OpenAI/Anthropic SDKs
+        # JSON body errors from compatible SDKs
         body = getattr(error, "body", None)
         if isinstance(body, dict):
             msg = body.get("error", {}).get("message") if isinstance(body.get("error"), dict) else body.get("message")
@@ -1773,20 +1421,17 @@ class AIAgent:
                     msg,
                     fallback="<provider details omitted>",
                 )
-                return AIAgent._decorate_xai_entitlement_error(
-                    f"{prefix}{safe_msg[:300]}"
-                )
+                return f"{prefix}{safe_msg[:300]}"
 
         # Fallback: truncate the raw string but give more room than 200 chars
         status_code = getattr(error, "status_code", None)
         prefix = f"HTTP {status_code}: " if status_code else ""
-        return AIAgent._decorate_xai_entitlement_error(f"{prefix}{raw[:500]}")
+        return f"{prefix}{raw[:500]}"
 
     def _mask_api_key_for_logs(self, key: Any) -> Optional[str]:
-        # Azure Foundry Entra ID bearer providers are callables — never
-        # invoke them in log paths; identify the auth surface instead.
+        # Never invoke callable credentials in log paths.
         if callable(key) and not isinstance(key, str):
-            return "<entra-id-bearer>"
+            return "<callable-credential>"
         if not key:
             return None
         if len(key) <= 12:
@@ -2423,28 +2068,6 @@ class AIAgent:
     def get_rate_limit_state(self):
         """Return the last captured RateLimitState, or None."""
         return self._rate_limit_state
-
-    def _check_openrouter_cache_status(self, http_response: Any) -> None:
-        """Read X-OpenRouter-Cache-Status from response headers and log it.
-
-        Increments ``_or_cache_hits`` on HIT so callers can report savings.
-        """
-        if http_response is None:
-            return
-        headers = getattr(http_response, "headers", None)
-        if not headers:
-            return
-        try:
-            status = headers.get("x-openrouter-cache-status")
-            if not status:
-                return
-            if status.upper() == "HIT":
-                self._or_cache_hits += 1
-                logger.info("OpenRouter response cache HIT (total: %d)", self._or_cache_hits)
-            else:
-                logger.debug("OpenRouter response cache %s", status.upper())
-        except Exception:
-            pass  # Never let header parsing break the agent loop
 
     def get_activity_summary(self) -> dict:
         """Return a snapshot of the agent's current activity for diagnostics.
@@ -3202,11 +2825,6 @@ class AIAgent:
 
         return any(_contains_image(item) for item in candidates)
 
-    def _copilot_headers_for_request(self, *, is_vision: bool) -> dict:
-        from marlow_cli.copilot_auth import copilot_request_headers
-
-        return copilot_request_headers(is_agent_turn=True, is_vision=is_vision)
-
     def _create_request_openai_client(self, *, reason: str, api_kwargs: Optional[dict] = None) -> Any:
         from unittest.mock import Mock
 
@@ -3226,11 +2844,6 @@ class AIAgent:
         # Shared/primary clients and Anthropic / Bedrock paths are
         # unaffected (they don't go through here).
         request_kwargs["max_retries"] = 0
-        if (
-            base_url_host_matches(str(request_kwargs.get("base_url", "")), "api.githubcopilot.com")
-            and self._api_kwargs_have_image_parts(api_kwargs or {})
-        ):
-            request_kwargs["default_headers"] = self._copilot_headers_for_request(is_vision=True)
         return self._create_openai_client(request_kwargs, reason=reason, shared=False)
 
     def _close_request_openai_client(self, client: Any, *, reason: str) -> None:
@@ -3280,34 +2893,15 @@ class AIAgent:
         return run_codex_create_stream_fallback(self, api_kwargs, client)
 
     def _try_refresh_codex_client_credentials(self, *, force: bool = True) -> bool:
-        if self.api_mode != "codex_responses" or self.provider not in {"openai-codex", "xai-oauth"}:
+        if self.api_mode != "codex_responses" or self.provider != "openai-codex":
             return False
 
-        # Guard against silent account swap.
-        #
-        # When an agent is using a non-singleton credential — e.g. a manual
-        # pool entry (``marlow auth add xai-oauth``) whose tokens belong to
-        # a different account than the loopback_pkce singleton, or an agent
-        # constructed with an explicit ``api_key=`` arg — force-refreshing
-        # the singleton here and adopting its tokens silently re-routes the
-        # rest of the conversation onto the singleton's account.  The
-        # credential pool's reactive recovery (``_recover_with_credential_pool``)
-        # is the right channel for that case; this path is the
-        # singleton-only fallback used when the pool can't recover, and
-        # MUST only fire when the agent really is on singleton tokens.
+        # Guard against silently replacing explicitly supplied credentials
+        # with a different singleton Codex account.
         try:
-            if self.provider == "openai-codex":
-                from marlow_cli.auth import resolve_codex_runtime_credentials
+            from marlow_cli.auth import resolve_codex_runtime_credentials
 
-                singleton_now = resolve_codex_runtime_credentials(
-                    refresh_if_expiring=False,
-                )
-            else:
-                from marlow_cli.auth import resolve_xai_oauth_runtime_credentials
-
-                singleton_now = resolve_xai_oauth_runtime_credentials(
-                    refresh_if_expiring=False,
-                )
+            singleton_now = resolve_codex_runtime_credentials(refresh_if_expiring=False)
         except Exception as exc:
             logger.debug("%s singleton read failed: %s", self.provider, exc)
             return False
@@ -3317,21 +2911,15 @@ class AIAgent:
         if singleton_key and active_key and singleton_key != active_key:
             logger.debug(
                 "%s singleton tokens differ from the active api_key; "
-                "skipping singleton force-refresh to avoid silent account swap. "
-                "Reactive credential rotation should go through the pool.",
+                "skipping singleton force-refresh to avoid silent account swap.",
                 self.provider,
             )
             return False
 
         try:
-            if self.provider == "openai-codex":
-                from marlow_cli.auth import resolve_codex_runtime_credentials
+            from marlow_cli.auth import resolve_codex_runtime_credentials
 
-                creds = resolve_codex_runtime_credentials(force_refresh=force)
-            else:
-                from marlow_cli.auth import resolve_xai_oauth_runtime_credentials
-
-                creds = resolve_xai_oauth_runtime_credentials(force_refresh=force)
+            creds = resolve_codex_runtime_credentials(force_refresh=force)
         except Exception as exc:
             logger.debug("%s credential refresh failed: %s", self.provider, exc)
             return False
@@ -3353,257 +2941,14 @@ class AIAgent:
 
         return True
 
-    def _try_refresh_nous_client_credentials(
-        self,
-        *,
-        force: bool = True,
-    ) -> bool:
-        if self.api_mode != "chat_completions" or self.provider != "nous":
-            return False
-
-        try:
-            from marlow_cli.auth import resolve_nous_runtime_credentials
-
-            creds = resolve_nous_runtime_credentials(
-                timeout_seconds=float(os.getenv("MARLOW_NOUS_TIMEOUT_SECONDS", "15")),
-                force_refresh=force,
-            )
-        except Exception as exc:
-            logger.debug("Nous credential refresh failed: %s", exc)
-            return False
-
-        api_key = creds.get("api_key")
-        base_url = creds.get("base_url")
-        if not isinstance(api_key, str) or not api_key.strip():
-            return False
-        if not isinstance(base_url, str) or not base_url.strip():
-            return False
-
-        self.api_key = api_key.strip()
-        self.base_url = base_url.strip().rstrip("/")
-        self._client_kwargs["api_key"] = self.api_key
-        self._client_kwargs["base_url"] = self.base_url
-        # Nous requests should not inherit OpenRouter-only attribution headers.
-        self._client_kwargs.pop("default_headers", None)
-
-        if not self._replace_primary_openai_client(reason="nous_credential_refresh"):
-            return False
-
-        return True
-
-    def _try_refresh_copilot_client_credentials(self) -> bool:
-        """Refresh Copilot credentials and rebuild the shared OpenAI client.
-
-        Copilot tokens may remain the same string across refreshes (`gh auth token`
-        returns a stable OAuth token in many setups). We still rebuild the client
-        on 401 so retries recover from stale auth/client state without requiring
-        a session restart.
-        """
-        if self.provider != "copilot":
-            return False
-
-        try:
-            from marlow_cli.copilot_auth import resolve_copilot_token
-
-            new_token, token_source = resolve_copilot_token()
-        except Exception as exc:
-            logger.debug("Copilot credential refresh failed: %s", exc)
-            return False
-
-        if not isinstance(new_token, str) or not new_token.strip():
-            return False
-
-        new_token = new_token.strip()
-
-        self.api_key = new_token
-        self._client_kwargs["api_key"] = self.api_key
-        self._client_kwargs["base_url"] = self.base_url
-        self._apply_client_headers_for_base_url(str(self.base_url or ""))
-
-        if not self._replace_primary_openai_client(reason="copilot_credential_refresh"):
-            return False
-
-        logger.info("Copilot credentials refreshed from %s", token_source)
-        return True
-
-    def _try_refresh_anthropic_client_credentials(self) -> bool:
-        if self.api_mode != "anthropic_messages" or not hasattr(self, "_anthropic_api_key"):
-            return False
-        # Only refresh credentials for the native Anthropic provider.
-        # Other anthropic_messages providers (MiniMax, Alibaba, etc.) use their own keys.
-        if self.provider != "anthropic":
-            return False
-        # Azure endpoints use static API keys — OAuth token rotation doesn't apply.
-        # Refreshing would pick up ~/.claude/.credentials.json OAuth token and break auth.
-        _base = getattr(self, "_anthropic_base_url", "") or ""
-        if "azure.com" in _base:
-            return False
-
-        try:
-            from agent.anthropic_adapter import resolve_anthropic_token, build_anthropic_client
-
-            new_token = resolve_anthropic_token()
-        except Exception as exc:
-            logger.debug("Anthropic credential refresh failed: %s", exc)
-            return False
-
-        if not isinstance(new_token, str) or not new_token.strip():
-            return False
-        new_token = new_token.strip()
-        if new_token == self._anthropic_api_key:
-            return False
-
-        try:
-            self._anthropic_client.close()
-        except Exception:
-            pass
-
-        try:
-            self._anthropic_client = build_anthropic_client(
-                new_token,
-                getattr(self, "_anthropic_base_url", None),
-                timeout=get_provider_request_timeout(self.provider, self.model),
-            )
-        except Exception as exc:
-            logger.warning("Failed to rebuild Anthropic client after credential refresh: %s", exc)
-            return False
-
-        self._anthropic_api_key = new_token
-        # Update OAuth flag — token type may have changed (API key ↔ OAuth).
-        # Only treat as OAuth on native Anthropic; third-party endpoints using
-        # the Anthropic protocol must not trip OAuth paths (#1739 & third-party
-        # identity-injection guard).
-        from agent.anthropic_adapter import _is_oauth_token
-        self._is_anthropic_oauth = _is_oauth_token(new_token) if self.provider == "anthropic" else False
-        return True
-
     def _apply_client_headers_for_base_url(self, base_url: str) -> None:
-        from agent.auxiliary_client import (
-            build_nvidia_nim_headers,
-            build_or_headers,
-        )
-
-        if base_url_host_matches(base_url, "openrouter.ai"):
-            self._client_kwargs["default_headers"] = build_or_headers()
-        elif base_url_host_matches(base_url, "integrate.api.nvidia.com"):
-            self._client_kwargs["default_headers"] = build_nvidia_nim_headers(base_url)
-        elif base_url_host_matches(base_url, "api.routermint.com"):
-            self._client_kwargs["default_headers"] = _routermint_headers()
-        elif base_url_host_matches(base_url, "api.githubcopilot.com"):
-            from marlow_cli.models import copilot_default_headers
-
-            self._client_kwargs["default_headers"] = copilot_default_headers()
-        elif base_url_host_matches(base_url, "api.kimi.com"):
-            self._client_kwargs["default_headers"] = {"User-Agent": "claude-code/0.1.0"}
-        elif base_url_host_matches(base_url, "portal.qwen.ai"):
-            self._client_kwargs["default_headers"] = _qwen_portal_headers()
-        elif base_url_host_matches(base_url, "chatgpt.com"):
+        if base_url_host_matches(base_url, "chatgpt.com"):
             from agent.auxiliary_client import _codex_cloudflare_headers
             self._client_kwargs["default_headers"] = _codex_cloudflare_headers(
                 self._client_kwargs.get("api_key", "")
             )
         else:
-            # No URL-specific headers — check profile.default_headers before clearing.
-            _ph_headers = None
-            try:
-                from providers import get_provider_profile as _gpf2
-                _ph2 = _gpf2(self.provider)
-                if _ph2 and _ph2.default_headers:
-                    _ph_headers = dict(_ph2.default_headers)
-            except Exception:
-                pass
-            if _ph_headers:
-                self._client_kwargs["default_headers"] = _ph_headers
-            else:
-                self._client_kwargs.pop("default_headers", None)
-
-    def _swap_credential(self, entry) -> None:
-        runtime_key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
-        runtime_base = getattr(entry, "runtime_base_url", None) or getattr(entry, "base_url", None) or self.base_url
-
-        if self.api_mode == "anthropic_messages":
-            from agent.anthropic_adapter import build_anthropic_client, _is_oauth_token
-
-            try:
-                self._anthropic_client.close()
-            except Exception:
-                pass
-
-            self._anthropic_api_key = runtime_key
-            self._anthropic_base_url = runtime_base
-            self._anthropic_client = build_anthropic_client(
-                runtime_key, runtime_base,
-                timeout=get_provider_request_timeout(self.provider, self.model),
-            )
-            self._is_anthropic_oauth = _is_oauth_token(runtime_key) if self.provider == "anthropic" else False
-            self.api_key = runtime_key
-            self.base_url = runtime_base
-            return
-
-        self.api_key = runtime_key
-        self.base_url = runtime_base.rstrip("/") if isinstance(runtime_base, str) else runtime_base
-        self._client_kwargs["api_key"] = self.api_key
-        self._client_kwargs["base_url"] = self.base_url
-        self._apply_client_headers_for_base_url(self.base_url)
-        self._replace_primary_openai_client(reason="credential_rotation")
-
-    def _recover_with_credential_pool(
-        self,
-        *,
-        status_code: Optional[int],
-        has_retried_429: bool,
-        classified_reason: Optional[FailoverReason] = None,
-        error_context: Optional[Dict[str, Any]] = None,
-    ) -> tuple[bool, bool]:
-        """Forwarder — see ``agent.agent_runtime_helpers.recover_with_credential_pool``."""
-        from agent.agent_runtime_helpers import recover_with_credential_pool
-        return recover_with_credential_pool(self, status_code=status_code, has_retried_429=has_retried_429, classified_reason=classified_reason, error_context=error_context)
-
-    def _credential_pool_may_recover_rate_limit(self) -> bool:
-        """Whether a rate-limit retry should wait for same-provider credentials."""
-        pool = self._credential_pool
-        if pool is None:
-            return False
-        if (
-            self.provider == "google-gemini-cli"
-            or str(getattr(self, "base_url", "")).startswith("cloudcode-pa://")
-        ):
-            # CloudCode/Gemini quota windows are usually account-level throttles.
-            # Prefer the configured fallback immediately instead of waiting out
-            # Retry-After while a pooled OAuth credential may still appear usable.
-            return False
-        return pool.has_available()
-
-    def _anthropic_messages_create(self, api_kwargs: dict):
-        if self.api_mode == "anthropic_messages":
-            self._try_refresh_anthropic_client_credentials()
-        return self._anthropic_client.messages.create(**api_kwargs)
-
-    def _rebuild_anthropic_client(self) -> None:
-        """Rebuild the Anthropic client after an interrupt or stale call.
-
-        Handles both direct Anthropic and Bedrock-hosted Anthropic models
-        correctly — rebuilding with the Bedrock SDK when provider is bedrock,
-        rather than always falling back to build_anthropic_client() which
-        requires a direct Anthropic API key.
-
-        Honors ``self._oauth_1m_beta_disabled`` (set by the reactive recovery
-        path when an OAuth subscription rejects the 1M-context beta) so the
-        rebuilt client carries the reduced beta set.
-        """
-        _drop_1m = bool(getattr(self, "_oauth_1m_beta_disabled", False))
-        if getattr(self, "provider", None) == "bedrock":
-            from agent.anthropic_adapter import build_anthropic_bedrock_client
-            region = getattr(self, "_bedrock_region", "us-east-1") or "us-east-1"
-            self._anthropic_client = build_anthropic_bedrock_client(region)
-        else:
-            from agent.anthropic_adapter import build_anthropic_client
-            self._anthropic_client = build_anthropic_client(
-                self._anthropic_api_key,
-                getattr(self, "_anthropic_base_url", None),
-                timeout=get_provider_request_timeout(self.provider, self.model),
-                drop_context_1m_beta=_drop_1m,
-            )
+            self._client_kwargs.pop("default_headers", None)
 
     def _interruptible_api_call(self, api_kwargs: dict):
         """Forwarder — see ``agent.chat_completion_helpers.interruptible_api_call``."""
@@ -3838,7 +3183,7 @@ class AIAgent:
             "image/jpeg": ".jpg",
             "image/jpg": ".jpg",
         }.get(mime, ".jpg")
-        tmp = tempfile.NamedTemporaryFile(prefix="anthropic_image_", suffix=suffix, delete=False)
+        tmp = tempfile.NamedTemporaryFile(prefix="marlow_image_", suffix=suffix, delete=False)
         try:
             with tmp:
                 tmp.write(base64.b64decode(data))
@@ -3853,9 +3198,12 @@ class AIAgent:
         path = Path(tmp.name)
         return str(path), path
 
-    def _describe_image_for_anthropic_fallback(self, image_url: str, role: str) -> str:
+    def _describe_image_for_text_fallback(self, image_url: str, role: str) -> str:
         cache_key = hashlib.sha256(str(image_url or "").encode("utf-8")).hexdigest()
-        cached = self._anthropic_image_fallback_cache.get(cache_key)
+        cache = getattr(self, "_image_text_fallback_cache", None)
+        if cache is None:
+            cache = self._image_text_fallback_cache = {}
+        cached = cache.get(cache_key)
         if cached:
             return cached
 
@@ -3901,7 +3249,7 @@ class AIAgent:
                 f"\n[If you need a closer look, use vision_analyze with image_url: {vision_source}]"
             )
 
-        self._anthropic_image_fallback_cache[cache_key] = note
+        cache[cache_key] = note
         return note
 
     def _model_supports_vision(self) -> bool:
@@ -3914,9 +3262,8 @@ class AIAgent:
         Resolution order (see ``agent.image_routing._supports_vision_override``):
           1. ``model.supports_vision`` (top-level, single-model shortcut)
           2. ``providers.<provider>.models.<model>.supports_vision``
-          3. models.dev capability lookup
-        Custom/local models absent from models.dev would otherwise be
-        misclassified as non-vision and have their images stripped.
+          3. retained model metadata
+        Custom/local models without metadata can opt in through config.
         """
         try:
             from marlow_cli.config import load_config
@@ -3928,7 +3275,7 @@ class AIAgent:
         except Exception:
             return False
 
-    def _preprocess_anthropic_content(self, content: Any, role: str) -> Any:
+    def _preprocess_non_vision_content(self, content: Any, role: str) -> Any:
         if not self._content_has_image_parts(content):
             return content
 
@@ -3953,7 +3300,7 @@ class AIAgent:
                 image_data = part.get("image_url", {})
                 image_url = image_data.get("url", "") if isinstance(image_data, dict) else str(image_data or "")
                 if image_url:
-                    image_notes.append(self._describe_image_for_anthropic_fallback(image_url, role))
+                    image_notes.append(self._describe_image_for_text_fallback(image_url, role))
                 else:
                     image_notes.append("[An image was attached but no image source was available.]")
                 continue
@@ -3970,7 +3317,7 @@ class AIAgent:
             return prefix
         if suffix:
             return suffix
-        return "[A multimodal message was converted to text for Anthropic compatibility.]"
+        return "[A multimodal message was converted to text for model compatibility.]"
 
     def _get_transport(self, api_mode: str = None):
         """Return the cached transport for the given (or current) api_mode.
@@ -3989,34 +3336,6 @@ class AIAgent:
             t = get_transport(mode)
             cache[mode] = t
         return t
-
-    def _prepare_anthropic_messages_for_api(self, api_messages: list) -> list:
-        # Fast exit when no message carries image content at all.
-        if not any(
-            isinstance(msg, dict) and self._content_has_image_parts(msg.get("content"))
-            for msg in api_messages
-        ):
-            return api_messages
-
-        # The Anthropic adapter (agent/anthropic_adapter.py:_convert_content_part_to_anthropic)
-        # already translates OpenAI-style image_url/input_image parts into
-        # native Anthropic ``{"type": "image", "source": ...}`` blocks. When
-        # the active model supports vision we let the adapter do its job and
-        # skip this legacy text-fallback preprocessor entirely.
-        if self._model_supports_vision():
-            return api_messages
-
-        # Non-vision Anthropic model (rare today, but keep the fallback for
-        # compat): replace each image part with a vision_analyze text note.
-        transformed = copy.deepcopy(api_messages)
-        for msg in transformed:
-            if not isinstance(msg, dict):
-                continue
-            msg["content"] = self._preprocess_anthropic_content(
-                msg.get("content"),
-                str(msg.get("role", "user") or "user"),
-            )
-        return transformed
 
     def _prepare_messages_for_non_vision_model(self, api_messages: list) -> list:
         """Strip native image parts when the active model lacks vision.
@@ -4040,11 +3359,7 @@ class AIAgent:
         for msg in transformed:
             if not isinstance(msg, dict):
                 continue
-            # Reuse the Anthropic text-fallback preprocessor — the behaviour is
-            # identical (walk content parts, replace images with cached
-            # descriptions, merge back into a single text or structured
-            # content). Naming is historical.
-            msg["content"] = self._preprocess_anthropic_content(
+            msg["content"] = self._preprocess_non_vision_content(
                 msg.get("content"),
                 str(msg.get("role", "user") or "user"),
             )
@@ -4188,151 +3503,17 @@ class AIAgent:
 
         return changed
 
-    def _anthropic_preserve_dots(self) -> bool:
-        """True when using an anthropic-compatible endpoint that preserves dots in model names.
-        Alibaba/DashScope keeps dots (e.g. qwen3.5-plus).
-        MiniMax keeps dots (e.g. MiniMax-M2.7).
-        Xiaomi MiMo keeps dots (e.g. mimo-v2.5, mimo-v2.5-pro).
-        OpenCode Go/Zen keeps dots for non-Claude models (e.g. minimax-m2.5-free).
-        ZAI/Zhipu keeps dots (e.g. glm-4.7, glm-5.1).
-        AWS Bedrock uses dotted inference-profile IDs
-        (e.g. ``global.anthropic.claude-opus-4-7``,
-        ``us.anthropic.claude-sonnet-4-5-20250929-v1:0``) and rejects
-        the hyphenated form with
-        ``HTTP 400 The provided model identifier is invalid``.
-        Regression for #11976; mirrors the opencode-go fix for #5211
-        (commit f77be22c), which extended this same allowlist."""
-        if (getattr(self, "provider", "") or "").lower() in {
-            "alibaba", "minimax", "minimax-cn",
-            "opencode-go", "opencode-zen",
-            "zai", "bedrock",
-            "xiaomi",
-        }:
-            return True
-        base = (getattr(self, "base_url", "") or "").lower()
-        return (
-            "dashscope" in base
-            or "aliyuncs" in base
-            or "minimax" in base
-            or "opencode.ai/zen/" in base
-            or "bigmodel.cn" in base
-            or "xiaomimimo.com" in base
-            # AWS Bedrock runtime endpoints — defense-in-depth when
-            # ``provider`` is unset but ``base_url`` still names Bedrock.
-            or "bedrock-runtime." in base
-        )
-
-    def _is_qwen_portal(self) -> bool:
-        """Return True when the base URL targets Qwen Portal."""
-        return base_url_host_matches(self._base_url_lower, "portal.qwen.ai")
-
-    def _qwen_prepare_chat_messages(self, api_messages: list) -> list:
-        prepared = copy.deepcopy(api_messages)
-        if not prepared:
-            return prepared
-
-        for msg in prepared:
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                msg["content"] = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                # Normalize: convert bare strings to text dicts, keep dicts as-is.
-                # deepcopy already created independent copies, no need for dict().
-                normalized_parts = []
-                for part in content:
-                    if isinstance(part, str):
-                        normalized_parts.append({"type": "text", "text": part})
-                    elif isinstance(part, dict):
-                        normalized_parts.append(part)
-                if normalized_parts:
-                    msg["content"] = normalized_parts
-
-        # Inject cache_control on the last part of the system message.
-        for msg in prepared:
-            if isinstance(msg, dict) and msg.get("role") == "system":
-                content = msg.get("content")
-                if isinstance(content, list) and content and isinstance(content[-1], dict):
-                    content[-1]["cache_control"] = {"type": "ephemeral"}
-                break
-
-        return prepared
-
-    def _qwen_prepare_chat_messages_inplace(self, messages: list) -> None:
-        """In-place variant — mutates an already-copied message list."""
-        if not messages:
-            return
-
-        for msg in messages:
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                msg["content"] = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                normalized_parts = []
-                for part in content:
-                    if isinstance(part, str):
-                        normalized_parts.append({"type": "text", "text": part})
-                    elif isinstance(part, dict):
-                        normalized_parts.append(part)
-                if normalized_parts:
-                    msg["content"] = normalized_parts
-
-        for msg in messages:
-            if isinstance(msg, dict) and msg.get("role") == "system":
-                content = msg.get("content")
-                if isinstance(content, list) and content and isinstance(content[-1], dict):
-                    content[-1]["cache_control"] = {"type": "ephemeral"}
-                break
-
     def _build_api_kwargs(self, api_messages: list) -> dict:
         """Forwarder — see ``agent.chat_completion_helpers.build_api_kwargs``."""
         from agent.chat_completion_helpers import build_api_kwargs
         return build_api_kwargs(self, api_messages)
 
     def _supports_reasoning_extra_body(self) -> bool:
-        """Return True when reasoning extra_body is safe to send for this route/model.
-
-        OpenRouter forwards unknown extra_body fields to upstream providers.
-        Some providers/routes reject `reasoning` with 400s, so gate it to
-        known reasoning-capable model families and direct Nous Portal.
-        """
-        if base_url_host_matches(self._base_url_lower, "nousresearch.com"):
-            return True
-        if (
-            base_url_host_matches(self._base_url_lower, "models.github.ai")
-            or base_url_host_matches(self._base_url_lower, "api.githubcopilot.com")
-        ):
-            try:
-                from marlow_cli.models import github_model_reasoning_efforts
-
-                return bool(github_model_reasoning_efforts(self.model))
-            except Exception:
-                return False
+        """Return whether the retained LM Studio route supports reasoning."""
         if (self.provider or "").strip().lower() == "lmstudio":
             opts = self._lmstudio_reasoning_options_cached()
-            # "off-only" (or absent) means no real reasoning capability.
             return any(opt and opt != "off" for opt in opts)
-        if "openrouter" not in self._base_url_lower:
-            return False
-        if "api.mistral.ai" in self._base_url_lower:
-            return False
-
-        model = (self.model or "").lower()
-        reasoning_model_prefixes = (
-            "deepseek/",
-            "anthropic/",
-            "openai/",
-            "x-ai/",
-            "google/gemini-2",
-            "google/gemma-4",
-            "qwen/qwen3",
-            "tencent/hy3-preview",
-            "xiaomi/",
-        )
-        return any(model.startswith(prefix) for prefix in reasoning_model_prefixes)
+        return False
 
     def _lmstudio_reasoning_options_cached(self) -> list[str]:
         """Probe LM Studio's published reasoning ``allowed_options`` once per
@@ -4381,38 +3562,6 @@ class AIAgent:
             self._lmstudio_reasoning_options_cached(),
         )
 
-    def _github_models_reasoning_extra_body(self) -> dict | None:
-        """Format reasoning payload for GitHub Models/OpenAI-compatible routes."""
-        try:
-            from marlow_cli.models import github_model_reasoning_efforts
-        except Exception:
-            return None
-
-        supported_efforts = github_model_reasoning_efforts(self.model)
-        if not supported_efforts:
-            return None
-
-        if self.reasoning_config and isinstance(self.reasoning_config, dict):
-            if self.reasoning_config.get("enabled") is False:
-                return None
-            requested_effort = str(
-                self.reasoning_config.get("effort", "medium")
-            ).strip().lower()
-        else:
-            requested_effort = "medium"
-
-        if requested_effort == "xhigh" and "high" in supported_efforts:
-            requested_effort = "high"
-        elif requested_effort not in supported_efforts:
-            if requested_effort == "minimal" and "low" in supported_efforts:
-                requested_effort = "low"
-            elif "medium" in supported_efforts:
-                requested_effort = "medium"
-            else:
-                requested_effort = supported_efforts[0]
-
-        return {"effort": requested_effort}
-
     def _build_assistant_message(self, assistant_message, finish_reason: str) -> dict:
         """Forwarder — see ``agent.chat_completion_helpers.build_assistant_message``."""
         from agent.chat_completion_helpers import build_assistant_message
@@ -4437,64 +3586,12 @@ class AIAgent:
         cached = getattr(self, "_thinking_pad_cache", None)
         if cached is not None and cached[0] == key:
             return cached[1]
-        result = (
-            self._needs_deepseek_tool_reasoning()
-            or self._needs_kimi_tool_reasoning()
-            or self._needs_mimo_tool_reasoning()
-        )
+        model = (self.model or "").lower()
+        # Local OpenAI-compatible servers may host models that require
+        # reasoning_content to be replayed with assistant tool calls.
+        result = "deepseek" in model or "mimo" in model
         self._thinking_pad_cache = (key, result)
         return result
-
-    def _needs_kimi_tool_reasoning(self) -> bool:
-        """Return True when the current provider is Kimi / Moonshot thinking mode.
-
-        Kimi ``/coding`` and Moonshot thinking mode both require
-        ``reasoning_content`` on every assistant tool-call message; omitting
-        it causes the next replay to fail with HTTP 400.
-
-        Detection is host-driven, not model-name-driven: aggregators like
-        OpenRouter that re-export Kimi/Moonshot models speak their own
-        protocol and reject ``reasoning_content`` echoes. We only enable the
-        kimi-reasoning replay when the request actually targets a
-        kimi/moonshot endpoint or the dedicated kimi-coding provider.
-        """
-        return (
-            self.provider in {"kimi-coding", "kimi-coding-cn"}
-            or base_url_host_matches(self.base_url, "api.kimi.com")
-            or base_url_host_matches(self.base_url, "moonshot.ai")
-            or base_url_host_matches(self.base_url, "moonshot.cn")
-        )
-
-    def _needs_deepseek_tool_reasoning(self) -> bool:
-        """Return True when the current provider is DeepSeek thinking mode.
-
-        DeepSeek V4 thinking mode requires ``reasoning_content`` on every
-        assistant tool-call turn; omitting it causes HTTP 400 when the
-        message is replayed in a subsequent API request (#15250).
-        """
-        provider = (self.provider or "").lower()
-        model = (self.model or "").lower()
-        return (
-            provider == "deepseek"
-            or "deepseek" in model
-            or base_url_host_matches(self.base_url, "api.deepseek.com")
-        )
-
-    def _needs_mimo_tool_reasoning(self) -> bool:
-        """Return True when the current provider is Xiaomi MiMo thinking mode.
-
-        MiMo thinking mode requires ``reasoning_content`` on every assistant
-        tool-call message when replaying history; omitting it causes HTTP 400.
-        Refs: https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/passing-back-reasoning_content
-        """
-        provider = (self.provider or "").lower()
-        model = (self.model or "").lower()
-        return (
-            provider == "xiaomi"
-            or "mimo" in model
-            or base_url_host_matches(self.base_url, "api.xiaomimimo.com")
-            or base_url_host_matches(self.base_url, "xiaomimimo.com")
-        )
 
     def _copy_reasoning_content_for_api(self, source_msg: dict, api_msg: dict) -> None:
         """Forwarder — see ``agent.agent_runtime_helpers.copy_reasoning_content_for_api``."""
@@ -4658,8 +3755,6 @@ class AIAgent:
             toolsets=function_args.get("toolsets"),
             tasks=function_args.get("tasks"),
             max_iterations=function_args.get("max_iterations"),
-            acp_command=function_args.get("acp_command"),
-            acp_args=function_args.get("acp_args"),
             role=function_args.get("role"),
             background=(not _is_subagent),
             parent_agent=self,
@@ -4783,9 +3878,9 @@ def main(
 
     Args:
         query (str): Natural language query for the agent. Defaults to Python 3.13 example.
-        model (str): Model name to use (OpenRouter format: provider/model). Defaults to anthropic/claude-sonnet-4.6.
-        api_key (str): API key for authentication. Uses OPENROUTER_API_KEY env var if not provided.
-        base_url (str): Base URL for the model API. Defaults to https://openrouter.ai/api/v1
+        model (str): Model name to use.
+        api_key (str): API key for authentication, when required.
+        base_url (str): Custom/local OpenAI-compatible endpoint URL.
         max_turns (int): Maximum number of API call iterations. Defaults to 10.
         enabled_toolsets (str): Comma-separated list of toolsets to enable. Supports predefined
                               toolsets (e.g., "research", "development", "safe").

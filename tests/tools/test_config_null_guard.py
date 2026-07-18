@@ -36,28 +36,6 @@ class TestTTSProviderNullGuard:
 
 # ── Web tools ─────────────────────────────────────────────────────────────
 
-class TestWebBackendNullGuard:
-    """tools/web_tools.py — _get_backend()"""
-
-    @patch("tools.web_tools._load_web_config", return_value={"backend": None})
-    def test_explicit_null_backend_does_not_crash(self, _cfg):
-        """YAML ``web: {backend: null}`` should not raise AttributeError."""
-        from tools.web_tools import _get_backend
-
-        # Should not raise — the exact return depends on env key fallback
-        result = _get_backend()
-        assert isinstance(result, str)
-
-    @patch("tools.web_tools._load_web_config", return_value={})
-    def test_missing_backend_does_not_crash(self, _cfg):
-        from tools.web_tools import _get_backend
-
-        result = _get_backend()
-        assert isinstance(result, str)
-
-
-# ── MCP tool ──────────────────────────────────────────────────────────────
-
 class TestMCPAuthNullGuard:
     """tools/mcp_tool.py — MCPServerTask.__init__() auth config line"""
 
@@ -80,31 +58,3 @@ class TestMCPAuthNullGuard:
 
 
 # ── Trajectory compressor ─────────────────────────────────────────────────
-
-class TestTrajectoryCompressorNullGuard:
-    """trajectory_compressor.py — _detect_provider() and config loading"""
-
-    def test_null_base_url_does_not_crash(self):
-        """base_url=None should not crash _detect_provider()."""
-        from trajectory_compressor import CompressionConfig, TrajectoryCompressor
-
-        config = CompressionConfig()
-        config.base_url = None
-
-        compressor = TrajectoryCompressor.__new__(TrajectoryCompressor)
-        compressor.config = config
-
-        # Should not raise AttributeError; returns empty string (no match)
-        result = compressor._detect_provider()
-        assert result == ""
-
-    def test_config_loading_null_base_url_keeps_default(self):
-        """YAML ``summarization: {base_url: null}`` should keep default."""
-        from trajectory_compressor import CompressionConfig
-        from marlow_constants import OPENROUTER_BASE_URL
-
-        config = CompressionConfig()
-        data = {"summarization": {"base_url": None}}
-
-        config.base_url = data["summarization"].get("base_url") or config.base_url
-        assert config.base_url == OPENROUTER_BASE_URL

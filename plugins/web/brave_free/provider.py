@@ -33,8 +33,8 @@ _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 class BraveFreeWebSearchProvider(WebSearchProvider):
     """Search-only Brave provider using the free-tier Data-for-Search API.
 
-    Free tier is 2,000 queries/month (1 qps). No content-extraction capability —
-    users pair this with Firecrawl/Tavily/Exa for ``web_extract``.
+    Free tier is 2,000 queries/month (1 qps). This provider does not implement
+    content extraction; a local plugin can supply ``web_extract`` if needed.
     """
 
     @property

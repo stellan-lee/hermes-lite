@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import sys
 import threading
 import time
@@ -35,7 +34,6 @@ from agent.iteration_budget import IterationBudget
 from agent.memory_manager import StreamingContextScrubber
 from agent.model_metadata import (
     MINIMUM_CONTEXT_LENGTH,
-    fetch_model_metadata,
     is_local_endpoint,
     query_ollama_num_ctx,
 )
@@ -139,10 +137,6 @@ def init_agent(
     api_key: str = None,
     provider: str = None,
     api_mode: str = None,
-    acp_command: str = None,
-    acp_args: list[str] | None = None,
-    command: str = None,
-    args: list[str] | None = None,
     model: str = "",
     max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
     tool_delay: float = 1.0,
@@ -154,13 +148,6 @@ def init_agent(
     ephemeral_system_prompt: str = None,
     log_prefix_chars: int = 100,
     log_prefix: str = "",
-    providers_allowed: List[str] = None,
-    providers_ignored: List[str] = None,
-    providers_order: List[str] = None,
-    provider_sort: str = None,
-    provider_require_parameters: bool = False,
-    provider_data_collection: str = None,
-    openrouter_min_coding_score: Optional[float] = None,
     session_id: str = None,
     tool_progress_callback: callable = None,
     tool_start_callback: callable = None,
@@ -175,7 +162,6 @@ def init_agent(
     status_callback: callable = None,
     max_tokens: int = None,
     reasoning_config: Dict[str, Any] = None,
-    service_tier: str = None,
     request_overrides: Dict[str, Any] = None,
     prefill_messages: List[Dict[str, Any]] = None,
     platform: str = None,
@@ -193,8 +179,7 @@ def init_agent(
     session_db=None,
     parent_session_id: str = None,
     iteration_budget: "IterationBudget" = None,
-    fallback_model: Dict[str, Any] = None,
-    credential_pool=None,
+    fallback_providers: List[Dict[str, Any]] = None,
     checkpoints_enabled: bool = False,
     checkpoint_max_snapshots: int = 20,
     checkpoint_max_total_size_mb: int = 500,
@@ -209,7 +194,7 @@ def init_agent(
         api_key (str): API key for authentication (optional, uses env var if not provided)
         provider (str): Provider identifier (optional; used for telemetry/routing hints)
         api_mode (str): API mode override: "chat_completions" or "codex_responses"
-        model (str): Model name to use (default: "anthropic/claude-opus-4.6")
+        model (str): Model name to use.
         max_iterations (int): Maximum number of tool calling iterations (default: 90)
         tool_delay (float): Delay between tool calls in seconds (default: 1.0)
         enabled_toolsets (List[str]): Only enable tools from these toolsets (optional)
@@ -220,27 +205,19 @@ def init_agent(
         ephemeral_system_prompt (str): System prompt used during agent execution but NOT saved to trajectories (optional)
         log_prefix_chars (int): Number of characters to show in log previews for tool calls/responses (default: 100)
         log_prefix (str): Prefix to add to all log messages for identification in parallel processing (default: "")
-        providers_allowed (List[str]): OpenRouter providers to allow (optional)
-        providers_ignored (List[str]): OpenRouter providers to ignore (optional)
-        providers_order (List[str]): OpenRouter providers to try in order (optional)
-        provider_sort (str): Sort providers by price/throughput/latency (optional)
-        openrouter_min_coding_score (float): Coding-score floor (0.0-1.0) for the
-            openrouter/pareto-code router. Only applied when model == "openrouter/pareto-code".
-            None or empty = let OpenRouter pick the strongest available coder.
         session_id (str): Pre-generated session ID for logging (optional, auto-generated if not provided)
         tool_progress_callback (callable): Callback function(tool_name, args_preview) for progress notifications
         clarify_callback (callable): Callback function(question, choices) -> str for interactive user questions.
             Provided by the platform layer (CLI or gateway). If None, the clarify tool returns an error.
         max_tokens (int): Maximum tokens for model responses (optional, uses model default if not set)
-        reasoning_config (Dict): OpenRouter reasoning configuration override (e.g. {"effort": "none"} to disable thinking).
-            If None, defaults to {"enabled": True, "effort": "medium"} for OpenRouter. Set to disable/customize reasoning.
+        reasoning_config (Dict): Compatible-endpoint reasoning configuration override.
         prefill_messages (List[Dict]): Messages to prepend to conversation history as prefilled context.
             Useful for injecting a few-shot example or priming the model's response style.
             Example: [{"role": "user", "content": "Hi!"}, {"role": "assistant", "content": "Hello!"}]
             NOTE: Anthropic Sonnet 4.6+ and Opus 4.6+ reject a conversation that ends on an
             assistant-role message (400 error).  For those models use structured outputs or
             output_config.format instead of a trailing-assistant prefill.
-        platform (str): The interface platform the user is on (e.g. "cli", "telegram", "discord", "whatsapp").
+        platform (str): The interface platform the user is on (e.g. "cli", "telegram", "discord").
             Used to inject platform-specific formatting hints into the system prompt.
         skip_context_files (bool): If True, skip auto-injection of SOUL.md, AGENTS.md, and .cursorrules
             into the system prompt. Use this for batch processing and data generation to avoid
@@ -261,7 +238,7 @@ def init_agent(
     agent.verbose_logging = verbose_logging
     agent.quiet_mode = quiet_mode
     agent.ephemeral_system_prompt = ephemeral_system_prompt
-    agent.platform = platform  # "cli", "telegram", "discord", "whatsapp", etc.
+    agent.platform = platform  # "cli", "telegram", "discord", etc.
     agent._user_id = user_id  # Platform user identifier (gateway sessions)
     agent._user_id_alt = user_id_alt  # Optional stable alternate platform identifier
     agent._user_name = user_name
@@ -279,20 +256,15 @@ def init_agent(
     agent.skip_context_files = skip_context_files
     agent.load_soul_identity = load_soul_identity
     agent.pass_session_id = pass_session_id
-    agent._credential_pool = credential_pool
     agent.log_prefix_chars = log_prefix_chars
     agent.log_prefix = f"{log_prefix} " if log_prefix else ""
     # Store effective base URL for feature detection (prompt caching, reasoning, etc.)
     agent.base_url = base_url or ""
     provider_name = provider.strip().lower() if isinstance(provider, str) and provider.strip() else None
     agent.provider = provider_name or ""
-    agent.acp_command = acp_command or command
-    agent.acp_args = list(acp_args or args or [])
-    if api_mode in {"chat_completions", "codex_responses", "anthropic_messages", "bedrock_converse", "codex_app_server"}:
+    if api_mode in {"chat_completions", "codex_responses", "codex_app_server"}:
         agent.api_mode = api_mode
     elif agent.provider == "openai-codex":
-        agent.api_mode = "codex_responses"
-    elif agent.provider in {"xai", "xai-oauth"}:
         agent.api_mode = "codex_responses"
     elif (provider_name is None) and (
         agent._base_url_hostname == "chatgpt.com"
@@ -300,24 +272,6 @@ def init_agent(
     ):
         agent.api_mode = "codex_responses"
         agent.provider = "openai-codex"
-    elif (provider_name is None) and agent._base_url_hostname == "api.x.ai":
-        agent.api_mode = "codex_responses"
-        agent.provider = "xai"
-    elif agent.provider == "anthropic" or (provider_name is None and agent._base_url_hostname == "api.anthropic.com"):
-        agent.api_mode = "anthropic_messages"
-        agent.provider = "anthropic"
-    elif agent._base_url_lower.rstrip("/").endswith("/anthropic"):
-        # Third-party Anthropic-compatible endpoints (e.g. MiniMax, DashScope)
-        # use a URL convention ending in /anthropic. Auto-detect these so the
-        # Anthropic Messages API adapter is used instead of chat completions.
-        agent.api_mode = "anthropic_messages"
-    elif agent.provider == "bedrock" or (
-        agent._base_url_hostname.startswith("bedrock-runtime.")
-        and base_url_host_matches(agent._base_url_lower, "amazonaws.com")
-    ):
-        # AWS Bedrock — auto-detect from provider name or base URL
-        # (bedrock-runtime.<region>.amazonaws.com).
-        agent.api_mode = "bedrock_converse"
     else:
         agent.api_mode = "chat_completions"
 
@@ -338,55 +292,6 @@ def init_agent(
             agent.model = normalize_model_for_provider(agent.model, agent.provider)
     except Exception:
         pass
-
-    # GPT-5.x models usually require the Responses API path, but some
-    # providers have exceptions (for example Copilot's gpt-5-mini still
-    # uses chat completions). Also auto-upgrade for direct OpenAI URLs
-    # (api.openai.com) since all newer tool-calling models prefer
-    # Responses there. ACP runtimes are excluded: CopilotACPClient
-    # handles its own routing and does not implement the Responses API
-    # surface.
-    # When api_mode was explicitly provided, respect it — the user
-    # knows what their endpoint supports (#10473).
-    # Exception: Azure OpenAI serves gpt-5.x on /chat/completions and
-    # does NOT support the Responses API — skip the upgrade for Azure
-    # (openai.azure.com), even though it looks OpenAI-compatible.
-    if (
-        api_mode is None
-        and agent.api_mode == "chat_completions"
-        and agent.provider != "copilot-acp"
-        and not str(agent.base_url or "").lower().startswith("acp://copilot")
-        and not str(agent.base_url or "").lower().startswith("acp+tcp://")
-        and not agent._is_azure_openai_url()
-        and (
-            agent._is_direct_openai_url()
-            or agent._provider_model_requires_responses_api(
-                agent.model,
-                provider=agent.provider,
-            )
-        )
-    ):
-        agent.api_mode = "codex_responses"
-        # Invalidate the eager-warmed transport cache — api_mode changed
-        # from chat_completions to codex_responses after the warm at __init__.
-        if hasattr(agent, "_transport_cache"):
-            agent._transport_cache.clear()
-
-    # Pre-warm OpenRouter model metadata cache in a background thread.
-    # fetch_model_metadata() is cached for 1 hour; this avoids a blocking
-    # HTTP request on the first API response when pricing is estimated.
-    # Use a process-level Event so this thread is only spawned once — a new
-    # AIAgent is created for every gateway request, so without the guard
-    # each message leaks one OS thread and the process eventually exhausts
-    # the system thread limit (RuntimeError: can't start new thread).
-    if (agent.provider == "openrouter" or agent._is_openrouter_url()) and \
-            not _ra()._openrouter_prewarm_done.is_set():
-        _ra()._openrouter_prewarm_done.set()
-        threading.Thread(
-            target=fetch_model_metadata,
-            daemon=True,
-            name="openrouter-prewarm",
-        ).start()
 
     agent.tool_progress_callback = tool_progress_callback
     agent.tool_start_callback = tool_start_callback
@@ -440,51 +345,17 @@ def init_agent(
     agent._active_children = []      # Running child AIAgents (for interrupt propagation)
     agent._active_children_lock = threading.Lock()
     
-    # Store OpenRouter provider preferences
-    agent.providers_allowed = providers_allowed
-    agent.providers_ignored = providers_ignored
-    agent.providers_order = providers_order
-    agent.provider_sort = provider_sort
-    agent.provider_require_parameters = provider_require_parameters
-    agent.provider_data_collection = provider_data_collection
-    agent.openrouter_min_coding_score = openrouter_min_coding_score
-
     # Store toolset filtering options
     agent.enabled_toolsets = enabled_toolsets
     agent.disabled_toolsets = disabled_toolsets
     
     # Model response configuration
     agent.max_tokens = max_tokens  # None = use model default
-    agent.reasoning_config = reasoning_config  # None = use default (medium for OpenRouter)
-    agent.service_tier = service_tier
+    agent.reasoning_config = reasoning_config
     agent.request_overrides = dict(request_overrides or {})
     agent.prefill_messages = prefill_messages or []  # Prefilled conversation turns
     agent._force_ascii_payload = False
     
-    # Anthropic prompt caching: auto-enabled for Claude models on native
-    # Anthropic, OpenRouter, and third-party gateways that speak the
-    # Anthropic protocol (``api_mode == 'anthropic_messages'``). Reduces
-    # input costs by ~75% on multi-turn conversations. Uses system_and_3
-    # strategy (4 breakpoints). See ``_anthropic_prompt_cache_policy``
-    # for the layout-vs-transport decision.
-    agent._use_prompt_caching, agent._use_native_cache_layout = (
-        agent._anthropic_prompt_cache_policy()
-    )
-    # Anthropic supports "5m" (default) and "1h" cache TTL tiers. Read from
-    # config.yaml under prompt_caching.cache_ttl; unknown values keep "5m".
-    # 1h tier costs 2x on write vs 1.25x for 5m, but amortizes across long
-    # sessions with >5-minute pauses between turns (#14971).
-    agent._cache_ttl = "5m"
-    try:
-        from marlow_cli.config import load_config as _load_pc_cfg
-
-        _pc_cfg = _load_pc_cfg().get("prompt_caching", {}) or {}
-        _ttl = _pc_cfg.get("cache_ttl", "5m")
-        if _ttl in {"5m", "1h"}:
-            agent._cache_ttl = _ttl
-    except Exception:
-        pass
-
     # Iteration budget: the LLM is only notified when it actually exhausts
     # the iteration budget (api_call_count >= max_iterations).  At that
     # point we inject ONE message, allow one final API call, and if the
@@ -507,9 +378,6 @@ def init_agent(
     # after each API call.  Accessed by /usage slash command.
     agent._rate_limit_state: Optional["RateLimitState"] = None
 
-    # OpenRouter response cache hit counter — incremented when
-    # X-OpenRouter-Cache-Status: HIT is seen in streaming response headers.
-    agent._or_cache_hits: int = 0
 
     # Centralized logging — agent.log (INFO+) and errors.log (WARNING+)
     # both live under ~/.marlow/logs/.  Idempotent, so gateway mode
@@ -562,339 +430,65 @@ def init_agent(
     agent._persist_user_message_idx = None
     agent._persist_user_message_override = None
 
-    # Cache anthropic image-to-text fallbacks per image payload/URL so a
-    # single tool loop does not repeatedly re-run auxiliary vision on the
-    # same image history.
-    agent._anthropic_image_fallback_cache: Dict[str, str] = {}
-
-    # Initialize LLM client via centralized provider router.
-    # The router handles auth resolution, base URL, headers, and
-    # Codex/Anthropic wrapping for all known providers.
-    # raw_codex=True because the main agent needs direct responses.stream()
-    # access for Codex Responses API streaming.
-    agent._anthropic_client = None
-    agent._is_anthropic_oauth = False
-
-    # Resolve per-provider / per-model request timeout once up front so
-    # every client construction path below (Anthropic native, OpenAI-wire,
-    # router-based implicit auth) can apply it consistently.  Bedrock
-    # Claude uses its own timeout path and is not covered here.
+    # Initialize the OpenAI-wire client. Codex uses the Responses transport;
+    # custom/local providers use Chat Completions.
     _provider_timeout = get_provider_request_timeout(agent.provider, agent.model)
+    if not api_key or not base_url:
+        from marlow_cli.runtime_provider import resolve_runtime_provider
 
-    if agent.api_mode == "anthropic_messages":
-        from agent.anthropic_adapter import build_anthropic_client, resolve_anthropic_token
-        # Bedrock + Claude → use AnthropicBedrock SDK for full feature parity
-        # (prompt caching, thinking budgets, adaptive thinking).
-        _is_bedrock_anthropic = agent.provider == "bedrock"
-        if _is_bedrock_anthropic:
-            from agent.anthropic_adapter import build_anthropic_bedrock_client
-            _region_match = re.search(r"bedrock-runtime\.([a-z0-9-]+)\.", base_url or "")
-            _br_region = _region_match.group(1) if _region_match else "us-east-1"
-            agent._bedrock_region = _br_region
-            agent._anthropic_client = build_anthropic_bedrock_client(_br_region)
-            agent._anthropic_api_key = "aws-sdk"
-            agent._anthropic_base_url = base_url
-            agent._is_anthropic_oauth = False
-            agent.api_key = "aws-sdk"
-            agent.client = None
-            agent._client_kwargs = {}
-            if not agent.quiet_mode:
-                print(f"🤖 AI Agent initialized with model: {agent.model} (AWS Bedrock + AnthropicBedrock SDK, {_br_region})")
-        else:
-            # Only fall back to ANTHROPIC_TOKEN when the provider is actually Anthropic.
-            # Other anthropic_messages providers (MiniMax, Alibaba, etc.) must use their own API key.
-            # Falling back would send Anthropic credentials to third-party endpoints (Fixes #1739, #minimax-401).
-            _is_native_anthropic = agent.provider == "anthropic"
-            effective_key = (api_key or resolve_anthropic_token() or "") if _is_native_anthropic else (api_key or "")
+        runtime = resolve_runtime_provider(
+            requested=agent.provider or None,
+            explicit_api_key=api_key or None,
+            explicit_base_url=base_url or None,
+            target_model=agent.model,
+        )
+        agent.provider = runtime["provider"]
+        agent.api_mode = runtime["api_mode"]
+        api_key = runtime["api_key"]
+        base_url = runtime["base_url"]
 
-            # MiniMax OAuth issues short-lived (~15-min) access tokens. The
-            # Anthropic SDK caches ``api_key`` as a static string at client
-            # construction time, so a session that resolves the bearer once
-            # at startup will keep sending the same token until MiniMax
-            # returns 401 mid-session. Swap the static string for a callable
-            # token provider — ``build_anthropic_client`` recognizes the
-            # callable and installs an httpx event hook that mints a fresh
-            # bearer per outbound request (re-reading auth.json so a refresh
-            # persisted by another process is visible immediately).
-            # The cached refresh path is a no-op when the token still has
-            # ``MINIMAX_OAUTH_REFRESH_SKEW_SECONDS`` of life left, so steady-
-            # state cost is one file read + one timestamp compare per request.
-            if agent.provider == "minimax-oauth" and isinstance(effective_key, str) and effective_key:
-                try:
-                    from marlow_cli.auth import build_minimax_oauth_token_provider
-                    effective_key = build_minimax_oauth_token_provider()
-                except Exception as _mm_exc:  # noqa: BLE001 — never block startup on this
-                    import logging as _logging
-                    _logging.getLogger(__name__).warning(
-                        "MiniMax OAuth: failed to install per-request token provider "
-                        "(%s); falling back to static bearer that will expire ~15min in.",
-                        _mm_exc,
-                    )
-
-            agent.api_key = effective_key
-            agent._anthropic_api_key = effective_key
-            agent._anthropic_base_url = base_url
-            # Only mark the session as OAuth-authenticated when the token
-            # genuinely belongs to native Anthropic.  Third-party providers
-            # (MiniMax, Kimi, GLM, LiteLLM proxies) that accept the
-            # Anthropic protocol must never trip OAuth code paths — doing
-            # so injects Claude-Code identity headers and system prompts
-            # that cause 401/403 on their endpoints.  Guards #1739 and
-            # the third-party identity-injection bug.
-            from agent.anthropic_adapter import _is_oauth_token as _is_oat
-            agent._is_anthropic_oauth = _is_oat(effective_key) if (_is_native_anthropic and isinstance(effective_key, str)) else False
-            agent._anthropic_client = build_anthropic_client(effective_key, base_url, timeout=_provider_timeout)
-            # No OpenAI client needed for Anthropic mode
-            agent.client = None
-            agent._client_kwargs = {}
-            if not agent.quiet_mode:
-                print(f"🤖 AI Agent initialized with model: {agent.model} (Anthropic native)")
-                # ``effective_key`` may be a callable Entra ID bearer
-                # provider for Azure Foundry anthropic_messages mode.
-                # The Anthropic adapter installs an httpx event hook
-                # that mints a fresh JWT per request — we never
-                # invoke or inspect the callable in the banner.
-                from agent.azure_identity_adapter import is_token_provider
-
-                if is_token_provider(effective_key):
-                    print("🔑 Using credentials: Microsoft Entra ID")
-                elif isinstance(effective_key, str) and len(effective_key) > 12:
-                    print(f"🔑 Using token: {effective_key[:8]}...{effective_key[-4:]}")
-    elif agent.api_mode == "bedrock_converse":
-        # AWS Bedrock — uses boto3 directly, no OpenAI client needed.
-        # Region is extracted from the base_url or defaults to us-east-1.
-        _region_match = re.search(r"bedrock-runtime\.([a-z0-9-]+)\.", base_url or "")
-        agent._bedrock_region = _region_match.group(1) if _region_match else "us-east-1"
-        # Guardrail config — read from config.yaml at init time.
-        agent._bedrock_guardrail_config = None
-        try:
-            from marlow_cli.config import load_config as _load_br_cfg
-            _gr = _load_br_cfg().get("bedrock", {}).get("guardrail", {})
-            if _gr.get("guardrail_identifier") and _gr.get("guardrail_version"):
-                agent._bedrock_guardrail_config = {
-                    "guardrailIdentifier": _gr["guardrail_identifier"],
-                    "guardrailVersion": _gr["guardrail_version"],
-                }
-                if _gr.get("stream_processing_mode"):
-                    agent._bedrock_guardrail_config["streamProcessingMode"] = _gr["stream_processing_mode"]
-                if _gr.get("trace"):
-                    agent._bedrock_guardrail_config["trace"] = _gr["trace"]
-        except Exception:
-            pass
-        agent.client = None
-        agent._client_kwargs = {}
-        if not agent.quiet_mode:
-            _gr_label = " + Guardrails" if agent._bedrock_guardrail_config else ""
-            print(f"🤖 AI Agent initialized with model: {agent.model} (AWS Bedrock, {agent._bedrock_region}{_gr_label})")
+    parsed_url = urlparse(base_url)
+    if parsed_url.query:
+        client_kwargs = {
+            "api_key": api_key,
+            "base_url": urlunparse(parsed_url._replace(query="")),
+            "default_query": {
+                key: values[0] for key, values in parse_qs(parsed_url.query).items()
+            },
+        }
     else:
-        if api_key and base_url:
-            # Explicit credentials from CLI/gateway — construct directly.
-            # The runtime provider resolver already handled auth for us.
-            # Extract query params (e.g. Azure api-version) from base_url
-            # and pass via default_query to prevent loss during SDK URL
-            # joining (httpx drops query string when joining paths).
-            _parsed_url = urlparse(base_url)
-            if _parsed_url.query:
-                _clean_url = urlunparse(_parsed_url._replace(query=""))
-                _query_params = {
-                    k: v[0] for k, v in parse_qs(_parsed_url.query).items()
-                }
-                client_kwargs = {
-                    "api_key": api_key,
-                    "base_url": _clean_url,
-                    "default_query": _query_params,
-                }
-            else:
-                client_kwargs = {"api_key": api_key, "base_url": base_url}
-            if _provider_timeout is not None:
-                client_kwargs["timeout"] = _provider_timeout
-            if agent.provider == "copilot-acp":
-                client_kwargs["command"] = agent.acp_command
-                client_kwargs["args"] = agent.acp_args
-            effective_base = base_url
-            if base_url_host_matches(effective_base, "openrouter.ai"):
-                from agent.auxiliary_client import build_or_headers
-                client_kwargs["default_headers"] = build_or_headers()
-            elif base_url_host_matches(effective_base, "integrate.api.nvidia.com"):
-                from agent.auxiliary_client import build_nvidia_nim_headers
-                client_kwargs["default_headers"] = build_nvidia_nim_headers(effective_base)
-            elif base_url_host_matches(effective_base, "api.routermint.com"):
-                client_kwargs["default_headers"] = _ra()._routermint_headers()
-            elif base_url_host_matches(effective_base, "api.githubcopilot.com"):
-                from marlow_cli.models import copilot_default_headers
+        client_kwargs = {"api_key": api_key, "base_url": base_url}
+    if _provider_timeout is not None:
+        client_kwargs["timeout"] = _provider_timeout
+    if base_url_host_matches(base_url, "chatgpt.com"):
+        from agent.auxiliary_client import _codex_cloudflare_headers
 
-                client_kwargs["default_headers"] = copilot_default_headers()
-            elif base_url_host_matches(effective_base, "api.kimi.com"):
-                client_kwargs["default_headers"] = {
-                    "User-Agent": "claude-code/0.1.0",
-                }
-            elif base_url_host_matches(effective_base, "portal.qwen.ai"):
-                client_kwargs["default_headers"] = _ra()._qwen_portal_headers()
-            elif base_url_host_matches(effective_base, "chatgpt.com"):
-                from agent.auxiliary_client import _codex_cloudflare_headers
-                client_kwargs["default_headers"] = _codex_cloudflare_headers(api_key)
-            elif "default_headers" not in client_kwargs:
-                # Fall back to profile.default_headers for providers that
-                # declare custom headers (e.g. Kimi User-Agent on non-kimi.com
-                # endpoints).
-                try:
-                    from providers import get_provider_profile as _gpf
-                    _ph = _gpf(agent.provider)
-                    if _ph and _ph.default_headers:
-                        client_kwargs["default_headers"] = dict(_ph.default_headers)
-                except Exception:
-                    pass
-        else:
-            # No explicit creds — use the centralized provider router
-            from agent.auxiliary_client import resolve_provider_client
-            _routed_client, _ = resolve_provider_client(
-                agent.provider or "auto", model=agent.model, raw_codex=True)
-            if _routed_client is not None:
-                client_kwargs = {
-                    "api_key": _routed_client.api_key,
-                    "base_url": str(_routed_client.base_url),
-                }
-                if _provider_timeout is not None:
-                    client_kwargs["timeout"] = _provider_timeout
-                # Preserve provider-specific headers the router set.  The
-                # OpenAI SDK stores caller-provided default_headers in
-                # _custom_headers; older/mocked clients may expose
-                # _default_headers instead.
-                _routed_headers = getattr(_routed_client, "_custom_headers", None)
-                if not _routed_headers:
-                    _routed_headers = getattr(_routed_client, "_default_headers", None)
-                if _routed_headers:
-                    client_kwargs["default_headers"] = dict(_routed_headers)
-            else:
-                # When the user explicitly chose a non-OpenRouter provider
-                # but no credentials were found, fail fast with a clear
-                # message instead of silently routing through OpenRouter.
-                _explicit = (agent.provider or "").strip().lower()
-                if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
-                    # Look up the actual env var name from the provider
-                    # config — some providers use non-standard names
-                    # (e.g. alibaba → DASHSCOPE_API_KEY, not ALIBABA_API_KEY).
-                    _env_hint = f"{_explicit.upper()}_API_KEY"
-                    try:
-                        from marlow_cli.auth import PROVIDER_REGISTRY
-                        _pcfg = PROVIDER_REGISTRY.get(_explicit)
-                        if _pcfg and _pcfg.api_key_env_vars:
-                            _env_hint = _pcfg.api_key_env_vars[0]
-                    except Exception:
-                        pass
-                    # --- Init-time fallback (#17929) ---
-                    _fb_entries = []
-                    if isinstance(fallback_model, list):
-                        _fb_entries = [
-                            f for f in fallback_model
-                            if isinstance(f, dict) and f.get("provider") and f.get("model")
-                        ]
-                    elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
-                        _fb_entries = [fallback_model]
-                    _fb_resolved = False
-                    for _fb in _fb_entries:
-                        _fb_explicit_key = (_fb.get("api_key") or "").strip() or None
-                        if not _fb_explicit_key:
-                            _fb_key_env = (_fb.get("key_env") or _fb.get("api_key_env") or "").strip()
-                            if _fb_key_env:
-                                _fb_explicit_key = os.getenv(_fb_key_env, "").strip() or None
-                        _fb_client, _fb_model = resolve_provider_client(
-                            _fb["provider"], model=_fb["model"], raw_codex=True,
-                            explicit_base_url=_fb.get("base_url"),
-                            explicit_api_key=_fb_explicit_key,
-                        )
-                        if _fb_client is not None:
-                            agent.provider = _fb["provider"]
-                            agent.model = _fb_model or _fb["model"]
-                            agent._fallback_activated = True
-                            client_kwargs = {
-                                "api_key": _fb_client.api_key,
-                                "base_url": str(_fb_client.base_url),
-                            }
-                            if _provider_timeout is not None:
-                                client_kwargs["timeout"] = _provider_timeout
-                            _fb_headers = getattr(_fb_client, "_custom_headers", None)
-                            if not _fb_headers:
-                                _fb_headers = getattr(_fb_client, "_default_headers", None)
-                            if _fb_headers:
-                                client_kwargs["default_headers"] = dict(_fb_headers)
-                            _fb_resolved = True
-                            break
-                    if not _fb_resolved:
-                        raise RuntimeError(
-                            f"Provider '{_explicit}' is set in config.yaml but no API key "
-                            f"was found. Set the {_env_hint} environment "
-                            f"variable, or switch to a different provider with `marlow model`."
-                        )
-                if not getattr(agent, "_fallback_activated", False):
-                    # No provider configured — reject with a clear message.
-                    raise RuntimeError(
-                        "No LLM provider configured. Run `marlow model` to "
-                        "select a provider, or run `marlow setup` for first-time "
-                        "configuration."
-                    )
-        
-        agent._client_kwargs = client_kwargs  # stored for rebuilding after interrupt
+        client_kwargs["default_headers"] = _codex_cloudflare_headers(api_key)
 
-        # Enable fine-grained tool streaming for Claude on OpenRouter.
-        # Without this, Anthropic buffers the entire tool call and goes
-        # silent for minutes while thinking — OpenRouter's upstream proxy
-        # times out during the silence.  The beta header makes Anthropic
-        # stream tool call arguments token-by-token, keeping the
-        # connection alive.
-        _effective_base = str(client_kwargs.get("base_url", "")).lower()
-        if base_url_host_matches(_effective_base, "openrouter.ai") and "claude" in (agent.model or "").lower():
-            headers = client_kwargs.get("default_headers") or {}
-            existing_beta = headers.get("x-anthropic-beta", "")
-            _FINE_GRAINED = "fine-grained-tool-streaming-2025-05-14"
-            if _FINE_GRAINED not in existing_beta:
-                if existing_beta:
-                    headers["x-anthropic-beta"] = f"{existing_beta},{_FINE_GRAINED}"
-                else:
-                    headers["x-anthropic-beta"] = _FINE_GRAINED
-                client_kwargs["default_headers"] = headers
-
-        agent.api_key = client_kwargs.get("api_key", "")
-        agent.base_url = client_kwargs.get("base_url", agent.base_url)
-        try:
-            agent.client = agent._create_openai_client(client_kwargs, reason="agent_init", shared=True)
-            if not agent.quiet_mode:
-                print(f"🤖 AI Agent initialized with model: {agent.model}")
-                if base_url:
-                    print(f"🔗 Using custom base URL: {base_url}")
-                # ``api_key`` may be a callable Entra ID bearer
-                # provider (Azure Foundry). The OpenAI SDK mints a
-                # fresh JWT per request internally — the banner
-                # never invokes or inspects the callable.
-                from agent.azure_identity_adapter import is_token_provider
-
-                key_used = client_kwargs.get("api_key", "none")
-                if is_token_provider(key_used):
-                    print("🔑 Using credentials: Microsoft Entra ID")
-                elif isinstance(key_used, str) and key_used and key_used != "dummy-key" and len(key_used) > 12:
-                    print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
-                else:
-                    print("⚠️  Warning: API key appears invalid or missing")
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
+    agent._client_kwargs = client_kwargs
+    agent.api_key = api_key
+    agent.base_url = client_kwargs["base_url"]
+    try:
+        agent.client = agent._create_openai_client(
+            client_kwargs, reason="agent_init", shared=True
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Failed to initialize OpenAI-compatible client: {exc}") from exc
+    if not agent.quiet_mode:
+        print(f"🤖 AI Agent initialized with model: {agent.model}")
+        print(f"🔗 Endpoint: {base_url}")
     
-    # Provider fallback chain — ordered list of backup providers tried
-    # when the primary is exhausted (rate-limit, overload, connection
-    # failure).  Supports both legacy single-dict ``fallback_model`` and
-    # new list ``fallback_providers`` format.
-    if isinstance(fallback_model, list):
+    # Provider fallback chain — ordered list of backup providers tried when
+    # the primary is exhausted (rate-limit, overload, connection failure).
+    if isinstance(fallback_providers, list):
         agent._fallback_chain = [
-            f for f in fallback_model
+            f for f in fallback_providers
             if isinstance(f, dict) and f.get("provider") and f.get("model")
         ]
-    elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
-        agent._fallback_chain = [fallback_model]
     else:
         agent._fallback_chain = []
     agent._fallback_index = 0
     agent._fallback_activated = getattr(agent, "_fallback_activated", False)
-    # Legacy attribute kept for backward compat (tests, external callers)
-    agent._fallback_model = agent._fallback_chain[0] if agent._fallback_chain else None
     if agent._fallback_chain and not agent.quiet_mode:
         if len(agent._fallback_chain) == 1:
             fb = agent._fallback_chain[0]
@@ -942,15 +536,6 @@ def init_agent(
         print(f"🔒 Ephemeral system prompt: '{prompt_preview}' (not saved to trajectories)")
     
     # Show prompt caching status
-    if agent._use_prompt_caching and not agent.quiet_mode:
-        if agent._use_native_cache_layout and agent.provider == "anthropic":
-            source = "native Anthropic"
-        elif agent._use_native_cache_layout:
-            source = "Anthropic-compatible endpoint"
-        else:
-            source = "Claude via OpenRouter"
-        print(f"💾 Prompt caching: ENABLED ({source}, {agent._cache_ttl} TTL)")
-    
     # Session logging setup - auto-save conversation trajectories for debugging
     agent.session_start = datetime.now()
     if session_id:
@@ -1219,8 +804,7 @@ def init_agent(
     # Skip tools whose names already exist (plugins may register the
     # same tools via ctx.register_tool(), which lands in agent.tools
     # through _ra().get_tool_definitions()).  Duplicate function names cause
-    # 400 errors on providers that enforce unique names (e.g. Xiaomi
-    # MiMo via Nous Portal).
+    # 400 errors on compatible endpoints that enforce unique names.
     #
     # Respect the platform's enabled_toolsets configuration (#5544):
     #   enabled_toolsets is None        → no filter, inject (backward compat)
@@ -1392,22 +976,19 @@ def init_agent(
             )
             _config_context_length = None
 
-    # Resolve custom_providers list once for reuse below (startup
-    # context-length override and plugin context-engine init).
+    # Normalize canonical provider entries once for runtime reuse.
     try:
-        from marlow_cli.config import get_compatible_custom_providers
-        _custom_providers = get_compatible_custom_providers(_agent_cfg)
+        from marlow_cli.config import load_custom_provider_entries
+        _custom_providers = load_custom_provider_entries(_agent_cfg)
     except Exception:
-        _custom_providers = _agent_cfg.get("custom_providers")
-        if not isinstance(_custom_providers, list):
-            _custom_providers = []
+        _custom_providers = []
 
     # Store for reuse by _check_compression_model_feasibility (auxiliary
     # compression model context-length detection needs the same list).
     agent._custom_providers = _custom_providers
     _merge_custom_provider_extra_body(agent, _custom_providers)
 
-    # Check custom_providers per-model context_length
+    # Check provider-specific per-model context_length.
     if _config_context_length is None and _custom_providers:
         try:
             from marlow_cli.config import get_custom_provider_context_length
@@ -1443,13 +1024,13 @@ def init_agent(
                                 except (TypeError, ValueError):
                                     _ra().logger.warning(
                                         "Invalid context_length for model %r in "
-                                        "custom_providers: %r — must be a positive "
+                                        "providers: %r — must be a positive "
                                         "integer (e.g. 256000, not '256K'). "
                                         "Falling back to auto-detection.",
                                         agent.model, _cp_ctx,
                                     )
                                     print(
-                                        f"\n⚠ Invalid context_length for model {agent.model!r} in custom_providers: {_cp_ctx!r}\n"
+                                        f"\n⚠ Invalid context_length for model {agent.model!r} in providers: {_cp_ctx!r}\n"
                                         f"  Must be a positive integer (e.g. 256000, not '256K').\n"
                                         f"  Falling back to auto-detected context window.\n",
                                         file=sys.stderr,
@@ -1457,7 +1038,7 @@ def init_agent(
                     break
 
     # Persist for reuse on switch_model / fallback activation. Must come
-    # AFTER the custom_providers branch so per-model overrides aren't lost.
+    # AFTER provider overrides so per-model values aren't lost.
     agent._config_context_length = _config_context_length
 
     agent._ensure_lmstudio_runtime_loaded(_config_context_length)
@@ -1707,8 +1288,6 @@ def init_agent(
         "api_mode": agent.api_mode,
         "api_key": getattr(agent, "api_key", ""),
         "client_kwargs": dict(agent._client_kwargs),
-        "use_prompt_caching": agent._use_prompt_caching,
-        "use_native_cache_layout": agent._use_native_cache_layout,
         # Context engine state that _try_activate_fallback() overwrites.
         # Use getattr for model/base_url/api_key/provider since plugin
         # engines may not have these (they're ContextCompressor-specific).
@@ -1719,13 +1298,4 @@ def init_agent(
         "compressor_context_length": _cc.context_length,
         "compressor_threshold_tokens": _cc.threshold_tokens,
     }
-    if agent.api_mode == "anthropic_messages":
-        agent._primary_runtime.update({
-            "anthropic_api_key": agent._anthropic_api_key,
-            "anthropic_base_url": agent._anthropic_base_url,
-            "is_anthropic_oauth": agent._is_anthropic_oauth,
-        })
-
-
-
 __all__ = ["init_agent"]

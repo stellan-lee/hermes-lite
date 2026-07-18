@@ -278,8 +278,8 @@ class TestBuildJobPromptContextFrom:
             schedule="every 2h",
             name="suspicious-chain",
             origin={
-                "platform": "api_server",
-                "chat_id": "api",
+                "platform": "webhook",
+                "chat_id": "hook",
                 "source_ip": "203.0.113.10",
                 "forwarded_for": "198.51.100.7",
             },

@@ -1,7 +1,7 @@
 """Tests for the sandbox-mirror write guard in agent/file_safety.
 
 The guard fires when a tool tries to write into the per-task mirror
-directory created by a non-local terminal backend (Docker, Daytona, etc.).
+directory created by the retained Docker terminal backend.
 Those paths look like ``…/sandboxes/<backend>/<task>/home/.marlow/…`` and
 they accumulate divergent copies of authoritative profile state (SOUL.md,
 config.yaml, memories/*.md) because the host Marlow process never reads
@@ -50,7 +50,7 @@ class TestClassifySandboxMirrorTarget:
         "backend,inner",
         [
             ("docker", "profiles/coder/memories/MEMORY.md"),
-            ("daytona", "profiles/default/cron/jobs.json"),
+            ("docker", "profiles/default/cron/jobs.json"),
             ("podman", ".env"),
         ],
     )

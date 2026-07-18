@@ -12,7 +12,6 @@ import { MaskedPrompt } from './maskedPrompt.js'
 import { ModelPicker } from './modelPicker.js'
 import { OverlayHint } from './overlayControls.js'
 import { ApprovalPrompt, ClarifyPrompt, ConfirmPrompt } from './prompts.js'
-import { SkillsHub } from './skillsHub.js'
 
 const COMPLETION_WINDOW = 16
 
@@ -124,7 +123,6 @@ export function FloatingOverlays({
     overlay.modelPicker ||
     overlay.pager ||
     overlay.sessions ||
-    overlay.skillsHub ||
     completions.length
 
   if (!hasAny) {
@@ -165,12 +163,6 @@ export function FloatingOverlays({
             sessionId={sid}
             t={theme}
           />
-        </FloatBox>
-      )}
-
-      {overlay.skillsHub && (
-        <FloatBox color={theme.color.border}>
-          <SkillsHub gw={gw} onClose={() => patchOverlayState({ skillsHub: false })} t={theme} />
         </FloatBox>
       )}
 

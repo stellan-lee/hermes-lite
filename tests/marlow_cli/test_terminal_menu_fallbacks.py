@@ -43,10 +43,10 @@ def test_remove_custom_provider_falls_back_on_menu_runtime_error(tmp_path, monke
     monkeypatch.setattr("marlow_cli.curses_ui.curses_radiolist", _raise_menu)
 
     cfg = load_config()
-    cfg["custom_providers"] = [
-        {"name": "Local A", "base_url": "http://localhost:8001/v1"},
-        {"name": "Local B", "base_url": "http://localhost:8002/v1"},
-    ]
+    cfg["providers"] = {
+        "local-a": {"name": "Local A", "base_url": "http://localhost:8001/v1"},
+        "local-b": {"name": "Local B", "base_url": "http://localhost:8002/v1"},
+    }
     save_config(cfg)
 
     responses = iter(["1"])
@@ -55,9 +55,9 @@ def test_remove_custom_provider_falls_back_on_menu_runtime_error(tmp_path, monke
     _remove_custom_provider(cfg)
 
     reloaded = load_config()
-    assert reloaded["custom_providers"] == [
-        {"name": "Local B", "base_url": "http://localhost:8002/v1"},
-    ]
+    assert reloaded["providers"] == {
+        "local-b": {"name": "Local B", "base_url": "http://localhost:8002/v1"},
+    }
 
 
 def test_named_custom_provider_model_picker_falls_back_on_menu_runtime_error(tmp_path, monkeypatch):

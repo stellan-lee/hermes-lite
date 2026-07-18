@@ -211,25 +211,6 @@ class TestToolsetConsistency:
             for inc in ts["includes"]:
                 assert inc in TOOLSETS, f"{name} includes unknown toolset '{inc}'"
 
-    def test_marlow_platforms_share_core_tools(self):
-        """All marlow-* platform toolsets share the same core tools.
-
-        Platform-specific additions (e.g. ``discord`` / ``discord_admin``
-        on marlow-discord, gated on DISCORD_BOT_TOKEN) are allowed on top —
-        the invariant is that the core set is identical across platforms.
-        """
-        platforms = ["marlow-cli", "marlow-telegram", "marlow-discord", "marlow-whatsapp", "marlow-slack", "marlow-signal", "marlow-homeassistant"]
-        tool_sets = [set(TOOLSETS[p]["tools"]) for p in platforms]
-        # All platforms must contain the shared core; platform-specific
-        # extras are OK (subset check, not equality).
-        core = set.intersection(*tool_sets)
-        for name, ts in zip(platforms, tool_sets):
-            assert core.issubset(ts), f"{name} is missing core tools: {core - ts}"
-        # Sanity: the shared core must be non-trivial (i.e. we didn't
-        # silently let a platform diverge so far that nothing is shared).
-        assert len(core) > 20, f"Suspiciously small shared core: {len(core)} tools"
-
-
 class TestPluginToolsets:
     def test_get_all_toolsets_includes_plugin_toolset(self, monkeypatch):
         reg = ToolRegistry()
@@ -245,11 +226,3 @@ class TestPluginToolsets:
         all_toolsets = get_all_toolsets()
         assert "plugin_bundle" in all_toolsets
         assert all_toolsets["plugin_bundle"]["tools"] == ["plugin_tool"]
-
-
-class TestDefaultPlatformWebSearchCoverage:
-    def test_marlow_whatsapp_toolset_includes_web_search(self):
-        assert "web_search" in resolve_toolset("marlow-whatsapp")
-
-    def test_marlow_api_server_toolset_includes_web_search(self):
-        assert "web_search" in resolve_toolset("marlow-api-server")

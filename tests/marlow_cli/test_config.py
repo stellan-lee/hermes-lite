@@ -11,7 +11,7 @@ from marlow_cli.config import (
     DEFAULT_CONFIG,
     get_marlow_home,
     ensure_marlow_home,
-    get_compatible_custom_providers,
+    load_custom_provider_entries,
     load_config,
     load_env,
     migrate_config,
@@ -19,8 +19,6 @@ from marlow_cli.config import (
     save_config,
     save_env_value,
     save_env_value_secure,
-    sanitize_env_file,
-    _sanitize_env_lines,
 )
 
 
@@ -71,15 +69,6 @@ class TestLoadConfigDefaults:
             assert "terminal" in config
             assert config["terminal"]["backend"] == "local"
             assert config["display"]["interim_assistant_messages"] is True
-
-    def test_legacy_root_level_max_turns_migrates_to_agent_config(self, tmp_path):
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            config_path = tmp_path / "config.yaml"
-            config_path.write_text("max_turns: 42\n")
-
-            config = load_config()
-            assert config["agent"]["max_turns"] == 42
-            assert "max_turns" not in config
 
 
 class TestLoadConfigParseFailure:
@@ -171,14 +160,6 @@ class TestSaveAndLoadRoundtrip:
 
             saved = yaml.safe_load((tmp_path / "config.yaml").read_text())
             assert saved["agent"]["max_turns"] == 42
-            assert "max_turns" not in saved
-
-    def test_save_config_normalizes_legacy_root_level_max_turns(self, tmp_path):
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            save_config({"model": "test/custom-model", "max_turns": 37})
-
-            saved = yaml.safe_load((tmp_path / "config.yaml").read_text())
-            assert saved["agent"]["max_turns"] == 37
             assert "max_turns" not in saved
 
     def test_nested_values_preserved(self, tmp_path):
@@ -330,401 +311,69 @@ class TestSaveConfigAtomicity:
             assert raw["agent"]["max_turns"] == 77
 
 
-class TestSanitizeEnvLines:
-    """Tests for .env file corruption repair."""
-
-    def test_splits_concatenated_keys(self):
-        """Two KEY=VALUE pairs jammed on one line get split."""
-        lines = ["ANTHROPIC_API_KEY=sk-ant-xxxOPENAI_BASE_URL=https://api.openai.com/v1\n"]
-        result = _sanitize_env_lines(lines)
-        assert result == [
-            "ANTHROPIC_API_KEY=sk-ant-xxx\n",
-            "OPENAI_BASE_URL=https://api.openai.com/v1\n",
-        ]
-
-    def test_preserves_clean_file(self):
-        """A well-formed .env file passes through unchanged (modulo trailing newlines)."""
-        lines = [
-            "OPENROUTER_API_KEY=sk-or-xxx\n",
-            "FIRECRAWL_API_KEY=fc-xxx\n",
-            "# a comment\n",
-            "\n",
-        ]
-        result = _sanitize_env_lines(lines)
-        assert result == lines
-
-    def test_preserves_comments_and_blanks(self):
-        lines = ["# comment\n", "\n", "KEY=val\n"]
-        result = _sanitize_env_lines(lines)
-        assert result == lines
-
-    def test_adds_missing_trailing_newline(self):
-        """Lines missing trailing newline get one added."""
-        lines = ["FOO_BAR=baz"]
-        result = _sanitize_env_lines(lines)
-        assert result == ["FOO_BAR=baz\n"]
-
-    def test_three_concatenated_keys(self):
-        """Three known keys on one line all get separated."""
-        lines = ["FAL_KEY=111FIRECRAWL_API_KEY=222GITHUB_TOKEN=333\n"]
-        result = _sanitize_env_lines(lines)
-        assert result == [
-            "FAL_KEY=111\n",
-            "FIRECRAWL_API_KEY=222\n",
-            "GITHUB_TOKEN=333\n",
-        ]
-
-    def test_value_with_equals_sign_not_split(self):
-        """A value containing '=' shouldn't be falsely split (lowercase in value)."""
-        lines = ["OPENAI_BASE_URL=https://api.example.com/v1?key=abc123\n"]
-        result = _sanitize_env_lines(lines)
-        assert result == lines
-
-    def test_unknown_keys_not_split(self):
-        """Unknown key names on one line are NOT split (avoids false positives)."""
-        lines = ["CUSTOM_VAR=value123OTHER_THING=value456\n"]
-        result = _sanitize_env_lines(lines)
-        # Unknown keys stay on one line — no false split
-        assert len(result) == 1
-
-    def test_value_ending_with_digits_still_splits(self):
-        """Concatenation is detected even when value ends with digits."""
-        lines = ["OPENROUTER_API_KEY=sk-or-v1-abc123OPENAI_BASE_URL=https://api.openai.com/v1\n"]
-        result = _sanitize_env_lines(lines)
-        assert len(result) == 2
-        assert result[0].startswith("OPENROUTER_API_KEY=")
-        assert result[1].startswith("OPENAI_BASE_URL=")
-
-    def test_glm_suffix_collision_not_split(self):
-        """GLM_API_KEY / GLM_BASE_URL must not be mangled by LM_API_KEY / LM_BASE_URL suffixes (#17138)."""
-        lines = [
-            "GLM_API_KEY=glm-secret\n",
-            "GLM_BASE_URL=https://api.z.ai/api/paas/v4\n",
-        ]
-        result = _sanitize_env_lines(lines)
-        assert result == lines, f"GLM_* lines were corrupted by suffix collision: {result}"
-
-    def test_suffix_collision_does_not_break_real_concatenation(self):
-        """A genuine concatenation that happens to start with a suffix-superset key still splits."""
-        lines = ["GLM_API_KEY=glmLM_API_KEY=lm-key\n"]
-        result = _sanitize_env_lines(lines)
-        assert len(result) == 2
-        assert result[0].startswith("GLM_API_KEY=")
-        assert result[1].startswith("LM_API_KEY=")
-
-    def test_save_env_value_fixes_corruption_on_write(self, tmp_path):
-        """save_env_value sanitizes corrupted lines when writing a new key."""
-        env_file = tmp_path / ".env"
-        env_file.write_text(
-            "ANTHROPIC_API_KEY=sk-antOPENAI_BASE_URL=https://api.openai.com/v1\n"
-            "FAL_KEY=existing\n"
-        )
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            save_env_value("MESSAGING_CWD", "/tmp")
-
-            content = env_file.read_text()
-            lines = content.strip().split("\n")
-
-            # Corrupted line should be split, new key added
-            assert "ANTHROPIC_API_KEY=sk-ant" in lines
-            assert "OPENAI_BASE_URL=https://api.openai.com/v1" in lines
-            assert "MESSAGING_CWD=/tmp" in lines
-
-    def test_sanitize_env_file_returns_fix_count(self, tmp_path):
-        """sanitize_env_file reports how many entries were fixed."""
-        env_file = tmp_path / ".env"
-        env_file.write_text(
-            "FAL_KEY=good\n"
-            "OPENROUTER_API_KEY=valFIRECRAWL_API_KEY=val2\n"
-        )
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            fixes = sanitize_env_file()
-            assert fixes > 0
-
-            # Verify file is now clean
-            content = env_file.read_text()
-            assert "OPENROUTER_API_KEY=val\n" in content
-            assert "FIRECRAWL_API_KEY=val2\n" in content
-
-    def test_sanitize_env_file_noop_on_clean_file(self, tmp_path):
-        """No changes when file is already clean."""
-        env_file = tmp_path / ".env"
-        env_file.write_text("GOOD_KEY=good\nOTHER_KEY=other\n")
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            fixes = sanitize_env_file()
-            assert fixes == 0
-
-
-class TestOptionalEnvVarsRegistry:
-    """Verify that key env vars are registered in OPTIONAL_ENV_VARS."""
-
-    def test_tavily_api_key_registered(self):
-        """TAVILY_API_KEY is listed in OPTIONAL_ENV_VARS."""
-        from marlow_cli.config import OPTIONAL_ENV_VARS
-        assert "TAVILY_API_KEY" in OPTIONAL_ENV_VARS
-
-    def test_tavily_api_key_is_tool_category(self):
-        """TAVILY_API_KEY is in the 'tool' category."""
-        from marlow_cli.config import OPTIONAL_ENV_VARS
-        assert OPTIONAL_ENV_VARS["TAVILY_API_KEY"]["category"] == "tool"
-
-    def test_tavily_api_key_is_password(self):
-        """TAVILY_API_KEY is marked as password."""
-        from marlow_cli.config import OPTIONAL_ENV_VARS
-        assert OPTIONAL_ENV_VARS["TAVILY_API_KEY"]["password"] is True
-
-    def test_tavily_api_key_has_url(self):
-        """TAVILY_API_KEY has a URL."""
-        from marlow_cli.config import OPTIONAL_ENV_VARS
-        assert OPTIONAL_ENV_VARS["TAVILY_API_KEY"]["url"] == "https://app.tavily.com/home"
-
-    def test_tavily_in_env_vars_by_version(self):
-        """TAVILY_API_KEY is listed in ENV_VARS_BY_VERSION."""
-        from marlow_cli.config import ENV_VARS_BY_VERSION
-        all_vars = []
-        for vars_list in ENV_VARS_BY_VERSION.values():
-            all_vars.extend(vars_list)
-        assert "TAVILY_API_KEY" in all_vars
-
-
-class TestConfigMigrationSecretPrompts:
-    def test_required_secret_env_prompt_uses_masked_prompt(self, tmp_path, monkeypatch):
-        from marlow_cli import config as cfg_mod
-
-        saved = {}
-
-        monkeypatch.setattr(cfg_mod, "sanitize_env_file", lambda: 0)
-        monkeypatch.setattr(cfg_mod, "check_config_version", lambda: (999, 999))
-        monkeypatch.setattr(cfg_mod, "get_missing_config_fields", lambda: [])
-        monkeypatch.setattr(cfg_mod, "get_missing_skill_config_vars", lambda: [])
-        monkeypatch.setattr(
-            cfg_mod,
-            "get_missing_env_vars",
-            lambda required_only=True: [
-                {
-                    "name": "TEST_API_KEY",
-                    "description": "Test key",
-                    "prompt": "Test API key",
-                    "password": True,
-                }
-            ]
-            if required_only
-            else [],
-        )
-        def fake_masked_secret_prompt(prompt):
-            saved["prompt"] = prompt
-            return "secret"
-
-        monkeypatch.setattr(cfg_mod, "masked_secret_prompt", fake_masked_secret_prompt)
-        monkeypatch.setattr(
-            cfg_mod,
-            "save_env_value",
-            lambda name, value: saved.update({name: value}),
-        )
-
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            results = cfg_mod.migrate_config(interactive=True, quiet=True)
-
-        assert saved["prompt"] == "  Test API key: "
-        assert saved["TEST_API_KEY"] == "secret"
-        assert results["env_added"] == ["TEST_API_KEY"]
-
-
-class TestAnthropicTokenMigration:
-    """Test that config version 8→9 clears ANTHROPIC_TOKEN."""
-
-    def _write_config_version(self, tmp_path, version):
-        config_path = tmp_path / "config.yaml"
-        import yaml
-        config_path.write_text(yaml.safe_dump({"_config_version": version}))
-
-    def test_clears_token_on_upgrade_to_v9(self, tmp_path):
-        """ANTHROPIC_TOKEN is cleared unconditionally when upgrading to v9."""
-        self._write_config_version(tmp_path, 8)
-        (tmp_path / ".env").write_text("ANTHROPIC_TOKEN=old-token\n")
-        with patch.dict(os.environ, {
-            "MARLOW_HOME": str(tmp_path),
-            "ANTHROPIC_TOKEN": "old-token",
-        }):
-            migrate_config(interactive=False, quiet=True)
-            assert load_env().get("ANTHROPIC_TOKEN") == ""
-
-    def test_skips_on_version_9_or_later(self, tmp_path):
-        """Already at v9 — ANTHROPIC_TOKEN is not touched."""
-        self._write_config_version(tmp_path, 9)
-        (tmp_path / ".env").write_text("ANTHROPIC_TOKEN=current-token\n")
-        with patch.dict(os.environ, {
-            "MARLOW_HOME": str(tmp_path),
-            "ANTHROPIC_TOKEN": "current-token",
-        }):
-            migrate_config(interactive=False, quiet=True)
-            assert load_env().get("ANTHROPIC_TOKEN") == "current-token"
-
-
-class TestCustomProviderCompatibility:
-    """Custom provider compatibility across legacy and v12+ config schemas."""
-
-    def test_v11_upgrade_moves_custom_providers_into_providers(self, tmp_path):
+class TestCanonicalCustomProviders:
+    def test_loads_canonical_provider_entry(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
-            yaml.safe_dump(
-                {
-                    "_config_version": 11,
-                    "model": {
-                        "default": "openai/gpt-5.4",
-                        "provider": "openrouter",
-                    },
-                    "custom_providers": [
-                        {
-                            "name": "OpenAI Direct",
-                            "base_url": "https://api.openai.com/v1",
-                            "api_key": "test-key",
-                            "api_mode": "codex_responses",
-                            "model": "gpt-5-mini",
-                        }
-                    ],
-                    "fallback_providers": [
-                        {"provider": "openai-direct", "model": "gpt-5-mini"}
-                    ],
+            yaml.safe_dump({
+                "providers": {
+                    "local-vllm": {
+                        "name": "Local vLLM",
+                        "base_url": "http://127.0.0.1:8000/v1",
+                        "api_key": "test-key",
+                        "api_mode": "chat_completions",
+                        "model": "local-model",
+                    }
                 }
-            ),
+            }),
             encoding="utf-8",
         )
 
         with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            migrate_config(interactive=False, quiet=True)
+            entries = load_custom_provider_entries()
+
+        assert entries == [{
+            "name": "Local vLLM",
+            "base_url": "http://127.0.0.1:8000/v1",
+            "provider_key": "local-vllm",
+            "api_key": "test-key",
+            "api_mode": "chat_completions",
+            "model": "local-model",
+        }]
+
+    def test_ignores_removed_legacy_provider_fields(self, tmp_path, caplog):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump({
+                "providers": {
+                    "legacy": {
+                        "api": "https://example.com/v1",
+                        "default_model": "old-model",
+                        "transport": "openai_chat",
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
+            assert load_custom_provider_entries() == []
+        assert "unknown config keys ignored" in caplog.text
+
+
+class TestCurrentConfigMigration:
+    def test_only_advances_schema_version(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        original = {"_config_version": 1, "model": {"default": "local-model"}}
+        config_path.write_text(yaml.safe_dump(original), encoding="utf-8")
+
+        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
+            result = migrate_config(interactive=False, quiet=True)
             raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-        from marlow_cli.config import DEFAULT_CONFIG
         assert raw["_config_version"] == DEFAULT_CONFIG["_config_version"]
-        assert raw["providers"]["openai-direct"] == {
-            "api": "https://api.openai.com/v1",
-            "api_key": "test-key",
-            "default_model": "gpt-5-mini",
-            "name": "OpenAI Direct",
-            "transport": "codex_responses",
-        }
-        # custom_providers removed by migration — runtime reads via compat layer
-        assert "custom_providers" not in raw
-
-    def test_providers_dict_resolves_at_runtime(self, tmp_path):
-        """After migration deleted custom_providers, get_compatible_custom_providers
-        still finds entries from the providers dict."""
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.safe_dump(
-                {
-                    "_config_version": 17,
-                    "providers": {
-                        "openai-direct": {
-                            "api": "https://api.openai.com/v1",
-                            "api_key": "test-key",
-                            "default_model": "gpt-5-mini",
-                            "name": "OpenAI Direct",
-                            "transport": "codex_responses",
-                        }
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            compatible = get_compatible_custom_providers()
-
-        assert len(compatible) == 1
-        assert compatible[0]["name"] == "OpenAI Direct"
-        assert compatible[0]["base_url"] == "https://api.openai.com/v1"
-        assert compatible[0]["provider_key"] == "openai-direct"
-        assert compatible[0]["api_mode"] == "codex_responses"
-
-    def test_compatible_custom_providers_prefers_base_url_then_url_then_api(self, tmp_path):
-        """URL field precedence is base_url > url > api (PR #9332)."""
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.safe_dump(
-                {
-                    "_config_version": 17,
-                    "providers": {
-                        "my-provider": {
-                            "name": "My Provider",
-                            "api": "https://api.example.com/v1",
-                            "url": "https://url.example.com/v1",
-                            "base_url": "https://base.example.com/v1",
-                        }
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            compatible = get_compatible_custom_providers()
-
-        assert compatible == [
-            {
-                "name": "My Provider",
-                "base_url": "https://base.example.com/v1",
-                "provider_key": "my-provider",
-            }
-        ]
-
-    def test_dedup_across_legacy_and_providers(self, tmp_path):
-        """Same name+url in both schemas should not produce duplicates."""
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.safe_dump(
-                {
-                    "_config_version": 17,
-                    "custom_providers": [
-                        {
-                            "name": "OpenAI Direct",
-                            "base_url": "https://api.openai.com/v1",
-                            "api_key": "legacy-key",
-                        }
-                    ],
-                    "providers": {
-                        "openai-direct": {
-                            "api": "https://api.openai.com/v1",
-                            "api_key": "new-key",
-                            "name": "OpenAI Direct",
-                        }
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            compatible = get_compatible_custom_providers()
-
-        assert len(compatible) == 1
-        # Legacy entry wins (read first)
-        assert compatible[0]["api_key"] == "legacy-key"
-
-    def test_dedup_preserves_entries_with_different_models(self, tmp_path):
-        """Entries with same name+URL but different models must not be collapsed."""
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.safe_dump(
-                {
-                    "_config_version": 17,
-                    "custom_providers": [
-                        {"name": "Ollama Cloud", "base_url": "https://ollama.com/v1", "model": "qwen3-coder"},
-                        {"name": "Ollama Cloud", "base_url": "https://ollama.com/v1", "model": "glm-5.1"},
-                        {"name": "Ollama Cloud", "base_url": "https://ollama.com/v1", "model": "kimi-k2.5"},
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            compatible = get_compatible_custom_providers()
-
-        assert len(compatible) == 3
-        models = [e.get("model") for e in compatible]
-        assert models == ["qwen3-coder", "glm-5.1", "kimi-k2.5"]
+        assert raw["model"] == original["model"]
+        assert result["config_added"] == ["_config_version"]
 
 
 class TestInterimAssistantMessageConfig:
@@ -733,43 +382,9 @@ class TestInterimAssistantMessageConfig:
     def test_default_config_enables_interim_assistant_messages(self):
         assert DEFAULT_CONFIG["display"]["interim_assistant_messages"] is True
 
-    def test_migrate_to_v15_adds_interim_assistant_message_gate(self, tmp_path):
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.safe_dump({"_config_version": 14, "display": {"tool_progress": "off"}}),
-            encoding="utf-8",
-        )
-
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            migrate_config(interactive=False, quiet=True)
-            raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-
-        from marlow_cli.config import DEFAULT_CONFIG
-        assert raw["_config_version"] == DEFAULT_CONFIG["_config_version"]
-        assert raw["display"]["tool_progress"] == "off"
-        assert raw["display"]["interim_assistant_messages"] is True
-
-
 class TestDiscordChannelPromptsConfig:
     def test_default_config_includes_discord_channel_prompts(self):
         assert DEFAULT_CONFIG["discord"]["channel_prompts"] == {}
-
-    def test_migrate_adds_discord_channel_prompts_default(self, tmp_path):
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(
-            yaml.safe_dump({"_config_version": 17, "discord": {"auto_thread": True}}),
-            encoding="utf-8",
-        )
-
-        with patch.dict(os.environ, {"MARLOW_HOME": str(tmp_path)}):
-            migrate_config(interactive=False, quiet=True)
-            raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-
-        from marlow_cli.config import DEFAULT_CONFIG
-        assert raw["_config_version"] == DEFAULT_CONFIG["_config_version"]
-        assert raw["discord"]["auto_thread"] is True
-        assert raw["discord"]["channel_prompts"] == {}
-
 
 class TestUserMessagePreviewConfig:
     def test_default_config_preview_line_counts(self):
@@ -783,16 +398,12 @@ class TestEnvWriteDenylist:
     influence how subprocesses execute — ``LD_PRELOAD``, ``PYTHONPATH``,
     ``PATH``, ``EDITOR``, etc. — or any ``MARLOW_*`` runtime flag.
 
-    The dashboard exposes ``PUT /api/env`` to any authed caller (and
-    the session token lives in the SPA's HTML where any future plugin
-    XSS or local process could exfiltrate it). Without this gate, an
-    attacker who steals the token could plant
+    Without this gate, a config-writing caller could plant
     ``LD_PRELOAD=/tmp/evil.so`` in ``.env`` and own the next Marlow
     process on next startup via the dotenv → ``os.environ`` chain in
     ``marlow_cli/env_loader.py``.
 
-    Regression test for the dashboard pentest finding filed alongside
-    the ``web-pentest`` skill (PR #32265 / issue #32267).
+    The write gate remains part of the retained config security boundary.
     """
 
     @pytest.fixture(autouse=True)
@@ -840,9 +451,7 @@ class TestEnvWriteDenylist:
     @pytest.mark.parametrize(
         "allowed_key",
         [
-            "MARLOW_GEMINI_CLIENT_ID",
             "MARLOW_LANGFUSE_PUBLIC_KEY",
-            "MARLOW_QWEN_BASE_URL",
             "MARLOW_MAX_ITERATIONS",
         ],
     )
@@ -856,11 +465,11 @@ class TestEnvWriteDenylist:
         env = load_env()
         assert env[allowed_key] == "test-value-123"
 
-    def test_legitimate_provider_key_still_works(self):
-        """The denylist must not regress on real provider key writes."""
-        save_env_value("OPENROUTER_API_KEY", "sk-or-test-1234")
+    def test_custom_provider_key_still_works(self):
+        """The denylist must not regress custom endpoint key writes."""
+        save_env_value("LOCAL_INFERENCE_API_KEY", "test-key-1234")
         env = load_env()
-        assert env["OPENROUTER_API_KEY"] == "sk-or-test-1234"
+        assert env["LOCAL_INFERENCE_API_KEY"] == "test-key-1234"
 
     def test_arbitrary_user_key_still_works(self):
         """Plugin / user-defined env vars (anything outside the

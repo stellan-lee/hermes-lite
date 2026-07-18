@@ -64,7 +64,6 @@ class TestProcFallback:
         _isdir, _listdir, _open = _fake_proc_dir(entries)
 
         with (
-            patch("marlow_cli.gateway.is_windows", return_value=False),
             patch("os.path.isdir", side_effect=_isdir),
             patch("os.listdir", side_effect=_listdir),
             patch("builtins.open", side_effect=_open),
@@ -83,7 +82,6 @@ class TestProcFallback:
         _isdir, _listdir, _open = _fake_proc_dir(entries)
 
         with (
-            patch("marlow_cli.gateway.is_windows", return_value=False),
             patch("os.path.isdir", side_effect=_isdir),
             patch("os.listdir", side_effect=_listdir),
             patch("builtins.open", side_effect=_open),
@@ -101,7 +99,6 @@ class TestProcFallback:
         mock_result.stdout = ps_output
 
         with (
-            patch("marlow_cli.gateway.is_windows", return_value=False),
             patch("os.path.isdir", return_value=False),
             patch("marlow_cli.gateway._get_ancestor_pids", return_value=set()),
             patch("subprocess.run", return_value=mock_result) as mock_ps,
@@ -124,7 +121,6 @@ class TestProcFallback:
             raise PermissionError("no access")
 
         with (
-            patch("marlow_cli.gateway.is_windows", return_value=False),
             patch("os.path.isdir", side_effect=_isdir),
             patch("os.listdir", side_effect=_listdir),
             patch("builtins.open", side_effect=_open),

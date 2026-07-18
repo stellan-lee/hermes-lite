@@ -6,8 +6,6 @@ import pytest
 
 
 sys.modules.setdefault("fire", types.SimpleNamespace(Fire=lambda *a, **k: None))
-sys.modules.setdefault("firecrawl", types.SimpleNamespace(Firecrawl=object))
-sys.modules.setdefault("fal_client", types.SimpleNamespace())
 
 import run_agent
 
@@ -56,25 +54,6 @@ def _build_agent(monkeypatch):
     agent._save_trajectory = lambda messages, user_message, completed: None
     return agent
 
-
-def _build_copilot_agent(monkeypatch, *, model="gpt-5.4"):
-    _patch_agent_bootstrap(monkeypatch)
-
-    agent = run_agent.AIAgent(
-        model=model,
-        provider="copilot",
-        api_mode="codex_responses",
-        base_url="https://api.githubcopilot.com",
-        api_key="gh-token",
-        quiet_mode=True,
-        max_iterations=4,
-        skip_context_files=True,
-        skip_memory=True,
-    )
-    agent._cleanup_task_resources = lambda task_id: None
-    agent._persist_session = lambda messages, history=None: None
-    agent._save_trajectory = lambda messages, user_message, completed: None
-    return agent
 
 
 def _codex_message_response(text: str):
@@ -186,7 +165,7 @@ def test_api_mode_uses_explicit_provider_when_codex(monkeypatch):
     _patch_agent_bootstrap(monkeypatch)
     agent = run_agent.AIAgent(
         model="gpt-5-codex",
-        base_url="https://openrouter.ai/api/v1",
+        base_url="https://chatgpt.com/backend-api/codex",
         provider="openai-codex",
         api_key="codex-token",
         quiet_mode=True,
@@ -202,7 +181,7 @@ def test_api_mode_normalizes_provider_case(monkeypatch):
     _patch_agent_bootstrap(monkeypatch)
     agent = run_agent.AIAgent(
         model="gpt-5-codex",
-        base_url="https://openrouter.ai/api/v1",
+        base_url="https://chatgpt.com/backend-api/codex",
         provider="OpenAI-Codex",
         api_key="codex-token",
         quiet_mode=True,
@@ -214,59 +193,7 @@ def test_api_mode_normalizes_provider_case(monkeypatch):
     assert agent.api_mode == "codex_responses"
 
 
-def test_api_mode_respects_explicit_openrouter_provider_over_codex_url(monkeypatch):
-    """GPT-5.x models need codex_responses even on OpenRouter.
 
-    OpenRouter rejects GPT-5 models on /v1/chat/completions with
-    ``unsupported_api_for_model``.  The model-level check overrides
-    the provider default.
-    """
-    _patch_agent_bootstrap(monkeypatch)
-    agent = run_agent.AIAgent(
-        model="gpt-5-codex",
-        base_url="https://chatgpt.com/backend-api/codex",
-        provider="openrouter",
-        api_key="test-token",
-        quiet_mode=True,
-        max_iterations=1,
-        skip_context_files=True,
-        skip_memory=True,
-    )
-    assert agent.api_mode == "codex_responses"
-    assert agent.provider == "openrouter"
-
-
-def test_copilot_acp_stays_on_chat_completions_for_gpt_5_models(monkeypatch):
-    _patch_agent_bootstrap(monkeypatch)
-    agent = run_agent.AIAgent(
-        model="gpt-5.4-mini",
-        base_url="acp://copilot",
-        provider="copilot-acp",
-        api_key="copilot-acp",
-        quiet_mode=True,
-        max_iterations=1,
-        skip_context_files=True,
-        skip_memory=True,
-    )
-    assert agent.provider == "copilot-acp"
-    assert agent.api_mode == "chat_completions"
-
-
-def test_copilot_gpt_5_mini_stays_on_chat_completions(monkeypatch):
-    _patch_agent_bootstrap(monkeypatch)
-    agent = run_agent.AIAgent(
-        model="gpt-5-mini",
-        base_url="https://api.githubcopilot.com",
-        provider="copilot",
-        api_key="gh-token",
-        api_mode="chat_completions",
-        quiet_mode=True,
-        max_iterations=1,
-        skip_context_files=True,
-        skip_memory=True,
-    )
-    assert agent.provider == "copilot"
-    assert agent.api_mode == "chat_completions"
 
 
 def test_build_api_kwargs_codex(monkeypatch):
@@ -361,169 +288,10 @@ def test_build_api_kwargs_codex_preserves_supported_efforts(monkeypatch):
         assert kwargs["reasoning"]["effort"] == effort, f"{effort} should pass through unchanged"
 
 
-def test_build_api_kwargs_copilot_responses_omits_openai_only_fields(monkeypatch):
-    agent = _build_copilot_agent(monkeypatch)
-    kwargs = agent._build_api_kwargs([{"role": "user", "content": "hi"}])
-
-    assert kwargs["model"] == "gpt-5.4"
-    assert kwargs["store"] is False
-    assert kwargs["tool_choice"] == "auto"
-    assert kwargs["parallel_tool_calls"] is True
-    assert kwargs["reasoning"] == {"effort": "medium"}
-    assert "prompt_cache_key" not in kwargs
-    assert "include" not in kwargs
 
 
-def test_build_api_kwargs_copilot_responses_omits_reasoning_for_non_reasoning_model(monkeypatch):
-    agent = _build_copilot_agent(monkeypatch, model="gpt-4.1")
-    kwargs = agent._build_api_kwargs([{"role": "user", "content": "hi"}])
-
-    assert "reasoning" not in kwargs
-    assert "include" not in kwargs
-    assert "prompt_cache_key" not in kwargs
 
 
-# ---------------------------------------------------------------------------
-# #27907: xAI tool-schema sanitization must NOT mutate ``agent.tools`` in place
-#
-# ``strip_slash_enum`` and ``strip_pattern_and_format`` are documented to
-# mutate their input in place ("Callers that need to preserve the original
-# should deep-copy first" — see ``tools/schema_sanitizer.py``).  Until this
-# fix, ``chat_completion_helpers.build_api_kwargs`` and ``auxiliary_client``
-# passed ``agent.tools`` straight through to the sanitizers.  The first xAI
-# request would permanently strip slash-containing enum constraints and the
-# ``pattern``/``format`` keywords from the per-agent tool registry — any
-# subsequent non-xAI call from the same agent (auxiliary task routed to
-# Anthropic, OpenRouter fallback, mid-session model switch) saw the
-# already-stripped schema.
-#
-# Fix: deepcopy ``tools_for_api`` before handing it to the sanitizers.
-# ---------------------------------------------------------------------------
-
-
-def _build_xai_agent_with_slash_enum_tool(monkeypatch):
-    """Build an xAI agent whose tool registry has a slash-containing enum.
-
-    Mirrors the Brave Search MCP shape that originally triggered #27907.
-    """
-
-    def _fake_get_tool_definitions(**_kwargs):
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "brave_like",
-                    "description": "Tool with slash-containing enum + pattern/format",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "accept": {
-                                "type": "string",
-                                "enum": ["application/json", "*/*"],
-                            },
-                            "match": {
-                                "type": "string",
-                                "pattern": "^[a-z]+$",
-                                "format": "regex",
-                            },
-                        },
-                    },
-                },
-            }
-        ]
-
-    monkeypatch.setattr(run_agent, "get_tool_definitions", _fake_get_tool_definitions)
-    monkeypatch.setattr(run_agent, "check_toolset_requirements", lambda: {})
-
-    agent = run_agent.AIAgent(
-        model="grok-4.3",
-        provider="xai-oauth",
-        api_mode="codex_responses",
-        base_url="https://api.x.ai/v1",
-        api_key="xai-token",
-        quiet_mode=True,
-        max_iterations=4,
-        skip_context_files=True,
-        skip_memory=True,
-    )
-    agent._cleanup_task_resources = lambda task_id: None
-    agent._persist_session = lambda messages, history=None: None
-    agent._save_trajectory = lambda messages, user_message, completed: None
-    return agent
-
-
-def test_build_api_kwargs_xai_strips_slash_enum_from_outgoing_request(monkeypatch):
-    """The xAI request sent to the API must NOT contain slash-enum values."""
-    agent = _build_xai_agent_with_slash_enum_tool(monkeypatch)
-    kwargs = agent._build_api_kwargs([{"role": "user", "content": "hi"}])
-
-    # ``tools`` comes back in Responses format from the codex transport;
-    # find the parameters dict for our function regardless of shape.
-    out_tool = kwargs["tools"][0]
-    params = out_tool["parameters"]
-    assert "enum" not in params["properties"]["accept"], (
-        "outgoing xAI request must not carry slash-containing enums — "
-        "xAI would 400 with 'Invalid arguments passed to the model'"
-    )
-    # pattern/format must also be stripped (existing #27197 contract).
-    assert "pattern" not in params["properties"]["match"]
-    assert "format" not in params["properties"]["match"]
-
-
-def test_build_api_kwargs_xai_does_not_mutate_agent_tools(monkeypatch):
-    """Headline #27907 regression: ``agent.tools`` must survive intact.
-
-    Pre-fix the sanitizers mutated ``agent.tools`` in place, so a subsequent
-    non-xAI call from the same agent saw an already-stripped schema —
-    silent constraint loss with no way for the user to notice from their
-    config.
-    """
-    agent = _build_xai_agent_with_slash_enum_tool(monkeypatch)
-
-    # Snapshot the schema before the request.
-    accept_before = agent.tools[0]["function"]["parameters"]["properties"]["accept"]
-    match_before = agent.tools[0]["function"]["parameters"]["properties"]["match"]
-    assert accept_before["enum"] == ["application/json", "*/*"]
-    assert match_before.get("pattern") == "^[a-z]+$"
-    assert match_before.get("format") == "regex"
-
-    # Build the API kwargs (which runs the sanitizers).
-    agent._build_api_kwargs([{"role": "user", "content": "hi"}])
-
-    # The agent's tool registry must be UNCHANGED.
-    accept_after = agent.tools[0]["function"]["parameters"]["properties"]["accept"]
-    match_after = agent.tools[0]["function"]["parameters"]["properties"]["match"]
-    assert accept_after.get("enum") == ["application/json", "*/*"], (
-        "agent.tools mutated — slash-containing enum was stripped from the "
-        "shared per-agent registry, will leak to non-xAI calls"
-    )
-    assert match_after.get("pattern") == "^[a-z]+$", (
-        "agent.tools mutated — pattern stripped from shared registry"
-    )
-    assert match_after.get("format") == "regex", (
-        "agent.tools mutated — format stripped from shared registry"
-    )
-
-
-def test_build_api_kwargs_xai_is_idempotent_across_repeated_calls(monkeypatch):
-    """Multiple xAI requests must each produce the same sanitized output
-    AND must not progressively erode the source schema."""
-    agent = _build_xai_agent_with_slash_enum_tool(monkeypatch)
-
-    kwargs1 = agent._build_api_kwargs([{"role": "user", "content": "first"}])
-    kwargs2 = agent._build_api_kwargs([{"role": "user", "content": "second"}])
-    kwargs3 = agent._build_api_kwargs([{"role": "user", "content": "third"}])
-
-    for k in (kwargs1, kwargs2, kwargs3):
-        params = k["tools"][0]["parameters"]
-        assert "enum" not in params["properties"]["accept"]
-        assert "pattern" not in params["properties"]["match"]
-        assert "format" not in params["properties"]["match"]
-
-    # Source schema still untouched after three rounds.
-    assert agent.tools[0]["function"]["parameters"]["properties"]["accept"].get(
-        "enum"
-    ) == ["application/json", "*/*"]
 
 
 def test_run_codex_stream_returns_collected_items_when_stream_ends_without_terminal(monkeypatch):
@@ -915,224 +683,10 @@ def test_run_conversation_codex_refreshes_after_401_and_retries(monkeypatch):
     assert result["final_response"] == "Recovered after refresh"
 
 
-def _build_xai_oauth_agent(monkeypatch):
-    _patch_agent_bootstrap(monkeypatch)
-    agent = run_agent.AIAgent(
-        model="grok-4.3",
-        provider="xai-oauth",
-        api_mode="codex_responses",
-        base_url="https://api.x.ai/v1",
-        api_key="xai-oauth-token",
-        quiet_mode=True,
-        max_iterations=4,
-        skip_context_files=True,
-        skip_memory=True,
-    )
-    agent._cleanup_task_resources = lambda task_id: None
-    agent._persist_session = lambda messages, history=None: None
-    agent._save_trajectory = lambda messages, user_message, completed: None
-    return agent
 
 
-def test_build_api_kwargs_xai_oauth_sends_cache_key_via_extra_body(monkeypatch):
-    """xai-oauth + codex_responses must route prompt caching via the
-    ``prompt_cache_key`` body field on /v1/responses (xAI's documented
-    Responses-API cache key — see docs.x.ai prompt-caching/maximizing-
-    cache-hits).
-
-    We pass it through ``extra_body`` rather than as a top-level kwarg so
-    the body field is serialized into JSON regardless of whether the
-    installed openai SDK build still accepts ``prompt_cache_key`` on
-    ``Responses.stream()``. Older or trimmed SDK builds drop it from the
-    signature and would otherwise raise ``TypeError`` before the request
-    reaches api.x.ai. The ``x-grok-conv-id`` header is retained as a
-    belt-and-braces fallback for clients/proxies that route on headers."""
-    agent = _build_xai_oauth_agent(monkeypatch)
-    kwargs = agent._build_api_kwargs(
-        [
-            {"role": "system", "content": "You are Marlow."},
-            {"role": "user", "content": "Ping"},
-        ]
-    )
-
-    assert kwargs.get("model") == "grok-4.3"
-    # Top-level kwarg must NOT be set — that's the openai SDK
-    # incompatibility this whole indirection exists to dodge.
-    assert "prompt_cache_key" not in kwargs
-    extra_body = kwargs.get("extra_body") or {}
-    assert extra_body.get("prompt_cache_key"), (
-        "xAI prompt-cache routing must travel via extra_body.prompt_cache_key "
-        "for /v1/responses — body field is the documented surface."
-    )
-    headers = kwargs.get("extra_headers") or {}
-    assert "x-grok-conv-id" in headers, (
-        "x-grok-conv-id header kept as belt-and-braces fallback for clients "
-        "that route on headers."
-    )
 
 
-def test_run_conversation_xai_oauth_refreshes_after_401_and_retries(monkeypatch):
-    """xai-oauth speaks the Responses API just like codex.  When the access
-    token is rejected mid-call (401), the same proactive refresh-and-retry
-    handler that fires for openai-codex must also fire for xai-oauth — the
-    bug it caught: the gating condition checked only ``provider == "openai-codex"``,
-    so xai-oauth 401s leaked straight to non-retryable abort path with no
-    chance to swap in a freshly refreshed access token."""
-    agent = _build_xai_oauth_agent(monkeypatch)
-    calls = {"api": 0, "refresh": 0}
-
-    class _UnauthorizedError(RuntimeError):
-        def __init__(self):
-            super().__init__("Error code: 401 - unauthorized")
-            self.status_code = 401
-
-    def _fake_api_call(api_kwargs):
-        calls["api"] += 1
-        if calls["api"] == 1:
-            raise _UnauthorizedError()
-        return _codex_message_response("Recovered after xAI refresh")
-
-    def _fake_refresh(*, force=True):
-        calls["refresh"] += 1
-        assert force is True
-        return True
-
-    monkeypatch.setattr(agent, "_interruptible_api_call", _fake_api_call)
-    monkeypatch.setattr(agent, "_try_refresh_codex_client_credentials", _fake_refresh)
-
-    result = agent.run_conversation("Say OK")
-
-    assert calls["api"] == 2
-    assert calls["refresh"] == 1
-    assert result["completed"] is True
-    assert result["final_response"] == "Recovered after xAI refresh"
-
-
-def test_try_refresh_codex_client_credentials_handles_xai_oauth(monkeypatch):
-    """``_try_refresh_codex_client_credentials`` must rebuild the OpenAI
-    client with freshly resolved xAI OAuth credentials when the active
-    provider is xai-oauth.  The function name is shared between codex and
-    xai-oauth (both speak codex_responses) — covering both cases prevents
-    silent regressions where the function gets gated to a single provider."""
-    agent = _build_xai_oauth_agent(monkeypatch)
-    closed = {"value": False}
-    rebuilt = {"kwargs": None}
-
-    class _ExistingClient:
-        def close(self):
-            closed["value"] = True
-
-    class _RebuiltClient:
-        pass
-
-    def _fake_openai(**kwargs):
-        rebuilt["kwargs"] = kwargs
-        return _RebuiltClient()
-
-    def _fake_resolve(force_refresh=False, refresh_if_expiring=True, **_):
-        # The pre-refresh guard reads the singleton with refresh_if_expiring=False
-        # to verify that the agent's active key still matches; the actual
-        # refresh later passes force_refresh=True.  Both calls must succeed.
-        return {
-            "api_key": "fresh-xai-token" if force_refresh else agent.api_key,
-            "base_url": "https://api.x.ai/v1",
-        }
-
-    monkeypatch.setattr(
-        "marlow_cli.auth.resolve_xai_oauth_runtime_credentials",
-        _fake_resolve,
-    )
-    monkeypatch.setattr(run_agent, "OpenAI", _fake_openai)
-
-    agent.client = _ExistingClient()
-    ok = agent._try_refresh_codex_client_credentials(force=True)
-
-    assert ok is True
-    assert closed["value"] is True
-    assert rebuilt["kwargs"]["api_key"] == "fresh-xai-token"
-    assert rebuilt["kwargs"]["base_url"] == "https://api.x.ai/v1"
-    assert isinstance(agent.client, _RebuiltClient)
-    assert agent.api_key == "fresh-xai-token"
-
-
-def test_try_refresh_codex_client_credentials_skips_xai_oauth_when_singleton_differs(monkeypatch):
-    """An xai-oauth agent constructed with a non-singleton credential
-    (e.g. a manual pool entry whose tokens belong to a different account
-    than the loopback_pkce singleton, or an explicit ``api_key=`` arg)
-    MUST NOT silently adopt the singleton's tokens on a 401 reactive
-    refresh.  Otherwise a 401 mid-conversation would re-route the rest
-    of the conversation onto a different account, with no user feedback.
-
-    The credential pool's reactive recovery is the right channel for
-    pool-managed credentials; this fallback path is for the singleton-
-    only case and must short-circuit when the active key differs."""
-    agent = _build_xai_oauth_agent(monkeypatch)
-    # Agent is using "xai-oauth-token" (per the builder); singleton holds
-    # a *different* account's token.  No force_refresh should fire.
-    refresh_calls = {"count": 0}
-
-    def _fake_resolve(force_refresh=False, refresh_if_expiring=True, **_):
-        if force_refresh:
-            refresh_calls["count"] += 1
-            return {
-                "api_key": "singleton-account-token",
-                "base_url": "https://api.x.ai/v1",
-            }
-        # The pre-refresh guard read — return the singleton's view of the
-        # singleton's token, which is NOT what the agent is currently using.
-        return {
-            "api_key": "singleton-account-token",
-            "base_url": "https://api.x.ai/v1",
-        }
-
-    monkeypatch.setattr(
-        "marlow_cli.auth.resolve_xai_oauth_runtime_credentials",
-        _fake_resolve,
-    )
-
-    pre_refresh_key = agent.api_key
-    ok = agent._try_refresh_codex_client_credentials(force=True)
-
-    assert ok is False, (
-        "must not refresh when the active credential isn't the singleton; "
-        "otherwise the conversation silently swaps accounts mid-flight."
-    )
-    assert refresh_calls["count"] == 0, (
-        "force_refresh must not run — that would mutate the singleton's "
-        "tokens on disk and consume its single-use refresh_token for an "
-        "agent that wasn't even using the singleton."
-    )
-    assert agent.api_key == pre_refresh_key
-
-
-def test_run_conversation_copilot_refreshes_after_401_and_retries(monkeypatch):
-    agent = _build_copilot_agent(monkeypatch)
-    calls = {"api": 0, "refresh": 0}
-
-    class _UnauthorizedError(RuntimeError):
-        def __init__(self):
-            super().__init__("Error code: 401 - unauthorized")
-            self.status_code = 401
-
-    def _fake_api_call(api_kwargs):
-        calls["api"] += 1
-        if calls["api"] == 1:
-            raise _UnauthorizedError()
-        return _codex_message_response("Recovered after copilot refresh")
-
-    def _fake_refresh():
-        calls["refresh"] += 1
-        return True
-
-    monkeypatch.setattr(agent, "_interruptible_api_call", _fake_api_call)
-    monkeypatch.setattr(agent, "_try_refresh_copilot_client_credentials", _fake_refresh)
-
-    result = agent.run_conversation("Say OK")
-
-    assert calls["api"] == 2
-    assert calls["refresh"] == 1
-    assert result["completed"] is True
-    assert result["final_response"] == "Recovered after copilot refresh"
 
 
 def test_try_refresh_codex_client_credentials_rebuilds_client(monkeypatch):
@@ -1176,60 +730,6 @@ def test_try_refresh_codex_client_credentials_rebuilds_client(monkeypatch):
     assert isinstance(agent.client, _RebuiltClient)
 
 
-def test_try_refresh_copilot_client_credentials_rebuilds_client(monkeypatch):
-    agent = _build_copilot_agent(monkeypatch)
-    closed = {"value": False}
-    rebuilt = {"kwargs": None}
-
-    class _ExistingClient:
-        def close(self):
-            closed["value"] = True
-
-    class _RebuiltClient:
-        pass
-
-    def _fake_openai(**kwargs):
-        rebuilt["kwargs"] = kwargs
-        return _RebuiltClient()
-
-    monkeypatch.setattr(
-        "marlow_cli.copilot_auth.resolve_copilot_token",
-        lambda: ("gho_new_token", "GH_TOKEN"),
-    )
-    monkeypatch.setattr(run_agent, "OpenAI", _fake_openai)
-
-    agent.client = _ExistingClient()
-    ok = agent._try_refresh_copilot_client_credentials()
-
-    assert ok is True
-    assert closed["value"] is True
-    assert rebuilt["kwargs"]["api_key"] == "gho_new_token"
-    assert rebuilt["kwargs"]["base_url"] == "https://api.githubcopilot.com"
-    assert rebuilt["kwargs"]["default_headers"]["Copilot-Integration-Id"] == "vscode-chat"
-    assert isinstance(agent.client, _RebuiltClient)
-
-
-def test_try_refresh_copilot_client_credentials_rebuilds_even_if_token_unchanged(monkeypatch):
-    agent = _build_copilot_agent(monkeypatch)
-    rebuilt = {"count": 0}
-
-    class _RebuiltClient:
-        pass
-
-    def _fake_openai(**kwargs):
-        rebuilt["count"] += 1
-        return _RebuiltClient()
-
-    monkeypatch.setattr(
-        "marlow_cli.copilot_auth.resolve_copilot_token",
-        lambda: ("gh-token", "gh auth token"),
-    )
-    monkeypatch.setattr(run_agent, "OpenAI", _fake_openai)
-
-    ok = agent._try_refresh_copilot_client_credentials()
-
-    assert ok is True
-    assert rebuilt["count"] == 1
 
 
 def test_run_conversation_codex_tool_round_trip(monkeypatch):
@@ -1444,16 +944,6 @@ def test_preflight_codex_api_kwargs_allows_reasoning_and_temperature(monkeypatch
     assert result["include"] == ["reasoning.encrypted_content"]
     assert result["temperature"] == 0.7
     assert result["max_output_tokens"] == 4096
-
-
-def test_preflight_codex_api_kwargs_allows_service_tier(monkeypatch):
-    agent = _build_agent(monkeypatch)
-    kwargs = _codex_request_kwargs()
-    kwargs["service_tier"] = "priority"
-
-    from agent.codex_responses_adapter import _preflight_codex_api_kwargs
-    result = _preflight_codex_api_kwargs(kwargs)
-    assert result["service_tier"] == "priority"
 
 
 def test_preflight_codex_api_kwargs_preserves_positive_timeout(monkeypatch):

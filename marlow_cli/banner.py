@@ -116,8 +116,7 @@ def get_available_skills() -> Dict[str, List[str]]:
 # Cache update check results for 6 hours to avoid repeated git fetches
 _UPDATE_CHECK_CACHE_SECONDS = 6 * 3600
 
-# Sentinel returned when we know an update exists but can't count commits
-# (e.g. nix-built marlow — no local git history to count against).
+# Sentinel returned when we know an update exists but cannot count commits.
 UPDATE_AVAILABLE_NO_COUNT = -1
 
 _UPSTREAM_REPO_URL = "https://github.com/NousResearch/marlow-agent.git"
@@ -213,7 +212,7 @@ def check_via_pypi() -> Optional[int]:
 def check_for_updates() -> Optional[int]:
     """Check whether a Marlow update is available.
 
-    Two paths: if ``MARLOW_REVISION`` is set (nix builds embed it), compare
+    Two paths: if ``MARLOW_REVISION`` is embedded by a packaged build, compare
     it to upstream main via ``git ls-remote``. Otherwise look for a local
     git checkout and count commits behind ``origin/main``.
 
@@ -504,8 +503,8 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
 
     _, unavailable_toolsets = check_tool_availability(quiet=True)
     disabled_tools = set()
-    # Tools whose toolset has a check_fn are lazy-initialized (e.g. honcho,
-    # homeassistant) — they show as unavailable at banner time because the
+    # Tools whose toolset has a check_fn are lazy-initialized (for example,
+    # Honcho) — they show as unavailable at banner time because the
     # check hasn't run yet, but they aren't misconfigured.
     lazy_tools = set()
     for item in unavailable_toolsets:
@@ -693,9 +692,8 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
                     f"[dim yellow] — run [bold]{recommended_update_command()}[/bold] to update[/]"
                 )
             else:
-                # UPDATE_AVAILABLE_NO_COUNT: nix-built marlow; we know an update
-                # exists but not by how much, and we don't know how the user
-                # installed it (nix run, profile, system flake, home-manager).
+                # UPDATE_AVAILABLE_NO_COUNT: a packaged build is behind, but no
+                # local git history is available to count commits.
                 managed_cmd = get_managed_update_command()
                 line = "[bold yellow]⚠ update available[/]"
                 if managed_cmd:

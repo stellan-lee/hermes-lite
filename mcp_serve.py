@@ -459,8 +459,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         "marlow",
         instructions=(
             "Marlow Agent messaging bridge. Use these tools to interact with "
-            "conversations across Telegram, Discord, Slack, WhatsApp, Signal, "
-            "Matrix, and other connected platforms."
+            "conversations across Telegram, Discord, Slack, Feishu, email, "
+            "webhooks, and plugin-provided platforms."
         ),
     )
 

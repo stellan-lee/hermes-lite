@@ -136,8 +136,6 @@ class TestCallLlmUnsupportedTemperatureRetry:
                   return_value=(client, "gpt-5.5")),
             patch("agent.auxiliary_client._validate_llm_response",
                   side_effect=lambda resp, _task: resp),
-            patch("agent.auxiliary_client._try_payment_fallback",
-                  return_value=None),
         ):
             with pytest.raises(RuntimeError, match="Invalid value"):
                 call_llm(
@@ -166,8 +164,6 @@ class TestCallLlmUnsupportedTemperatureRetry:
                   return_value=(client, "gpt-5.5")),
             patch("agent.auxiliary_client._validate_llm_response",
                   side_effect=lambda resp, _task: resp),
-            patch("agent.auxiliary_client._try_payment_fallback",
-                  return_value=None),
         ):
             with pytest.raises(RuntimeError):
                 call_llm(
@@ -233,8 +229,6 @@ class TestAsyncCallLlmUnsupportedTemperatureRetry:
                   return_value=(client, "gpt-5.5")),
             patch("agent.auxiliary_client._validate_llm_response",
                   side_effect=lambda resp, _task: resp),
-            patch("agent.auxiliary_client._try_payment_fallback",
-                  return_value=None),
         ):
             with pytest.raises(RuntimeError, match="Invalid value"):
                 await async_call_llm(

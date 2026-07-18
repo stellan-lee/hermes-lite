@@ -9,12 +9,10 @@ Central map of registered providers. Populated by plugins at import-time via
 Active selection
 ----------------
 The active provider is chosen by ``image_gen.provider`` in ``config.yaml``.
-If unset, :func:`get_active_provider` applies fallback logic:
+If unset, :func:`get_active_provider` applies minimal fallback logic:
 
 1. If exactly one provider is registered, use it.
-2. Otherwise if a provider named ``fal`` is registered, use it (legacy
-   default — matches pre-plugin behavior).
-3. Otherwise return ``None`` (the tool surfaces a helpful error pointing
+2. Otherwise return ``None`` (the tool surfaces a helpful error pointing
    the user at ``marlow tools``).
 """
 
@@ -40,7 +38,14 @@ def register_provider(provider: ImageGenProvider) -> None:
     a debug message — this makes hot-reload scenarios (tests, dev loops)
     behave predictably.
     """
-    if not isinstance(provider, ImageGenProvider):
+    # ``agent.image_gen_provider`` can be reloaded by setup/plugin tests while
+    # an already-imported provider instance still inherits the previous ABC
+    # object. Accept that hot-reload case when the provider satisfies the
+    # small runtime protocol used by this registry.
+    if not isinstance(provider, ImageGenProvider) and not (
+        callable(getattr(provider, "generate", None))
+        and isinstance(getattr(provider, "name", None), str)
+    ):
         raise TypeError(
             f"register_provider() expects an ImageGenProvider instance, "
             f"got {type(provider).__name__}"
@@ -85,7 +90,7 @@ def get_active_provider() -> Optional[ImageGenProvider]:
       reports False — the dispatcher surfaces a precise "X_API_KEY is not
       set" error rather than silently switching backends.
     - When ``image_gen.provider`` is unset, the fallback path (single-
-      provider shortcut and the FAL legacy preference) is filtered by
+      provider shortcut) is filtered by
       ``is_available()`` so we don't pick a provider the user has no
       credentials for.
     """
@@ -130,11 +135,6 @@ def get_active_provider() -> Optional[ImageGenProvider]:
     available = [p for p in snapshot.values() if _is_available_safe(p)]
     if len(available) == 1:
         return available[0]
-
-    # 3. Fallback: prefer legacy FAL for backward compat, when available.
-    fal = snapshot.get("fal")
-    if fal is not None and _is_available_safe(fal):
-        return fal
 
     return None
 

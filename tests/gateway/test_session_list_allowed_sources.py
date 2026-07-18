@@ -3,7 +3,7 @@
 History:
 - The original implementation hardcoded an allow-list of known gateway
   sources (``tui, cli, telegram, discord, slack, ...``). New or unlisted
-  sources (``acp``, ``webhook``, user-defined ``MARLOW_SESSION_SOURCE``
+  sources (``webhook``, user-defined ``MARLOW_SESSION_SOURCE``
   values, newly-added platforms) were silently dropped from the resume
   picker — users reported "lots of sessions are missing from browse
   but exist in .marlow/sessions."
@@ -40,12 +40,12 @@ def _call(limit: int | None = None):
 
 
 def test_session_list_surfaces_all_user_facing_sources(monkeypatch):
-    """acp / webhook / custom sources should all appear; only ``tool`` is hidden."""
+    """Webhook and custom sources should appear; only ``tool`` is hidden."""
     rows = [
         {"id": "tui-1", "source": "tui", "started_at": 9},
         {"id": "tool-1", "source": "tool", "started_at": 8},
         {"id": "tg-1", "source": "telegram", "started_at": 7},
-        {"id": "acp-1", "source": "acp", "started_at": 6},
+        {"id": "custom-client-1", "source": "custom-client", "started_at": 6},
         {"id": "cli-1", "source": "cli", "started_at": 5},
         {"id": "webhook-1", "source": "webhook", "started_at": 4},
         {"id": "custom-1", "source": "my-custom-source", "started_at": 3},
@@ -56,12 +56,12 @@ def test_session_list_surfaces_all_user_facing_sources(monkeypatch):
     resp = _call(limit=10)
     ids = [s["id"] for s in resp["result"]["sessions"]]
 
-    # Every human-facing source — including previously-hidden acp, webhook,
-    # and custom sources — must surface in the picker now.
+    # Every human-facing source, including webhook and custom sources, must
+    # surface in the picker.
     assert "tg-1" in ids
     assert "tui-1" in ids
     assert "cli-1" in ids
-    assert "acp-1" in ids, "acp sessions were being hidden by the old allow-list"
+    assert "custom-client-1" in ids
     assert "webhook-1" in ids, "webhook sessions were being hidden by the old allow-list"
     assert "custom-1" in ids, "custom MARLOW_SESSION_SOURCE values were being hidden"
 

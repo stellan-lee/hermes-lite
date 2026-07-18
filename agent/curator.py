@@ -189,7 +189,7 @@ def get_prune_builtins() -> bool:
     ON by default. When on, built-ins become curation candidates and are
     archived after the same inactivity period as agent-created skills, with a
     suppression list keeping them archived across `marlow update` re-seeds.
-    Hub-installed skills are never pruned regardless of this flag.
+    Externally installed skills are never pruned regardless of this flag.
     """
     cfg = _load_config()
     return bool(cfg.get("prune_builtins", True))
@@ -369,7 +369,7 @@ CURATOR_REVIEW_PROMPT = (
     "bodies + `references/`, `templates/`, and `scripts/` subfiles for "
     "session-specific detail — not one-session-one-skill micro-entries.\n\n"
     "Hard rules — do not violate:\n"
-    "1. DO NOT touch bundled or hub-installed skills. The candidate list "
+    "1. DO NOT touch bundled skills. The candidate list "
     "below is already filtered to agent-created skills only.\n"
     "2. DO NOT delete any skill. Archiving (moving the skill's directory "
     "into ~/.marlow/skills/.archive/) is the maximum destructive action. "
@@ -387,7 +387,7 @@ CURATOR_REVIEW_PROMPT = (
     "How to work — not optional:\n"
     "1. Scan the full candidate list. Identify PREFIX CLUSTERS (skills "
     "sharing a first word or domain keyword). Examples you are likely "
-    "to find: marlow-config-*, marlow-dashboard-*, gateway-*, codex-*, "
+    "to find: marlow-config-*, gateway-*, codex-*, "
     "ollama-*, anthropic-*, gemini-*, mcp-*, salvage-*, pr-*, "
     "competitor-*, python-*, security-*, etc. Expect 10-25 clusters.\n"
     "2. For each cluster with 2+ members, do NOT ask 'are these pairs "
@@ -454,8 +454,7 @@ CURATOR_REVIEW_PROMPT = (
     "  - skill_manage action=delete     — archive a skill. MUST pass "
     "`absorbed_into=<umbrella>` when you've merged its content into another "
     "skill, or `absorbed_into=\"\"` when you're truly pruning with no "
-    "forwarding target. This drives cron-job skill-reference migration — "
-    "guessing from your YAML summary after the fact is fragile.\n"
+    "forwarding target. Never omit it.\n"
     "  - terminal                       — mv a sibling into the archive "
     "OR move its content into a support subfile\n\n"
     "'keep' is a legitimate decision ONLY when the skill is already a "
@@ -523,7 +522,7 @@ def _needle_in_path_component(needle: str, path: str) -> bool:
     Unlike simple substring matching, this avoids false positives where short
     skill names are embedded in longer filenames (e.g. "api" matching
     "references/api-design.md").  Hyphens and underscores are normalised so
-    "open-webui-setup" matches "open_webui_setup.md".
+    "rest-api-debugging" matches "rest_api_debugging.md".
     """
     norm_needle = needle.replace("-", "_")
     for part in path.replace("\\", "/").split("/"):
@@ -1110,39 +1109,6 @@ def _write_run_report(
     consolidated = classification["consolidated"]
     pruned = classification["pruned"]
 
-    # Rewrite cron job skill references. When the curator consolidates
-    # skill X into umbrella Y, any cron job that lists X fails to load
-    # it at run time — the scheduler skips it and the job runs without
-    # the instructions it was scheduled to follow. Rewriting the
-    # references in-place keeps scheduled jobs working across
-    # consolidation passes. Best-effort: never let a cron-module issue
-    # break the curator.
-    cron_rewrites: Dict[str, Any] = {"rewrites": [], "jobs_updated": 0, "jobs_scanned": 0}
-    try:
-        consolidated_map = {
-            e["name"]: e["into"]
-            for e in consolidated
-            if isinstance(e, dict) and e.get("name") and e.get("into")
-        }
-        pruned_names = [
-            e["name"] for e in pruned
-            if isinstance(e, dict) and e.get("name")
-        ]
-        if consolidated_map or pruned_names:
-            from cron.jobs import rewrite_skill_refs as _rewrite_cron_refs
-            cron_rewrites = _rewrite_cron_refs(
-                consolidated=consolidated_map,
-                pruned=pruned_names,
-            )
-    except Exception as e:
-        logger.debug("Curator cron skill rewrite failed: %s", e, exc_info=True)
-        cron_rewrites = {
-            "rewrites": [],
-            "jobs_updated": 0,
-            "jobs_scanned": 0,
-            "error": str(e),
-        }
-
     payload = {
         "started_at": started_at.isoformat(),
         "duration_seconds": round(elapsed_seconds, 2),
@@ -1158,7 +1124,6 @@ def _write_run_report(
             "consolidated_this_run": len(consolidated),
             "pruned_this_run": len(pruned),
             "state_transitions": len(transitions),
-            "cron_jobs_rewritten": int(cron_rewrites.get("jobs_updated", 0)),
             "tool_calls_total": sum(tc_counts.values()),
         },
         "tool_call_counts": tc_counts,
@@ -1168,7 +1133,6 @@ def _write_run_report(
         "pruned_names": [p["name"] for p in pruned],
         "added": added,
         "state_transitions": transitions,
-        "cron_rewrites": cron_rewrites,
         "llm_final": llm_meta.get("final", ""),
         "llm_summary": llm_meta.get("summary", ""),
         "llm_error": llm_meta.get("error"),
@@ -1190,17 +1154,6 @@ def _write_run_report(
         (run_dir / "REPORT.md").write_text(md, encoding="utf-8")
     except Exception as e:
         logger.debug("Curator REPORT.md write failed: %s", e)
-
-    # cron_rewrites.json — only when at least one job was touched, to
-    # keep run dirs uncluttered for the common no-op case.
-    try:
-        if int(cron_rewrites.get("jobs_updated", 0)) > 0:
-            (run_dir / "cron_rewrites.json").write_text(
-                json.dumps(cron_rewrites, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-    except Exception as e:
-        logger.debug("Curator cron_rewrites.json write failed: %s", e)
 
     return run_dir
 
@@ -1330,39 +1283,6 @@ def _render_report_markdown(p: Dict[str, Any]) -> str:
         lines.append(f"### State transitions ({len(trans)})\n")
         for t in trans:
             lines.append(f"- `{t.get('name')}`: {t.get('from')} → {t.get('to')}")
-        lines.append("")
-
-    # Cron job rewrites — show which scheduled jobs had their skill
-    # references updated so users can audit that the auto-rewrite did
-    # the right thing. Only present when at least one job changed.
-    cron_rw = p.get("cron_rewrites") or {}
-    cron_rewrites_list = cron_rw.get("rewrites") or []
-    if cron_rewrites_list:
-        lines.append(f"### Cron job skill references rewritten ({len(cron_rewrites_list)})\n")
-        lines.append(
-            "_Cron jobs that referenced a consolidated or pruned skill were "
-            "updated in-place so they keep loading the right instructions "
-            "on their next run. See `cron_rewrites.json` for the full record._\n"
-        )
-        SHOW = 25
-        for entry in cron_rewrites_list[:SHOW]:
-            job_name = entry.get("job_name") or entry.get("job_id") or "?"
-            before = entry.get("before") or []
-            after = entry.get("after") or []
-            mapped = entry.get("mapped") or {}
-            dropped = entry.get("dropped") or []
-            lines.append(
-                f"- `{job_name}`: `{', '.join(before)}` → `{', '.join(after) or '(none)'}`"
-            )
-            for old, new in mapped.items():
-                lines.append(f"    - `{old}` → `{new}` (consolidated)")
-            for name in dropped:
-                lines.append(f"    - `{name}` dropped (pruned)")
-        if len(cron_rewrites_list) > SHOW:
-            lines.append(
-                f"- … and {len(cron_rewrites_list) - SHOW} more "
-                "(see `cron_rewrites.json`)"
-            )
         lines.append("")
 
     # Full LLM final response
@@ -1513,16 +1433,14 @@ def run_curator_review(
             else:
                 # When pruning built-ins is enabled, the candidate list now
                 # includes bundled skills. Override the default "don't touch
-                # bundled" rule for them — but only archiving is permitted, and
-                # hub-installed skills remain strictly off-limits.
+                # bundled" rule for them — but only archiving is permitted.
                 builtins_note = ""
                 if get_prune_builtins():
                     builtins_note = (
                         "\n\nPRUNE-BUILTINS MODE IS ON: bundled built-in skills "
                         "ARE included in the candidate list below and MAY be "
                         "archived for staleness/irrelevance, overriding hard "
-                        "rule #1 for bundled skills ONLY. Hub-installed skills "
-                        "remain strictly off-limits. Treat a stale built-in the "
+                        "rule #1 for bundled skills ONLY. Treat a stale built-in the "
                         "same as a stale agent-created skill: archive it (never "
                         "delete). It will be restored on `marlow update` only if "
                         "the user explicitly restores it."
@@ -1667,7 +1585,7 @@ def _resolve_review_model(cfg: Dict[str, Any]) -> tuple[str, str]:
 
     Curator is a regular auxiliary task slot — ``auxiliary.curator.{provider,model}``
     — so it participates in the canonical aux-model plumbing (``marlow model`` →
-    auxiliary picker, the dashboard Models tab, ``auxiliary.curator.{timeout,
+    auxiliary picker, ``auxiliary.curator.{timeout,
     base_url,api_key,extra_body}``). ``provider: "auto"`` with an empty model
     means "use the main chat model" — same default as every other aux task.
 
@@ -1719,7 +1637,7 @@ def _run_llm_review(prompt: str) -> Dict[str, Any]:
     #
     # `_resolve_review_runtime()` honors `auxiliary.curator.{provider,model,...}`
     # (canonical aux-task slot, wired through `marlow model` → auxiliary
-    # picker and the dashboard Models tab), with a legacy fallback to
+    # picker), with a legacy fallback to
     # `curator.auxiliary.{provider,model,...}`. See docs/user-guide/features/curator.md.
     _api_key = None
     _base_url = None

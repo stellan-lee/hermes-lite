@@ -13,10 +13,6 @@ Exception: ``display.streaming`` is CLI-only.  Gateway streaming follows the
 top-level ``streaming`` config unless ``display.platforms.<platform>.streaming``
 sets an explicit per-platform override.
 
-Backward compatibility: ``display.tool_progress_overrides`` is still read as a
-fallback for ``tool_progress`` when no ``display.platforms`` entry exists.  A
-config migration (version bump) automatically moves the old format into the new
-``display.platforms`` structure.
 """
 
 from __future__ import annotations
@@ -116,25 +112,11 @@ _PLATFORM_DEFAULTS: dict[str, dict[str, Any]] = {
     # Slack: tool_progress off by default — Bolt posts cannot be edited like CLI;
     # "new"/"all" spam permanent lines in channels (marlow-agent#14663).
     "slack":           {**_TIER_MEDIUM, "tool_progress": "off"},
-    "mattermost":      _TIER_MEDIUM,
-    "matrix":          _TIER_MEDIUM,
     "feishu":          _TIER_MEDIUM,
-
-    # Tier 3 — no edit support, progress messages are permanent
-    "signal":          _TIER_LOW,
-    "whatsapp":        _TIER_MEDIUM,  # Baileys bridge supports /edit
-    "bluebubbles":     _TIER_LOW,
-    "weixin":          _TIER_LOW,
-    "wecom":           _TIER_LOW,
-    "wecom_callback":  _TIER_LOW,
-    "dingtalk":        _TIER_LOW,
 
     # Tier 4 — batch or non-interactive delivery
     "email":           _TIER_MINIMAL,
-    "sms":             _TIER_MINIMAL,
     "webhook":         _TIER_MINIMAL,
-    "homeassistant":   _TIER_MINIMAL,
-    "api_server":      {**_TIER_HIGH, "tool_preview_length": 0},
 }
 
 # Canonical set of per-platform overrideable keys (for validation).
@@ -174,14 +156,6 @@ def resolve_display_setting(
         val = plat_overrides.get(setting)
         if val is not None:
             return _normalise(setting, val)
-
-    # 1b. Backward compat: display.tool_progress_overrides.<platform>
-    if setting == "tool_progress":
-        legacy = display_cfg.get("tool_progress_overrides")
-        if isinstance(legacy, dict):
-            val = legacy.get(platform_key)
-            if val is not None:
-                return _normalise(setting, val)
 
     # 2. Global user setting (display.<key>).  Skip display.streaming because
     # that key controls only CLI terminal streaming; gateway token streaming is

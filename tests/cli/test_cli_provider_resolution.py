@@ -113,9 +113,6 @@ def _import_cli():
         if name == "cli" or name == "run_agent" or name == "tools" or name.startswith("tools."):
             sys.modules.pop(name, None)
 
-    if "firecrawl" not in sys.modules:
-        sys.modules["firecrawl"] = types.SimpleNamespace(Firecrawl=object)
-
     try:
         importlib.import_module("prompt_toolkit")
     except ModuleNotFoundError:
@@ -573,6 +570,6 @@ def test_save_custom_provider_uses_provided_name(monkeypatch, tmp_path):
     monkeypatch.setattr("marlow_cli.config.save_config", _save)
 
     _save_custom_provider("http://localhost:11434/v1", name="Ollama")
-    entries = saved.get("custom_providers", [])
-    assert len(entries) == 1
-    assert entries[0]["name"] == "Ollama"
+    providers = saved.get("providers", {})
+    assert set(providers) == {"ollama"}
+    assert providers["ollama"]["name"] == "Ollama"

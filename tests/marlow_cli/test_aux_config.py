@@ -73,7 +73,7 @@ def test_aux_tasks_keys_all_exist_in_default_config():
             {"provider": "openrouter", "model": "google/gemini-2.5-flash"},
             "openrouter · google/gemini-2.5-flash",
         ),
-        ({"provider": "nous", "model": "gemini-3-flash"}, "nous · gemini-3-flash"),
+        ({"provider": "custom", "model": "local-model"}, "custom · local-model"),
         (
             {"provider": "custom", "base_url": "http://localhost:11434/v1", "model": ""},
             "custom (localhost:11434/v1)",
@@ -130,7 +130,7 @@ def test_save_aux_choice_preserves_timeout(tmp_path, monkeypatch):
     default_timeout = cfg_before["auxiliary"]["vision"]["timeout"]
     assert default_timeout == 120
 
-    _save_aux_choice("vision", provider="nous", model="gemini-3-flash")
+    _save_aux_choice("vision", provider="custom", model="local-model")
     cfg_after = load_config()
     assert cfg_after["auxiliary"]["vision"]["timeout"] == default_timeout
     # download_timeout also preserved for vision
@@ -185,10 +185,10 @@ def test_save_aux_choice_creates_missing_task_entry(tmp_path, monkeypatch):
     cfg.setdefault("auxiliary", {}).pop("vision", None)
     save_config(cfg)
 
-    _save_aux_choice("vision", provider="nous", model="gemini-3-flash")
+    _save_aux_choice("vision", provider="custom", model="local-model")
     cfg = load_config()
-    assert cfg["auxiliary"]["vision"]["provider"] == "nous"
-    assert cfg["auxiliary"]["vision"]["model"] == "gemini-3-flash"
+    assert cfg["auxiliary"]["vision"]["provider"] == "custom"
+    assert cfg["auxiliary"]["vision"]["model"] == "local-model"
 
 
 # ── _reset_aux_to_auto ──────────────────────────────────────────────────────
@@ -202,7 +202,7 @@ def test_reset_aux_to_auto_clears_routing_preserves_timeouts(tmp_path, monkeypat
 
     # Configure two tasks non-auto, and bump a timeout
     _save_aux_choice("vision", provider="openrouter", model="gpt-4o")
-    _save_aux_choice("compression", provider="nous", model="gemini-3-flash")
+    _save_aux_choice("compression", provider="custom", model="local-model")
     from marlow_cli.config import save_config
 
     cfg = load_config()
@@ -233,7 +233,7 @@ def test_reset_aux_to_auto_idempotent(tmp_path, monkeypatch):
     (tmp_path / ".marlow").mkdir(exist_ok=True)
 
     assert _reset_aux_to_auto() == 0
-    _save_aux_choice("vision", provider="nous", model="gemini-3-flash")
+    _save_aux_choice("vision", provider="custom", model="local-model")
     assert _reset_aux_to_auto() == 1
     assert _reset_aux_to_auto() == 0
 
@@ -261,9 +261,7 @@ def test_select_provider_and_model_dispatches_to_aux_menu(tmp_path, monkeypatch)
 
     monkeypatch.setattr(main_mod, "_prompt_provider_choice", fake_prompt)
     monkeypatch.setattr(main_mod, "_aux_config_menu", lambda: called.__setitem__("aux", called["aux"] + 1))
-    # Guard against any main flow accidentally running
-    monkeypatch.setattr(main_mod, "_model_flow_openrouter",
-                        lambda *a, **kw: called.__setitem__("flow", called["flow"] + 1))
+    monkeypatch.setattr("marlow_cli.auth.resolve_provider", lambda provider: None)
 
     main_mod.select_provider_and_model()
 
@@ -291,6 +289,7 @@ def test_leave_unchanged_replaces_cancel_label(tmp_path, monkeypatch):
         raise AssertionError("Leave unchanged not in provider list")
 
     monkeypatch.setattr(main_mod, "_prompt_provider_choice", fake_prompt)
+    monkeypatch.setattr("marlow_cli.auth.resolve_provider", lambda provider: None)
 
     main_mod.select_provider_and_model()
 

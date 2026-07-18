@@ -4,7 +4,7 @@ description: Free web search via DuckDuckGo — text, news, images, videos. No A
 version: 1.3.0
 author: gamedevCloudy
 license: MIT
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 metadata:
   marlow:
     tags: [search, duckduckgo, web-search, free, fallback]
@@ -210,7 +210,7 @@ Then extract the best URL with `web_extract` or another content-retrieval tool.
 
 - **Rate limiting**: DuckDuckGo may throttle after many rapid requests. Add a short delay between searches if needed.
 - **No content extraction**: `ddgs` returns snippets, not full page content. Use `web_extract`, browser tools, or curl for the full article/page.
-- **Results quality**: Generally good but less configurable than Firecrawl's search.
+- **Results quality**: Generally good, though ranking and filters are limited.
 - **Availability**: DuckDuckGo may block requests from some cloud IPs. If searches return empty, try different keywords or wait a few seconds.
 - **Field variability**: Return fields may vary between results or `ddgs` versions. Use `.get()` for optional fields to avoid `KeyError`.
 - **Separate runtimes**: A successful `ddgs` install in terminal does not automatically mean `execute_code` can import it.

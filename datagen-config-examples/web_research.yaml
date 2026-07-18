@@ -24,8 +24,8 @@ batch_size: 20
 # Total trajectories to generate (comment out to run full dataset)
 max_items: 500
 
-# Model to use for generation (override with --model flag)
-model: openrouter/nousresearch/hermes-3-llama-3.1-405b
+# Model to use for generation. Empty uses the configured retained runtime.
+model: ""
 
 # System prompt additions (ephemeral — not saved to trajectories)
 ephemeral_system_prompt: |

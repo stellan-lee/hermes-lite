@@ -600,13 +600,6 @@ class TestAliasCollision:
         assert result is not None
         assert "reserved" in result.lower()
 
-    def test_uses_where_on_windows(self, profile_env, monkeypatch):
-        monkeypatch.setattr("sys.platform", "win32")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stdout="")
-            check_alias_collision("mybot")
-        call_args = mock_run.call_args[0][0]
-        assert call_args[0] == "where"
 
     def test_uses_which_on_posix(self, profile_env, monkeypatch):
         monkeypatch.setattr("sys.platform", "darwin")
@@ -616,18 +609,6 @@ class TestAliasCollision:
         call_args = mock_run.call_args[0][0]
         assert call_args[0] == "which"
 
-    def test_windows_checks_bat_extension(self, profile_env, monkeypatch):
-        monkeypatch.setattr("sys.platform", "win32")
-        wrapper_dir = profile_env / ".local" / "bin"
-        wrapper_dir.mkdir(parents=True, exist_ok=True)
-        bat_path = wrapper_dir / "mybot.bat"
-        bat_path.write_text("@echo off\r\nmarlow -p mybot %*\r\n")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout=str(bat_path),
-            )
-            result = check_alias_collision("mybot")
-        assert result is None  # our own wrapper, safe to overwrite
 
 
 # ===================================================================
@@ -647,16 +628,6 @@ class TestWrapperScript:
         assert content.startswith("#!/bin/sh")
         assert "marlow -p mybot" in content
 
-    def test_creates_bat_on_windows(self, profile_env, monkeypatch):
-        monkeypatch.setattr("sys.platform", "win32")
-        from marlow_cli.profiles import create_wrapper_script
-        wrapper = create_wrapper_script("mybot")
-        assert wrapper is not None
-        assert wrapper.name == "mybot.bat"
-        content = wrapper.read_text()
-        assert "@echo off" in content
-        assert "marlow -p mybot" in content
-        assert "%*" in content
 
     def test_remove_finds_bat_on_windows(self, profile_env, monkeypatch):
         monkeypatch.setattr("sys.platform", "win32")
@@ -694,19 +665,6 @@ class TestWrapperScript:
         assert content.startswith("#!/bin/sh")
         assert "marlow -p redqueen" in content
 
-    def test_custom_alias_target_on_windows(self, profile_env, monkeypatch):
-        # Regression: custom-name aliases must still produce an executable
-        # .bat (not a clobbered #!/bin/sh) on Windows.
-        monkeypatch.setattr("sys.platform", "win32")
-        from marlow_cli.profiles import create_wrapper_script
-        wrapper = create_wrapper_script("rq", target="redqueen")
-        assert wrapper is not None
-        assert wrapper.name == "rq.bat"
-        content = wrapper.read_text()
-        assert "@echo off" in content
-        assert "marlow -p redqueen" in content
-        assert "%*" in content
-        assert "#!/bin/sh" not in content
 
 
 # ===================================================================

@@ -17,7 +17,7 @@ def config_home(tmp_path, monkeypatch):
     home = tmp_path / "marlow"
     home.mkdir()
     config_yaml = home / "config.yaml"
-    config_yaml.write_text("model: old-model\ncustom_providers: []\n")
+    config_yaml.write_text("model: old-model\nproviders: {}\n")
     env_file = home / ".env"
     env_file.write_text("")
     monkeypatch.setenv("MARLOW_HOME", str(home))
@@ -127,19 +127,19 @@ class TestCustomProviderModelSwitch:
         assert model["default"] == "model-X"
 
     def test_api_mode_set_from_provider_info(self, config_home):
-        """When custom_providers entry has api_mode, it should be applied."""
+        """When a provider entry has api_mode, it should be applied."""
         import yaml
         from marlow_cli.main import _model_flow_named_custom
 
         provider_info = {
-            "name": "Anthropic Proxy",
-            "base_url": "https://proxy.example.com/anthropic",
+            "name": "Compatible Proxy",
+            "base_url": "https://proxy.example.com/v1",
             "api_key": "***",
-            "model": "claude-3",
-            "api_mode": "anthropic_messages",
+            "model": "local-model",
+            "api_mode": "chat_completions",
         }
 
-        with patch("marlow_cli.models.fetch_api_models", return_value=["claude-3"]) as mock_fetch, \
+        with patch("marlow_cli.models.fetch_api_models", return_value=["local-model"]) as mock_fetch, \
              patch("marlow_cli.curses_ui.curses_radiolist", side_effect=ImportError), \
              patch("builtins.input", return_value="1"), \
              patch("builtins.print"):
@@ -147,23 +147,23 @@ class TestCustomProviderModelSwitch:
 
         mock_fetch.assert_called_once_with(
             "***",
-            "https://proxy.example.com/anthropic",
+            "https://proxy.example.com/v1",
             timeout=8.0,
-            api_mode="anthropic_messages",
+            api_mode="chat_completions",
         )
         config = yaml.safe_load((config_home / "config.yaml").read_text()) or {}
         model = config.get("model")
         assert isinstance(model, dict)
-        assert model.get("api_mode") == "anthropic_messages"
+        assert model.get("api_mode") == "chat_completions"
 
     def test_api_mode_cleared_when_not_specified(self, config_home):
-        """When custom_providers entry has no api_mode, stale api_mode is removed."""
+        """When a provider entry has no api_mode, stale api_mode is removed."""
         import yaml
         from marlow_cli.main import _model_flow_named_custom
 
         # Pre-seed a stale api_mode in config
         config_path = config_home / "config.yaml"
-        config_path.write_text(yaml.dump({"model": {"api_mode": "anthropic_messages"}}))
+        config_path.write_text(yaml.dump({"model": {"api_mode": "codex_responses"}}))
 
         provider_info = {
             "name": "My vLLM",
@@ -192,12 +192,13 @@ class TestCustomProviderModelSwitch:
         config_path.write_text(
             "model:\n"
             "  default: old-model\n"
-            "  provider: openrouter\n"
-            "custom_providers:\n"
-            "- name: Example Provider\n"
-            "  base_url: https://api.example-provider.test/v1\n"
-            "  api_key: ${EXAMPLE_PROVIDER_API_KEY}\n"
-            "  model: qwen3.6-35b-fast\n"
+            "  provider: custom\n"
+            "providers:\n"
+            "  example-provider:\n"
+            "    name: Example Provider\n"
+            "    base_url: https://api.example-provider.test/v1\n"
+            "    api_key: ${EXAMPLE_PROVIDER_API_KEY}\n"
+            "    model: qwen3.6-35b-fast\n"
         )
         monkeypatch.setenv("EXAMPLE_PROVIDER_API_KEY", "sk-live-example-provider")
 
@@ -222,7 +223,7 @@ class TestCustomProviderModelSwitch:
         )
         config = yaml.safe_load(config_path.read_text()) or {}
         assert config["model"]["api_key"] == "${EXAMPLE_PROVIDER_API_KEY}"
-        assert config["custom_providers"][0]["api_key"] == "${EXAMPLE_PROVIDER_API_KEY}"
+        assert config["providers"]["example-provider"]["api_key"] == "${EXAMPLE_PROVIDER_API_KEY}"
         assert "sk-live-example-provider" not in config_path.read_text()
 
     def test_key_env_custom_provider_persists_reference_not_secret(self, config_home, monkeypatch):
@@ -234,11 +235,12 @@ class TestCustomProviderModelSwitch:
         config_path.write_text(
             "model:\n"
             "  default: old-model\n"
-            "custom_providers:\n"
-            "- name: Example Provider\n"
-            "  base_url: https://api.example-provider.test/v1\n"
-            "  key_env: EXAMPLE_PROVIDER_API_KEY\n"
-            "  model: qwen3.6-35b-fast\n"
+            "providers:\n"
+            "  example-provider:\n"
+            "    name: Example Provider\n"
+            "    base_url: https://api.example-provider.test/v1\n"
+            "    key_env: EXAMPLE_PROVIDER_API_KEY\n"
+            "    model: qwen3.6-35b-fast\n"
         )
         monkeypatch.setenv("EXAMPLE_PROVIDER_API_KEY", "sk-live-example-provider")
 
@@ -258,7 +260,7 @@ class TestCustomProviderModelSwitch:
 
         config = yaml.safe_load(config_path.read_text()) or {}
         assert config["model"]["api_key"] == "${EXAMPLE_PROVIDER_API_KEY}"
-        assert config["custom_providers"][0]["key_env"] == "EXAMPLE_PROVIDER_API_KEY"
+        assert config["providers"]["example-provider"]["key_env"] == "EXAMPLE_PROVIDER_API_KEY"
         assert "sk-live-example-provider" not in config_path.read_text()
 
     def test_env_ref_base_url_preserves_api_key_ref_through_picker(
@@ -268,11 +270,7 @@ class TestCustomProviderModelSwitch:
         ``${VAR}`` templates (the Discord-reported NeuralWatt case), the picker
         must still preserve the env reference in ``model.api_key``.
 
-        The earlier lookup went through ``get_compatible_custom_providers``
-        which dropped entries whose ``base_url`` was an env-ref template
-        (``urlparse("${NEURALWATT_API_BASE}")`` has no scheme/netloc), causing
-        ``api_key_ref`` to stay empty and the resolved secret to be written to
-        ``config.yaml``. This test drives the real picker-callsite code path.
+        This test drives the real picker call site with canonical config.
         """
         import yaml
         from marlow_cli.main import select_provider_and_model
@@ -281,13 +279,15 @@ class TestCustomProviderModelSwitch:
         config_path.write_text(
             "model:\n"
             "  default: old-model\n"
-            "  provider: openrouter\n"
-            "custom_providers:\n"
-            "- name: NeuralWatt\n"
+            "  provider: custom\n"
             "  base_url: ${NEURALWATT_API_BASE}\n"
-            "  api_key: ${NEURALWATT_API_KEY}\n"
-            "  model: qwen3.6-35b-fast\n"
-            "  models: []\n"
+            "providers:\n"
+            "  neuralwatt:\n"
+            "    name: NeuralWatt\n"
+            "    base_url: ${NEURALWATT_API_BASE}\n"
+            "    api_key: ${NEURALWATT_API_KEY}\n"
+            "    model: qwen3.6-35b-fast\n"
+            "    models: {}\n"
         )
         monkeypatch.setenv("NEURALWATT_API_BASE", "https://api.neuralwatt.com/v1")
         monkeypatch.setenv("NEURALWATT_API_KEY", "sk-live-neuralwatt-secret")
@@ -322,8 +322,9 @@ class TestCustomProviderModelSwitch:
         # But config.yaml must keep the env reference, not the plaintext secret.
         saved = config_path.read_text()
         config = yaml.safe_load(saved) or {}
-        assert config["model"]["api_key"] == "${NEURALWATT_API_KEY}"
-        assert config["custom_providers"][0]["api_key"] == "${NEURALWATT_API_KEY}"
+        assert config["model"]["provider"] == "neuralwatt"
+        assert "api_key" not in config["model"]
+        assert config["providers"]["neuralwatt"]["api_key"] == "${NEURALWATT_API_KEY}"
         assert "sk-live-neuralwatt-secret" not in saved
 
     def test_bare_custom_current_provider_matches_env_base_url_before_first_fallback(
@@ -332,11 +333,8 @@ class TestCustomProviderModelSwitch:
         """`marlow model` must mark the custom provider matching model.base_url
         as current instead of falling back to the first saved custom provider.
 
-        Regression: with ``model.provider: custom`` and multiple
-        ``custom_providers`` entries, the CLI resolved bare ``custom`` through
-        ``resolve_custom_provider()``, whose compatibility fallback returns the
-        first entry. A config with Cerebras first and NeuralWatt active then
-        showed Cerebras as current.
+        A config with multiple custom endpoints must highlight the endpoint
+        matching ``model.base_url``.
         """
         from marlow_cli.main import select_provider_and_model
 
@@ -347,18 +345,19 @@ class TestCustomProviderModelSwitch:
             "  provider: custom\n"
             "  base_url: ${NEURALWATT_API_BASE}\n"
             "  api_key: ${NEURALWATT_API_KEY}\n"
-            "providers: {}\n"
-            "custom_providers:\n"
-            "- name: Cerebras.ai\n"
-            "  base_url: ${CEREBRAS_API_BASE}\n"
-            "  api_key: ${CEREBRAS_API_KEY}\n"
-            "  model: qwen-3-235b-a22b-instruct-2507\n"
-            "  models: []\n"
-            "- name: NeuralWatt\n"
-            "  base_url: ${NEURALWATT_API_BASE}\n"
-            "  api_key: ${NEURALWATT_API_KEY}\n"
-            "  model: kimi-k2.6-fast\n"
-            "  models: []\n"
+            "providers:\n"
+            "  cerebras:\n"
+            "    name: Cerebras.ai\n"
+            "    base_url: ${CEREBRAS_API_BASE}\n"
+            "    api_key: ${CEREBRAS_API_KEY}\n"
+            "    model: qwen-3-235b-a22b-instruct-2507\n"
+            "    models: {}\n"
+            "  neuralwatt:\n"
+            "    name: NeuralWatt\n"
+            "    base_url: ${NEURALWATT_API_BASE}\n"
+            "    api_key: ${NEURALWATT_API_KEY}\n"
+            "    model: kimi-k2.6-fast\n"
+            "    models: {}\n"
         )
         monkeypatch.setenv("CEREBRAS_API_BASE", "https://api.cerebras.ai/v1")
         monkeypatch.setenv("CEREBRAS_API_KEY", "sk-live-cerebras-secret")
@@ -387,11 +386,11 @@ class TestCustomProviderModelSwitch:
             for label in labels
         )
 
-    def test_named_custom_provider_selection_preserves_base_url_env_ref(
+    def test_named_custom_provider_selection_keeps_env_refs_in_provider_entry(
         self, config_home, monkeypatch
     ):
         """Selecting an env-backed custom provider should not expand its
-        ``base_url`` template into ``model.base_url`` on disk."""
+        ``base_url`` or ``api_key`` templates into the model section."""
         import yaml
         from marlow_cli.main import select_provider_and_model
 
@@ -399,13 +398,15 @@ class TestCustomProviderModelSwitch:
         config_path.write_text(
             "model:\n"
             "  default: old-model\n"
-            "  provider: openrouter\n"
-            "custom_providers:\n"
-            "- name: NeuralWatt\n"
+            "  provider: custom\n"
             "  base_url: ${NEURALWATT_API_BASE}\n"
-            "  api_key: ${NEURALWATT_API_KEY}\n"
-            "  model: qwen3.6-35b-fast\n"
-            "  models: []\n"
+            "providers:\n"
+            "  neuralwatt:\n"
+            "    name: NeuralWatt\n"
+            "    base_url: ${NEURALWATT_API_BASE}\n"
+            "    api_key: ${NEURALWATT_API_KEY}\n"
+            "    model: qwen3.6-35b-fast\n"
+            "    models: {}\n"
         )
         monkeypatch.setenv("NEURALWATT_API_BASE", "https://api.neuralwatt.com/v1")
         monkeypatch.setenv("NEURALWATT_API_KEY", "sk-live-neuralwatt-secret")
@@ -433,8 +434,11 @@ class TestCustomProviderModelSwitch:
 
         saved = config_path.read_text()
         config = yaml.safe_load(saved) or {}
-        assert config["model"]["base_url"] == "${NEURALWATT_API_BASE}"
-        assert config["model"]["api_key"] == "${NEURALWATT_API_KEY}"
+        assert config["model"]["provider"] == "neuralwatt"
+        assert "base_url" not in config["model"]
+        assert "api_key" not in config["model"]
+        assert config["providers"]["neuralwatt"]["base_url"] == "${NEURALWATT_API_BASE}"
+        assert config["providers"]["neuralwatt"]["api_key"] == "${NEURALWATT_API_KEY}"
         assert "https://api.neuralwatt.com/v1" not in saved
         assert "sk-live-neuralwatt-secret" not in saved
 
@@ -462,10 +466,8 @@ class TestCustomProviderModelSwitch:
             "    name: CRS Henkee\n"
             "    base_url: http://127.0.0.1:3000/api/v1\n"
             "    key_env: MARLOW_CRS_HENKEE_KEY\n"
-            "    transport: anthropic_messages\n"
-            "    model: claude-opus-4-7\n"
-            "    default_model: claude-opus-4-7\n"
-            "custom_providers: []\n"
+            "    api_mode: chat_completions\n"
+            "    model: local-model\n"
         )
         monkeypatch.setenv("MARLOW_CRS_HENKEE_KEY", "cr_live_secret_xyz")
 
@@ -476,15 +478,15 @@ class TestCustomProviderModelSwitch:
             "base_url": "http://127.0.0.1:3000/api/v1",
             "api_key": "",
             "key_env": "MARLOW_CRS_HENKEE_KEY",
-            "model": "claude-opus-4-7",
-            "api_mode": "anthropic_messages",
+            "model": "local-model",
+            "api_mode": "chat_completions",
             "provider_key": "crs-henkee",
             "api_key_ref": "",
         }
 
         with patch(
             "marlow_cli.models.fetch_api_models",
-            return_value=["claude-opus-4-7"],
+            return_value=["local-model"],
         ) as mock_fetch, \
              patch("marlow_cli.curses_ui.curses_radiolist", side_effect=ImportError), \
              patch("builtins.input", return_value="1"), \
@@ -505,7 +507,7 @@ class TestCustomProviderModelSwitch:
             f"providers.crs-henkee gained an api_key field: {entry.get('api_key')!r}"
         )
         assert entry["key_env"] == "MARLOW_CRS_HENKEE_KEY"
-        assert entry["default_model"] == "claude-opus-4-7"
+        assert entry["model"] == "local-model"
 
         # And the plaintext secret must never appear anywhere on disk.
         assert "cr_live_secret_xyz" not in saved_text
@@ -529,10 +531,8 @@ class TestCustomProviderModelSwitch:
             "    base_url: http://127.0.0.1:3000/api/v1\n"
             "    api_key: ${MARLOW_CRS_HENKEE_KEY}\n"
             "    key_env: MARLOW_CRS_HENKEE_KEY\n"
-            "    transport: anthropic_messages\n"
-            "    model: claude-opus-4-7\n"
-            "    default_model: claude-opus-4-7\n"
-            "custom_providers: []\n"
+            "    api_mode: chat_completions\n"
+            "    model: local-model\n"
         )
         monkeypatch.setenv("MARLOW_CRS_HENKEE_KEY", "cr_live_secret_xyz")
 
@@ -541,15 +541,15 @@ class TestCustomProviderModelSwitch:
             "base_url": "http://127.0.0.1:3000/api/v1",
             "api_key": "cr_live_secret_xyz",  # expanded by load_config
             "key_env": "MARLOW_CRS_HENKEE_KEY",
-            "model": "claude-opus-4-7",
-            "api_mode": "anthropic_messages",
+            "model": "local-model",
+            "api_mode": "chat_completions",
             "provider_key": "crs-henkee",
             "api_key_ref": "${MARLOW_CRS_HENKEE_KEY}",  # raw template preserved
         }
 
         with patch(
             "marlow_cli.models.fetch_api_models",
-            return_value=["claude-opus-4-7"],
+            return_value=["local-model"],
         ), \
              patch("marlow_cli.curses_ui.curses_radiolist", side_effect=ImportError), \
              patch("builtins.input", return_value="1"), \

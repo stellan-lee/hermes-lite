@@ -56,50 +56,6 @@ class TestChromeDebugLaunch:
         with patch("urllib.request.urlopen", side_effect=OSError("not cdp")):
             assert is_browser_debug_ready("http://127.0.0.1:9222", timeout=0.1) is False
 
-    def test_windows_launch_uses_browser_found_on_path(self):
-        captured = {}
-
-        def fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
-            captured["kwargs"] = kwargs
-            return object()
-
-        with patch("marlow_cli.browser_connect.shutil.which", side_effect=lambda name: r"C:\Chrome\chrome.exe" if name == "chrome.exe" else None), \
-             patch("marlow_cli.browser_connect.os.path.isfile", side_effect=lambda path: path == r"C:\Chrome\chrome.exe"), \
-             patch("subprocess.Popen", side_effect=fake_popen):
-            assert MarlowCLI._try_launch_chrome_debug(9333, "Windows") is True
-
-        _assert_chrome_debug_cmd(captured["cmd"], r"C:\Chrome\chrome.exe", 9333)
-        # Windows uses creationflags (POSIX-only start_new_session would raise).
-        assert "start_new_session" not in captured["kwargs"]
-        flags = captured["kwargs"].get("creationflags", 0)
-        expected = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-        )
-        assert flags == expected
-
-    def test_windows_launch_falls_back_to_common_install_dirs(self, monkeypatch):
-        captured = {}
-        program_files = r"C:\Program Files"
-        # Use os.path.join so path separators match cross-platform
-        installed = os.path.join(program_files, "Google", "Chrome", "Application", "chrome.exe")
-
-        def fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
-            captured["kwargs"] = kwargs
-            return object()
-
-        monkeypatch.setenv("ProgramFiles", program_files)
-        monkeypatch.delenv("ProgramFiles(x86)", raising=False)
-        monkeypatch.delenv("LOCALAPPDATA", raising=False)
-
-        with patch("marlow_cli.browser_connect.shutil.which", return_value=None), \
-             patch("marlow_cli.browser_connect.os.path.isfile", side_effect=lambda path: path == installed), \
-             patch("subprocess.Popen", side_effect=fake_popen):
-            assert MarlowCLI._try_launch_chrome_debug(9222, "Windows") is True
-
-        _assert_chrome_debug_cmd(captured["cmd"], installed, 9222)
-
     def test_manual_command_uses_detected_linux_browser(self):
         with patch("marlow_cli.browser_connect.shutil.which", side_effect=lambda name: "/usr/bin/chromium" if name == "chromium" else None), \
              patch("marlow_cli.browser_connect.os.path.isfile", side_effect=lambda path: path == "/usr/bin/chromium"):
@@ -131,21 +87,6 @@ class TestChromeDebugLaunch:
         with patch("marlow_cli.browser_connect.shutil.which", side_effect=lambda name: brave if name == "brave-browser" else None), \
              patch("marlow_cli.browser_connect.os.path.isfile", side_effect=lambda path: path in {chrome, brave}):
             candidates = get_chrome_debug_candidates("Linux")
-
-        assert candidates[:2] == [chrome, brave]
-
-    def test_windows_candidates_prefer_chrome_install_path_before_brave_on_path(self, monkeypatch):
-        program_files = r"C:\Program Files"
-        chrome = os.path.join(program_files, "Google", "Chrome", "Application", "chrome.exe")
-        brave = r"C:\Brave\brave.exe"
-
-        monkeypatch.setenv("ProgramFiles", program_files)
-        monkeypatch.delenv("ProgramFiles(x86)", raising=False)
-        monkeypatch.delenv("LOCALAPPDATA", raising=False)
-
-        with patch("marlow_cli.browser_connect.shutil.which", side_effect=lambda name: brave if name == "brave.exe" else None), \
-             patch("marlow_cli.browser_connect.os.path.isfile", side_effect=lambda path: path in {chrome, brave}):
-            candidates = get_chrome_debug_candidates("Windows")
 
         assert candidates[:2] == [chrome, brave]
 
@@ -199,29 +140,6 @@ class TestChromeDebugLaunch:
             assert MarlowCLI._try_launch_chrome_debug(9222, "Linux") is True
 
         assert attempts == [brave, chrome]
-
-    def test_manual_command_uses_wsl_windows_chrome_when_available(self):
-        chrome = "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"
-
-        with patch("marlow_cli.browser_connect.shutil.which", return_value=None), \
-             patch("marlow_cli.browser_connect.os.path.isfile", side_effect=lambda path: path == chrome):
-            command = manual_chrome_debug_command(9222, "Linux")
-
-        assert command is not None
-        # Linux/WSL uses POSIX shell quoting (single quotes around paths with spaces).
-        assert command.startswith(f"'{chrome}' --remote-debugging-port=9222")
-
-    def test_manual_command_uses_windows_quoting_on_windows(self):
-        chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-
-        with patch("marlow_cli.browser_connect.shutil.which", side_effect=lambda name: chrome if name == "chrome.exe" else None), \
-             patch("marlow_cli.browser_connect.os.path.isfile", side_effect=lambda path: path == chrome):
-            command = manual_chrome_debug_command(9222, "Windows")
-
-        assert command is not None
-        # Windows uses cmd.exe-compatible quoting via subprocess.list2cmdline.
-        assert command.startswith(f'"{chrome}" --remote-debugging-port=9222')
-        assert "'" not in command
 
     def test_manual_command_returns_none_when_linux_browser_missing(self):
         with patch("marlow_cli.browser_connect.shutil.which", return_value=None), \

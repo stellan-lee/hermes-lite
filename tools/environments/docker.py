@@ -716,7 +716,7 @@ class DockerEnvironment(BaseEnvironment):
         # Optional: run the container as the host user so files written into
         # bind-mounted dirs (/workspace, /root, docker_volumes entries) are
         # owned by that user on the host instead of by root. Skip cleanly on
-        # platforms without POSIX uid/gid (e.g. native Windows Docker).
+        # platforms without POSIX uid/gid.
         user_args: list[str] = []
         if run_as_host_user:
             user_spec = _resolve_host_user_spec()

@@ -16,8 +16,9 @@ class TestResolveRuntimeAgentKwargsAuthFallback:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             "model:\n  provider: openai-codex\n"
-            "fallback_model:\n  provider: openrouter\n"
-            "  model: meta-llama/llama-4-maverick\n"
+            "fallback_providers:\n  - provider: custom\n"
+            "    model: local-backup\n"
+            "    base_url: http://localhost:11434/v1\n"
         )
 
         monkeypatch.setattr("gateway.run._marlow_home", tmp_path)
@@ -29,17 +30,16 @@ class TestResolveRuntimeAgentKwargsAuthFallback:
             # First call = primary path (gateway reads model.provider from
             # config.yaml internally; we simulate the auth failure here).
             # Second call = fallback path with explicit_api_key + explicit_base_url
-            # supplied by gateway from fallback_model config.
+            # supplied by gateway from fallback_providers config.
             if call_count["n"] == 1:
                 raise AuthError("Codex token refresh failed with status 401")
             return {
                 "api_key": "fallback-key",
-                "base_url": "https://openrouter.ai/api/v1",
-                "provider": "openrouter",
-                "api_mode": "openai_chat",
+                "base_url": "http://localhost:11434/v1",
+                "provider": "custom",
+                "api_mode": "chat_completions",
                 "command": None,
                 "args": None,
-                "credential_pool": None,
             }
 
         with patch(
@@ -49,7 +49,7 @@ class TestResolveRuntimeAgentKwargsAuthFallback:
             from gateway.run import _resolve_runtime_agent_kwargs
             result = _resolve_runtime_agent_kwargs()
 
-        assert result["provider"] == "openrouter"
+        assert result["provider"] == "custom"
         assert result["api_key"] == "fallback-key"
         # Should have been called at least twice (primary + fallback)
         assert call_count["n"] >= 2
@@ -71,16 +71,16 @@ class TestResolveRuntimeAgentKwargsAuthFallback:
             with pytest.raises(RuntimeError):
                 _resolve_runtime_agent_kwargs()
 
-    def test_legacy_fallback_is_appended_after_fallback_providers(self, tmp_path, monkeypatch):
-        """When both keys exist, the legacy entry still participates in resolution."""
+    def test_fallback_providers_are_tried_in_order(self, tmp_path, monkeypatch):
+        """Configured fallback entries participate in resolution in order."""
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
             "fallback_providers:\n"
-            "  - provider: openrouter\n"
-            "    model: anthropic/claude-sonnet-4.6\n"
-            "fallback_model:\n"
-            "  provider: nous\n"
-            "  model: Hermes-4\n"
+            "  - provider: custom\n"
+            "    model: local-a\n"
+            "    base_url: http://localhost:11434/v1\n"
+            "  - provider: openai-codex\n"
+            "    model: gpt-5.3-codex\n"
         )
 
         monkeypatch.setattr("gateway.run._marlow_home", tmp_path)
@@ -90,16 +90,15 @@ class TestResolveRuntimeAgentKwargsAuthFallback:
         def _mock_resolve(**kwargs):
             requested = kwargs.get("requested")
             calls.append(requested)
-            if requested == "openrouter":
-                raise RuntimeError("openrouter unavailable")
+            if requested == "custom":
+                raise RuntimeError("custom endpoint unavailable")
             return {
-                "api_key": "nous-key",
-                "base_url": "https://portal.nousresearch.com/v1",
-                "provider": "nous",
-                "api_mode": "chat_completions",
+                "api_key": "codex-key",
+                "base_url": "https://chatgpt.com/backend-api/codex",
+                "provider": "openai-codex",
+                "api_mode": "codex_responses",
                 "command": None,
                 "args": None,
-                "credential_pool": None,
             }
 
         with patch(
@@ -110,6 +109,6 @@ class TestResolveRuntimeAgentKwargsAuthFallback:
 
             result = _try_resolve_fallback_provider()
 
-        assert calls == ["openrouter", "nous"]
-        assert result["provider"] == "nous"
-        assert result["model"] == "Hermes-4"
+        assert calls == ["custom", "openai-codex"]
+        assert result["provider"] == "openai-codex"
+        assert result["model"] == "gpt-5.3-codex"

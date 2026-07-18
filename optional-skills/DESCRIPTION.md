@@ -3,13 +3,13 @@
 Official skills maintained by Nous Research that are **not activated by default**.
 
 These skills ship with the marlow-agent repository but are not copied to
-`~/.marlow/skills/` during setup. They are discoverable via the Skills Hub:
+`~/.marlow/skills/` during setup. To activate one, copy its directory into
+`~/.marlow/skills/` or a project-local skills directory, then configure it
+with the local `marlow skills` command.
 
 ```bash
-marlow skills browse               # browse all skills, official shown first
-marlow skills browse --source official  # browse only official optional skills
-marlow skills search <query>       # finds optional skills labeled "official"
-marlow skills install <identifier> # copies to ~/.marlow/skills/ and activates
+cp -R optional-skills/devops/cli ~/.marlow/skills/
+marlow skills
 ```
 
 ## Why optional?

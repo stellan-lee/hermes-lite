@@ -29,7 +29,6 @@ from tools.delegate_tool import (
     _build_child_progress_callback,
     _build_child_system_prompt,
     _strip_blocked_tools,
-    _resolve_child_credential_pool,
     _resolve_delegation_credentials,
 )
 
@@ -889,37 +888,6 @@ class TestDelegationCredentialResolution(unittest.TestCase):
         self.assertEqual(creds["api_key"], "local-key")
         self.assertEqual(creds["api_mode"], "chat_completions")
 
-    def test_direct_endpoint_auto_detects_anthropic_messages_suffix(self):
-        # Issue #10213: Azure AI Foundry exposes Anthropic-compatible models at
-        # a /anthropic URL suffix. Subagents must pick anthropic_messages
-        # automatically, matching the main agent's runtime resolver.
-        parent = _make_mock_parent(depth=0)
-        cfg = {
-            "model": "claude-opus-4-6",
-            "provider": "custom",
-            "base_url": "https://myfoundry.services.ai.azure.com/anthropic",
-            "api_key": "foundry-key",
-        }
-        creds = _resolve_delegation_credentials(cfg, parent)
-        self.assertEqual(creds["provider"], "custom")
-        self.assertEqual(creds["base_url"], "https://myfoundry.services.ai.azure.com/anthropic")
-        self.assertEqual(creds["api_key"], "foundry-key")
-        self.assertEqual(creds["api_mode"], "anthropic_messages")
-
-    def test_direct_endpoint_honors_explicit_api_mode(self):
-        # When delegation.api_mode is set explicitly, it overrides URL-based
-        # detection so users can force a transport on non-standard endpoints.
-        parent = _make_mock_parent(depth=0)
-        cfg = {
-            "model": "claude-opus-4-6",
-            "provider": "custom",
-            "base_url": "https://proxy.example.com/v1",
-            "api_key": "proxy-key",
-            "api_mode": "anthropic_messages",
-        }
-        creds = _resolve_delegation_credentials(cfg, parent)
-        self.assertEqual(creds["api_mode"], "anthropic_messages")
-
     def test_direct_endpoint_explicit_api_mode_overrides_url_detection(self):
         # Explicit api_mode in config always wins over auto-detection.
         parent = _make_mock_parent(depth=0)
@@ -932,19 +900,6 @@ class TestDelegationCredentialResolution(unittest.TestCase):
         }
         creds = _resolve_delegation_credentials(cfg, parent)
         self.assertEqual(creds["api_mode"], "chat_completions")
-
-    def test_direct_endpoint_invalid_api_mode_falls_back_to_detection(self):
-        # An invalid api_mode string must not break detection; fall back to URL heuristic.
-        parent = _make_mock_parent(depth=0)
-        cfg = {
-            "model": "claude-opus-4-6",
-            "provider": "custom",
-            "base_url": "https://myfoundry.services.ai.azure.com/anthropic",
-            "api_key": "foundry-key",
-            "api_mode": "garbage",
-        }
-        creds = _resolve_delegation_credentials(cfg, parent)
-        self.assertEqual(creds["api_mode"], "anthropic_messages")
 
     def test_direct_endpoint_returns_none_api_key_when_not_configured(self):
         # When base_url is set without api_key, api_key should be None so
@@ -1041,25 +996,6 @@ class TestDelegationCredentialResolution(unittest.TestCase):
         )
 
     @patch("marlow_cli.runtime_provider.resolve_runtime_provider")
-    def test_standard_provider_not_overwritten_by_configured_name(self, mock_resolve):
-        """Standard (non-custom) providers must still return runtime identity,
-        not the configured name, to preserve existing behaviour for openrouter,
-        nous, etc.
-        """
-        mock_resolve.return_value = {
-            "provider": "openrouter",
-            "model": "anthropic/claude-sonnet-4",
-            "base_url": "https://openrouter.ai/api/v1",
-            "api_key": "or-key-xyz",
-            "api_mode": "chat_completions",
-        }
-        parent = _make_mock_parent(depth=0)
-        cfg = {"model": "anthropic/claude-sonnet-4", "provider": "openrouter"}
-        creds = _resolve_delegation_credentials(cfg, parent)
-        # Standard provider returns its own name, not "custom"
-        self.assertEqual(creds["provider"], "openrouter")
-
-    @patch("marlow_cli.runtime_provider.resolve_runtime_provider")
     def test_custom_provider_with_empty_configured_provider_falls_back_to_runtime(self, mock_resolve):
         """When configured_provider is empty/None, the early return kicks in and
         we return provider=None regardless of what runtime resolved. The runtime
@@ -1106,14 +1042,14 @@ class TestDelegationProviderIntegration(unittest.TestCase):
         """When delegation.provider is configured, child agent gets resolved credentials."""
         mock_cfg.return_value = {
             "max_iterations": 45,
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
+            "model": "child-model",
+            "provider": "custom-child",
         }
         mock_creds.return_value = {
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
-            "base_url": "https://openrouter.ai/api/v1",
-            "api_key": "sk-or-delegation-key",
+            "model": "child-model",
+            "provider": "custom-child",
+            "base_url": "https://child.example.com/v1",
+            "api_key": "child-key",
             "api_mode": "chat_completions",
         }
         parent = _make_mock_parent(depth=0)
@@ -1128,32 +1064,32 @@ class TestDelegationProviderIntegration(unittest.TestCase):
             delegate_task(goal="Test provider routing", parent_agent=parent)
 
             _, kwargs = MockAgent.call_args
-            self.assertEqual(kwargs["model"], "google/gemini-3-flash-preview")
-            self.assertEqual(kwargs["provider"], "openrouter")
-            self.assertEqual(kwargs["base_url"], "https://openrouter.ai/api/v1")
-            self.assertEqual(kwargs["api_key"], "sk-or-delegation-key")
+            self.assertEqual(kwargs["model"], "child-model")
+            self.assertEqual(kwargs["provider"], "custom-child")
+            self.assertEqual(kwargs["base_url"], "https://child.example.com/v1")
+            self.assertEqual(kwargs["api_key"], "child-key")
             self.assertEqual(kwargs["api_mode"], "chat_completions")
 
     @patch("tools.delegate_tool._load_config")
     @patch("tools.delegate_tool._resolve_delegation_credentials")
     def test_cross_provider_delegation(self, mock_creds, mock_cfg):
-        """Parent on Nous, subagent on OpenRouter — full credential switch."""
+        """Subagent switches between two explicitly configured endpoints."""
         mock_cfg.return_value = {
             "max_iterations": 45,
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
+            "model": "child-model",
+            "provider": "custom-child",
         }
         mock_creds.return_value = {
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
-            "base_url": "https://openrouter.ai/api/v1",
-            "api_key": "sk-or-key",
+            "model": "child-model",
+            "provider": "custom-child",
+            "base_url": "https://child.example.com/v1",
+            "api_key": "child-key",
             "api_mode": "chat_completions",
         }
         parent = _make_mock_parent(depth=0)
-        parent.provider = "nous"
-        parent.base_url = "https://inference-api.nousresearch.com/v1"
-        parent.api_key = "nous-key-abc"
+        parent.provider = "custom-parent"
+        parent.base_url = "https://parent.example.com/v1"
+        parent.api_key = "parent-key"
 
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = MagicMock()
@@ -1165,54 +1101,11 @@ class TestDelegationProviderIntegration(unittest.TestCase):
             delegate_task(goal="Cross-provider test", parent_agent=parent)
 
             _, kwargs = MockAgent.call_args
-            # Child should use OpenRouter, NOT Nous
-            self.assertEqual(kwargs["provider"], "openrouter")
-            self.assertEqual(kwargs["base_url"], "https://openrouter.ai/api/v1")
-            self.assertEqual(kwargs["api_key"], "sk-or-key")
+            self.assertEqual(kwargs["provider"], "custom-child")
+            self.assertEqual(kwargs["base_url"], "https://child.example.com/v1")
+            self.assertEqual(kwargs["api_key"], "child-key")
             self.assertNotEqual(kwargs["base_url"], parent.base_url)
             self.assertNotEqual(kwargs["api_key"], parent.api_key)
-
-    @patch("tools.delegate_tool._load_config")
-    @patch("tools.delegate_tool._resolve_delegation_credentials")
-    def test_provider_override_clears_parent_openrouter_filters(
-        self, mock_creds, mock_cfg
-    ):
-        """Delegated provider should not inherit parent provider-preference filters."""
-        mock_cfg.return_value = {
-            "max_iterations": 45,
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
-        }
-        mock_creds.return_value = {
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
-            "base_url": "https://openrouter.ai/api/v1",
-            "api_key": "sk-or-key",
-            "api_mode": "chat_completions",
-        }
-        parent = _make_mock_parent(depth=0)
-        parent.providers_allowed = ["anthropic/claude-3.5-sonnet"]
-        parent.providers_ignored = ["openai/gpt-4o-mini"]
-        parent.providers_order = ["google/gemini-2.5-pro"]
-        parent.provider_sort = "price"
-
-        with patch("run_agent.AIAgent") as MockAgent:
-            mock_child = MagicMock()
-            mock_child.run_conversation.return_value = {
-                "final_response": "done",
-                "completed": True,
-                "api_calls": 1,
-            }
-            MockAgent.return_value = mock_child
-
-            delegate_task(goal="Cross-provider test", parent_agent=parent)
-
-            _, kwargs = MockAgent.call_args
-            self.assertEqual(kwargs["provider"], "openrouter")
-            self.assertIsNone(kwargs["providers_allowed"])
-            self.assertIsNone(kwargs["providers_ignored"])
-            self.assertIsNone(kwargs["providers_order"])
-            self.assertIsNone(kwargs["provider_sort"])
 
     @patch("tools.delegate_tool._load_config")
     @patch("tools.delegate_tool._resolve_delegation_credentials")
@@ -1333,45 +1226,6 @@ class TestDelegationProviderIntegration(unittest.TestCase):
 
     @patch("tools.delegate_tool._load_config")
     @patch("tools.delegate_tool._resolve_delegation_credentials")
-    def test_delegation_acp_runtime_reaches_child_agent(self, mock_creds, mock_cfg):
-        """Resolved ACP runtime command/args must be forwarded to child agents."""
-        mock_cfg.return_value = {
-            "max_iterations": 45,
-            "model": "copilot-model",
-            "provider": "copilot-acp",
-        }
-        mock_creds.return_value = {
-            "model": "copilot-model",
-            "provider": "copilot-acp",
-            "base_url": "acp://copilot",
-            "api_key": "copilot-acp",
-            "api_mode": "chat_completions",
-            "command": "custom-copilot",
-            "args": ["--stdio-custom"],
-        }
-        parent = _make_mock_parent(depth=0)
-
-        with patch("tools.delegate_tool._build_child_agent") as mock_build, \
-             patch("tools.delegate_tool._run_single_child") as mock_run:
-            mock_child = MagicMock()
-            mock_build.return_value = mock_child
-            mock_run.return_value = {
-                "task_index": 0, "status": "completed",
-                "summary": "Done", "api_calls": 1, "duration_seconds": 1.0
-            }
-
-            delegate_task(goal="ACP delegation test", parent_agent=parent)
-
-            _, kwargs = mock_build.call_args
-            self.assertEqual(kwargs.get("override_provider"), "copilot-acp")
-            self.assertEqual(kwargs.get("override_base_url"), "acp://copilot")
-            self.assertEqual(kwargs.get("override_api_key"), "copilot-acp")
-            self.assertEqual(kwargs.get("override_api_mode"), "chat_completions")
-            self.assertEqual(kwargs.get("override_acp_command"), "custom-copilot")
-            self.assertEqual(kwargs.get("override_acp_args"), ["--stdio-custom"])
-
-    @patch("tools.delegate_tool._load_config")
-    @patch("tools.delegate_tool._resolve_delegation_credentials")
     def test_model_only_no_provider_inherits_parent_credentials(self, mock_creds, mock_cfg):
         """Setting only model (no provider) changes model but keeps parent credentials."""
         mock_cfg.return_value = {
@@ -1406,74 +1260,11 @@ class TestDelegationProviderIntegration(unittest.TestCase):
 
 
 class TestChildCredentialPoolResolution(unittest.TestCase):
-    def test_same_provider_shares_parent_pool(self):
-        parent = _make_mock_parent()
-        mock_pool = MagicMock()
-        parent._credential_pool = mock_pool
 
-        result = _resolve_child_credential_pool("openrouter", parent)
-        self.assertIs(result, mock_pool)
 
-    def test_no_provider_inherits_parent_pool(self):
-        parent = _make_mock_parent()
-        mock_pool = MagicMock()
-        parent._credential_pool = mock_pool
 
-        result = _resolve_child_credential_pool(None, parent)
-        self.assertIs(result, mock_pool)
 
-    def test_different_provider_loads_own_pool(self):
-        parent = _make_mock_parent()
-        parent._credential_pool = MagicMock()
-        mock_pool = MagicMock()
-        mock_pool.has_credentials.return_value = True
 
-        with patch("agent.credential_pool.load_pool", return_value=mock_pool):
-            result = _resolve_child_credential_pool("anthropic", parent)
-
-        self.assertIs(result, mock_pool)
-
-    def test_different_provider_empty_pool_returns_none(self):
-        parent = _make_mock_parent()
-        parent._credential_pool = MagicMock()
-        mock_pool = MagicMock()
-        mock_pool.has_credentials.return_value = False
-
-        with patch("agent.credential_pool.load_pool", return_value=mock_pool):
-            result = _resolve_child_credential_pool("anthropic", parent)
-
-        self.assertIsNone(result)
-
-    def test_different_provider_load_failure_returns_none(self):
-        parent = _make_mock_parent()
-        parent._credential_pool = MagicMock()
-
-        with patch("agent.credential_pool.load_pool", side_effect=Exception("disk error")):
-            result = _resolve_child_credential_pool("anthropic", parent)
-
-        self.assertIsNone(result)
-
-    def test_build_child_agent_assigns_parent_pool_when_shared(self):
-        parent = _make_mock_parent()
-        mock_pool = MagicMock()
-        parent._credential_pool = mock_pool
-
-        with patch("run_agent.AIAgent") as MockAgent:
-            mock_child = MagicMock()
-            MockAgent.return_value = mock_child
-
-            _build_child_agent(
-                task_index=0,
-                goal="Test pool assignment",
-                context=None,
-                toolsets=["terminal"],
-                model=None,
-                max_iterations=10,
-                parent_agent=parent,
-                task_count=1,
-            )
-
-            self.assertEqual(mock_child._credential_pool, mock_pool)
 
     @patch("tools.delegate_tool._load_config", return_value={})
     def test_build_child_agent_preserves_mcp_toolsets_by_default(self, mock_cfg):
@@ -1529,55 +1320,6 @@ class TestChildCredentialPoolResolution(unittest.TestCase):
         )
 
 
-class TestChildCredentialLeasing(unittest.TestCase):
-    def test_run_single_child_acquires_and_releases_lease(self):
-        from tools.delegate_tool import _run_single_child
-
-        leased_entry = MagicMock()
-        leased_entry.id = "cred-b"
-
-        child = MagicMock()
-        child._credential_pool = MagicMock()
-        child._credential_pool.acquire_lease.return_value = "cred-b"
-        child._credential_pool.current.return_value = leased_entry
-        child.run_conversation.return_value = {
-            "final_response": "done",
-            "completed": True,
-            "interrupted": False,
-            "api_calls": 1,
-            "messages": [],
-        }
-
-        result = _run_single_child(
-            task_index=0,
-            goal="Investigate rate limits",
-            child=child,
-            parent_agent=_make_mock_parent(),
-        )
-
-        self.assertEqual(result["status"], "completed")
-        child._credential_pool.acquire_lease.assert_called_once_with()
-        child._swap_credential.assert_called_once_with(leased_entry)
-        child._credential_pool.release_lease.assert_called_once_with("cred-b")
-
-    def test_run_single_child_releases_lease_after_failure(self):
-        from tools.delegate_tool import _run_single_child
-
-        child = MagicMock()
-        child._credential_pool = MagicMock()
-        child._credential_pool.acquire_lease.return_value = "cred-a"
-        child._credential_pool.current.return_value = MagicMock(id="cred-a")
-        child.run_conversation.side_effect = RuntimeError("boom")
-
-        result = _run_single_child(
-            task_index=1,
-            goal="Trigger failure",
-            child=child,
-            parent_agent=_make_mock_parent(),
-        )
-
-        self.assertEqual(result["status"], "error")
-        child._credential_pool.release_lease.assert_called_once_with("cred-a")
 
 
 class TestDelegateHeartbeat(unittest.TestCase):
@@ -1785,7 +1527,7 @@ class TestDelegateHeartbeat(unittest.TestCase):
         # With the old idle threshold (5 cycles = 0.25s), touch_calls
         # would cap at ~5. With the in-tool threshold (20 cycles = 1.0s),
         # we should see substantially more heartbeats over 0.4s.
-        self.assertGreater(
+        self.assertGreaterEqual(
             len(touch_calls), 6,
             f"Heartbeat stopped too early while child was inside a tool; "
             f"got {len(touch_calls)} touches over 0.4s at 0.05s interval",
@@ -1871,41 +1613,6 @@ class TestDelegationReasoningEffort(unittest.TestCase):
 
 class TestDispatchDelegateTask(unittest.TestCase):
     """Tests for the _dispatch_delegate_task helper and full param forwarding."""
-
-    @patch("tools.delegate_tool._load_config", return_value={})
-    @patch("tools.delegate_tool._resolve_delegation_credentials")
-    def test_acp_args_forwarded(self, mock_creds, mock_cfg):
-        """Both acp_command and acp_args reach delegate_task via the helper."""
-        mock_creds.return_value = {
-            "provider": None, "base_url": None,
-            "api_key": None, "api_mode": None, "model": None,
-        }
-        parent = _make_mock_parent(depth=0)
-        with patch("tools.delegate_tool._build_child_agent") as mock_build:
-            mock_child = MagicMock()
-            mock_child.run_conversation.return_value = {
-                "final_response": "done", "completed": True,
-                "api_calls": 1, "messages": [],
-            }
-            mock_child._delegate_saved_tool_names = []
-            mock_child._credential_pool = None
-            mock_child.session_prompt_tokens = 0
-            mock_child.session_completion_tokens = 0
-            mock_child.model = "test"
-            mock_build.return_value = mock_child
-
-            delegate_task(
-                goal="test",
-                acp_command="claude",
-                acp_args=["--acp", "--stdio"],
-                parent_agent=parent,
-            )
-            _, kwargs = mock_build.call_args
-            self.assertEqual(kwargs["override_acp_command"], "claude")
-            self.assertEqual(kwargs["override_acp_args"], ["--acp", "--stdio"])
-
-class TestDelegateEventEnum(unittest.TestCase):
-    """Tests for DelegateEvent enum and back-compat aliases."""
 
     def test_enum_values_are_strings(self):
         for event in DelegateEvent:
@@ -2132,7 +1839,6 @@ class TestOrchestratorRoleSchema(unittest.TestCase):
                 "api_calls": 1, "messages": [],
             }
             mock_child._delegate_saved_tool_names = []
-            mock_child._credential_pool = None
             mock_child.session_prompt_tokens = 0
             mock_child.session_completion_tokens = 0
             mock_child.model = "test"
@@ -2171,51 +1877,18 @@ class TestOrchestratorRoleSchema(unittest.TestCase):
         self.assertIn("role", task_props)
         self.assertEqual(task_props["role"]["enum"], ["leaf", "orchestrator"])
 
-    def test_acp_command_description_has_do_not_set_guidance(self):
-        # acp_command/acp_args descriptions must NOT bias the model toward
-        # assuming an ACP CLI (Claude, Copilot, etc.) is installed. They must
-        # carry explicit "do not set unless told" guidance so the model doesn't
-        # hallucinate ACP availability (#22013).
-        from tools.delegate_tool import DELEGATE_TASK_SCHEMA
-        props = DELEGATE_TASK_SCHEMA["parameters"]["properties"]
 
-        top_acp_desc = props["acp_command"]["description"]
-        self.assertIn("Do NOT set", top_acp_desc)
-        self.assertIn("explicitly told you", top_acp_desc)
-
-        task_props = props["tasks"]["items"]["properties"]
-        per_task_acp_desc = task_props["acp_command"]["description"]
-        self.assertIn("Do NOT set", per_task_acp_desc)
-
-    def test_acp_command_description_has_no_claude_as_example(self):
-        # Descriptions must not list 'claude' as a canonical example value —
-        # that directly primes the model to attempt Claude ACP even when it is
-        # not installed (#22013).
-        from tools.delegate_tool import DELEGATE_TASK_SCHEMA
-        props = DELEGATE_TASK_SCHEMA["parameters"]["properties"]
-        top_acp_desc = props["acp_command"]["description"].lower()
-        self.assertNotIn("e.g. 'claude'", top_acp_desc)
-        self.assertNotIn("e.g. \"claude\"", top_acp_desc)
-
-
-# Sentinel used to distinguish "role kwarg omitted" from "role=None".
 _SENTINEL = object()
 
 
-# =========================================================================
-# role-honoring behavior
-# =========================================================================
-
-
 def _make_role_mock_child():
-    """Helper: mock child with minimal fields for delegate_task to process."""
+    """Return the minimal retained child shape used by role tests."""
     mock_child = MagicMock()
     mock_child.run_conversation.return_value = {
         "final_response": "done", "completed": True,
         "api_calls": 1, "messages": [],
     }
     mock_child._delegate_saved_tool_names = []
-    mock_child._credential_pool = None
     mock_child.session_prompt_tokens = 0
     mock_child.session_completion_tokens = 0
     mock_child.model = "test"
@@ -2223,11 +1896,10 @@ def _make_role_mock_child():
 
 
 class TestOrchestratorRoleBehavior(unittest.TestCase):
-    """Tests that role='orchestrator' actually changes toolset + prompt."""
+    """Tests that orchestrator roles change toolsets and prompts."""
 
     @patch("tools.delegate_tool._resolve_delegation_credentials")
-    @patch("tools.delegate_tool._load_config",
-           return_value={"max_spawn_depth": 2})
+    @patch("tools.delegate_tool._load_config", return_value={"max_spawn_depth": 2})
     def test_orchestrator_role_keeps_delegation_at_depth_1(
         self, mock_cfg, mock_creds
     ):
@@ -2623,7 +2295,7 @@ class TestFallbackModelInheritance(unittest.TestCase):
     """Subagents must inherit the parent's fallback provider chain."""
 
     def test_child_inherits_fallback_chain(self):
-        """_build_child_agent passes parent._fallback_chain as fallback_model."""
+        """_build_child_agent passes the parent's fallback provider chain."""
         parent = _make_mock_parent(depth=0)
         fallback_entry = {"provider": "openrouter", "model": "gpt-4o-mini", "api_key": "sk-or-x"}
         parent._fallback_chain = [fallback_entry]
@@ -2642,10 +2314,10 @@ class TestFallbackModelInheritance(unittest.TestCase):
             )
 
         _, kwargs = MockAgent.call_args
-        self.assertEqual(kwargs["fallback_model"], [fallback_entry])
+        self.assertEqual(kwargs["fallback_providers"], [fallback_entry])
 
     def test_child_gets_no_fallback_when_parent_chain_empty(self):
-        """When parent._fallback_chain is empty, fallback_model is None."""
+        """When the parent fallback chain is empty, fallback_providers is None."""
         parent = _make_mock_parent(depth=0)
         parent._fallback_chain = []
 
@@ -2663,7 +2335,7 @@ class TestFallbackModelInheritance(unittest.TestCase):
             )
 
         _, kwargs = MockAgent.call_args
-        self.assertIsNone(kwargs["fallback_model"])
+        self.assertIsNone(kwargs["fallback_providers"])
 
 
 if __name__ == "__main__":

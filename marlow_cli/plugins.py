@@ -152,7 +152,7 @@ VALID_HOOKS: Set[str] = {
     "pre_gateway_dispatch",
     # Approval lifecycle hooks. Fired by tools/approval.py when a dangerous
     # command needs user approval -- fires BOTH for CLI-interactive prompts
-    # and for gateway/ACP approvals (Telegram, Discord, Slack, TUI, etc.).
+    # and for gateway/client approvals (Telegram, Discord, Slack, TUI, etc.).
     # Observers only: return values are ignored. Plugins cannot veto or
     # pre-answer an approval from these hooks (use pre_tool_call to block
     # a tool before it reaches approval).
@@ -552,73 +552,6 @@ class PluginContext:
             self.manifest.name, provider.name,
         )
 
-    # -- dashboard auth provider registration --------------------------------
-
-    def register_dashboard_auth_provider(self, provider) -> None:
-        """Register a dashboard authentication provider.
-
-        ``provider`` must be an instance of
-        :class:`marlow_cli.dashboard_auth.DashboardAuthProvider`. Used by
-        the dashboard OAuth auth gate, which engages when the dashboard
-        binds to a non-loopback host without ``--insecure``.
-
-        Misbehaving providers (wrong type, duplicate name) are logged at
-        WARNING and silently ignored — never raised — so a broken plugin
-        cannot crash the host. Same convention as
-        ``register_image_gen_provider``.
-        """
-        from marlow_cli.dashboard_auth import (
-            DashboardAuthProvider, register_provider,
-        )
-
-        if not isinstance(provider, DashboardAuthProvider):
-            logger.warning(
-                "Plugin '%s' tried to register a dashboard-auth provider "
-                "that does not inherit from DashboardAuthProvider. Ignoring.",
-                self.manifest.name,
-            )
-            return
-        try:
-            register_provider(provider)
-        except (TypeError, ValueError) as e:
-            logger.warning(
-                "Plugin '%s' failed to register dashboard-auth provider "
-                "%r: %s",
-                self.manifest.name, getattr(provider, "name", "?"), e,
-            )
-            return
-        logger.info(
-            "Plugin '%s' registered dashboard-auth provider: %s (%s)",
-            self.manifest.name, provider.name, provider.display_name,
-        )
-
-    # -- video gen provider registration -------------------------------------
-
-    def register_video_gen_provider(self, provider) -> None:
-        """Register a video generation backend.
-
-        ``provider`` must be an instance of
-        :class:`agent.video_gen_provider.VideoGenProvider`. The
-        ``provider.name`` attribute is what ``video_gen.provider`` in
-        ``config.yaml`` matches against when routing ``video_generate``
-        tool calls.
-        """
-        from agent.video_gen_provider import VideoGenProvider
-        from agent.video_gen_registry import register_provider as _register_video_provider
-
-        if not isinstance(provider, VideoGenProvider):
-            logger.warning(
-                "Plugin '%s' tried to register a video_gen provider that does "
-                "not inherit from VideoGenProvider. Ignoring.",
-                self.manifest.name,
-            )
-            return
-        _register_video_provider(provider)
-        logger.info(
-            "Plugin '%s' registered video_gen provider: %s",
-            self.manifest.name, provider.name,
-        )
-
     # -- web search/extract provider registration ----------------------------
 
     def register_web_search_provider(self, provider) -> None:
@@ -649,35 +582,6 @@ class PluginContext:
 
     # -- browser provider registration ---------------------------------------
 
-    def register_browser_provider(self, provider) -> None:
-        """Register a cloud browser backend.
-
-        ``provider`` must be an instance of
-        :class:`agent.browser_provider.BrowserProvider`. The
-        ``provider.name`` attribute is what ``browser.cloud_provider`` in
-        ``config.yaml`` matches against when routing cloud-mode
-        ``browser_*`` tool calls.
-
-        Mirrors :meth:`register_web_search_provider` exactly — same
-        registration shape, same gating, same logging. The browser
-        subsystem's dispatcher (:func:`tools.browser_tool._get_cloud_provider`)
-        consults the registry built up by these calls.
-        """
-        from agent.browser_provider import BrowserProvider
-        from agent.browser_registry import register_provider as _register_browser_provider
-
-        if not isinstance(provider, BrowserProvider):
-            logger.warning(
-                "Plugin '%s' tried to register a browser provider that does "
-                "not inherit from BrowserProvider. Ignoring.",
-                self.manifest.name,
-            )
-            return
-        _register_browser_provider(provider)
-        logger.info(
-            "Plugin '%s' registered browser provider: %s",
-            self.manifest.name, provider.name,
-        )
 
     # -- TTS provider registration -------------------------------------------
 
@@ -849,7 +753,7 @@ class PluginContext:
             key: stable task key (snake_case). Used in config ``auxiliary.<key>``
                 and env vars ``AUXILIARY_<KEY_UPPER>_*``. Must not shadow a
                 built-in task key (vision, compression, web_extract, approval,
-                mcp, title_generation, skills_hub, curator).
+                mcp, title_generation, curator).
             display_name: human-readable name shown in the picker.
             description: short one-line description shown next to the name.
             defaults: optional dict of default routing fields. Recognized keys:
@@ -868,7 +772,7 @@ class PluginContext:
             ctx.register_auxiliary_task(
                 key="memory_retain_filter",
                 display_name="Memory retain filter",
-                description="hindsight pre-retain dedup/extract",
+                description="memory pre-retain dedup/extract",
                 defaults={"provider": "auto", "timeout": 30},
             )
         """

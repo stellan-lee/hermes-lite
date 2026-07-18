@@ -121,10 +121,10 @@ class TestWriteToSandbox:
     def test_uses_parent_dir_of_remote_path(self):
         env = MagicMock()
         env.execute.return_value = {"output": "", "returncode": 0}
-        remote_path = "/data/data/com.termux/files/usr/tmp/marlow-results/abc.txt"
+        remote_path = "/var/tmp/marlow-custom/marlow-results/abc.txt"
         _write_to_sandbox("content", remote_path, env)
         cmd = env.execute.call_args[0][0]
-        assert "mkdir -p /data/data/com.termux/files/usr/tmp/marlow-results" in cmd
+        assert "mkdir -p /var/tmp/marlow-custom/marlow-results" in cmd
 
     def test_path_with_spaces_is_quoted(self):
         env = MagicMock()
@@ -161,8 +161,8 @@ class TestResolveStorageDir:
 
     def test_uses_env_temp_dir_when_available(self):
         env = MagicMock()
-        env.get_temp_dir.return_value = "/data/data/com.termux/files/usr/tmp"
-        assert _resolve_storage_dir(env) == "/data/data/com.termux/files/usr/tmp/marlow-results"
+        env.get_temp_dir.return_value = "/var/tmp/marlow-custom"
+        assert _resolve_storage_dir(env) == "/var/tmp/marlow-custom/marlow-results"
 
 
 # ── _build_persisted_message ──────────────────────────────────────────
@@ -393,18 +393,18 @@ class TestMaybePersistToolResult:
     def test_env_temp_dir_changes_persisted_path(self):
         env = MagicMock()
         env.execute.return_value = {"output": "", "returncode": 0}
-        env.get_temp_dir.return_value = "/data/data/com.termux/files/usr/tmp"
+        env.get_temp_dir.return_value = "/var/tmp/marlow-custom"
         content = "x" * 60_000
         result = maybe_persist_tool_result(
             content=content,
             tool_name="terminal",
-            tool_use_id="tc_termux",
+            tool_use_id="tc_custom",
             env=env,
             threshold=30_000,
         )
-        assert "/data/data/com.termux/files/usr/tmp/marlow-results/tc_termux.txt" in result
+        assert "/var/tmp/marlow-custom/marlow-results/tc_custom.txt" in result
         cmd = env.execute.call_args[0][0]
-        assert "mkdir -p /data/data/com.termux/files/usr/tmp/marlow-results" in cmd
+        assert "mkdir -p /var/tmp/marlow-custom/marlow-results" in cmd
 
     def test_threshold_zero_forces_persist(self):
         env = MagicMock()

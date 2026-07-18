@@ -327,6 +327,8 @@ def _make_message(*, content: str = "hi", reference=None):
 @pytest.fixture
 def reply_text_adapter(monkeypatch):
     """DiscordAdapter wired for _handle_message → handle_message capture."""
+    adapter_globals = DiscordAdapter._handle_message.__globals__
+    monkeypatch.setattr(adapter_globals["discord"], "DMChannel", FakeDMChannel)
     config = PlatformConfig(enabled=True, token="fake-token")
     adapter = DiscordAdapter(config)
     adapter._client = SimpleNamespace(user=SimpleNamespace(id=999))

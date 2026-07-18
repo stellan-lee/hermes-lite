@@ -1,9 +1,7 @@
 """Marlow execution environment backends.
 
 Each backend provides the same interface (BaseEnvironment ABC) for running
-shell commands in a specific execution context: local, Docker, SSH,
-Singularity, Modal, or Daytona. (Modal additionally has direct and
-Nous-managed modes, selected via terminal.modal_mode.)
+shell commands in a specific execution context: local, Docker, or SSH.
 
 The terminal_tool.py factory (_create_environment) selects the backend
 based on the TERMINAL_ENV configuration.

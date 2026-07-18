@@ -312,7 +312,7 @@ def test_guardrail_halt_emits_final_response_through_stream_delta_callback():
     so SSE/TUI clients see why the agent stopped instead of a silent stream
     close.  Without this the chat-completions SSE writer drains an empty
     queue and emits a finish chunk with zero content (indistinguishable
-    from a crash for Open WebUI and similar clients).
+    from a crash for API clients using the standard tool-call shape).
     """
     agent = _make_agent("web_search", max_iterations=10, config=_hard_stop_config())
     same_args = {"query": "same"}

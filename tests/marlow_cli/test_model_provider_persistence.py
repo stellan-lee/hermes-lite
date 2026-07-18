@@ -79,7 +79,7 @@ class TestProviderPersistsAfterModelSave:
 
         def _boom(path, data, **kwargs):
             assert path == config_path
-            assert data["model"]["provider"] == "nous"
+            assert data["model"]["provider"] == "custom"
             assert data["model"]["base_url"] == "https://inference.example.com/v1"
             assert data["model"]["default"] == "some-old-model"
             assert kwargs["sort_keys"] is False
@@ -88,7 +88,7 @@ class TestProviderPersistsAfterModelSave:
         with patch("marlow_cli.auth.atomic_yaml_write", side_effect=_boom) as mock_write:
             with pytest.raises(OSError, match="simulated atomic write failure"):
                 _update_config_for_provider(
-                    "nous",
+                    "custom",
                     "https://inference.example.com/v1/",
                     default_model="llama-3.3",
                 )
@@ -127,55 +127,6 @@ class TestProviderPersistsAfterModelSave:
         )
         assert model.get("default") == "kimi-k2.5"
 
-    def test_copilot_provider_saved_when_selected(self, config_home):
-        """_model_flow_copilot should persist provider/base_url/model together."""
-        from marlow_cli.main import _model_flow_copilot
-        from marlow_cli.config import load_config
-
-        with patch(
-            "marlow_cli.auth.resolve_api_key_provider_credentials",
-            return_value={
-                "provider": "copilot",
-                "api_key": "gh-cli-token",
-                "base_url": "https://api.githubcopilot.com",
-                "source": "gh auth token",
-            },
-        ), patch(
-            "marlow_cli.models.fetch_github_model_catalog",
-            return_value=[
-                {
-                    "id": "gpt-4.1",
-                    "capabilities": {"type": "chat", "supports": {}},
-                    "supported_endpoints": ["/chat/completions"],
-                },
-                {
-                    "id": "gpt-5.4",
-                    "capabilities": {"type": "chat", "supports": {"reasoning_effort": ["low", "medium", "high"]}},
-                    "supported_endpoints": ["/responses"],
-                },
-            ],
-        ), patch(
-            "marlow_cli.auth._prompt_model_selection",
-            return_value="gpt-5.4",
-        ), patch(
-            "marlow_cli.main._prompt_reasoning_effort_selection",
-            return_value="high",
-        ), patch(
-            "marlow_cli.auth.deactivate_provider",
-        ):
-            _model_flow_copilot(load_config(), "old-model")
-
-        import yaml
-
-        config = yaml.safe_load((config_home / "config.yaml").read_text()) or {}
-        model = config.get("model")
-        assert isinstance(model, dict), f"model should be dict, got {type(model)}"
-        assert model.get("provider") == "copilot"
-        assert model.get("base_url") == "https://api.githubcopilot.com"
-        assert model.get("default") == "gpt-5.4"
-        assert model.get("api_mode") == "codex_responses"
-        assert config["agent"]["reasoning_effort"] == "high"
-
     def test_named_custom_provider_preserves_explicit_api_mode(self, config_home):
         """Named custom providers should re-activate with their saved api_mode."""
         import yaml
@@ -206,120 +157,6 @@ class TestProviderPersistsAfterModelSave:
         assert model.get("provider") == "custom"
         assert model.get("base_url") == "https://packy.example.com/v1"
         assert model.get("api_mode") == "codex_responses"
-
-    def test_copilot_acp_provider_saved_when_selected(self, config_home):
-        """_model_flow_copilot_acp should persist provider/base_url/model together."""
-        from marlow_cli.main import _model_flow_copilot_acp
-        from marlow_cli.config import load_config
-
-        with patch(
-            "marlow_cli.auth.get_external_process_provider_status",
-            return_value={
-                "resolved_command": "/usr/local/bin/copilot",
-                "command": "copilot",
-                "base_url": "acp://copilot",
-            },
-        ), patch(
-            "marlow_cli.auth.resolve_external_process_provider_credentials",
-            return_value={
-                "provider": "copilot-acp",
-                "api_key": "copilot-acp",
-                "base_url": "acp://copilot",
-                "command": "/usr/local/bin/copilot",
-                "args": ["--acp", "--stdio"],
-                "source": "process",
-            },
-        ), patch(
-            "marlow_cli.auth.resolve_api_key_provider_credentials",
-            return_value={
-                "provider": "copilot",
-                "api_key": "gh-cli-token",
-                "base_url": "https://api.githubcopilot.com",
-                "source": "gh auth token",
-            },
-        ), patch(
-            "marlow_cli.models.fetch_github_model_catalog",
-            return_value=[
-                {
-                    "id": "gpt-4.1",
-                    "capabilities": {"type": "chat", "supports": {}},
-                    "supported_endpoints": ["/chat/completions"],
-                },
-                {
-                    "id": "gpt-5.4",
-                    "capabilities": {"type": "chat", "supports": {"reasoning_effort": ["low", "medium", "high"]}},
-                    "supported_endpoints": ["/responses"],
-                },
-            ],
-        ), patch(
-            "marlow_cli.auth._prompt_model_selection",
-            return_value="gpt-5.4",
-        ), patch(
-            "marlow_cli.auth.deactivate_provider",
-        ):
-            _model_flow_copilot_acp(load_config(), "old-model")
-
-        import yaml
-
-        config = yaml.safe_load((config_home / "config.yaml").read_text()) or {}
-        model = config.get("model")
-        assert isinstance(model, dict), f"model should be dict, got {type(model)}"
-        assert model.get("provider") == "copilot-acp"
-        assert model.get("base_url") == "acp://copilot"
-        assert model.get("default") == "gpt-5.4"
-        assert model.get("api_mode") == "chat_completions"
-
-    def test_opencode_go_models_are_selectable_and_persist_normalized(self, config_home, monkeypatch):
-        from marlow_cli.main import _model_flow_api_key_provider
-        from marlow_cli.config import load_config
-
-        monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-key")
-
-        with patch("marlow_cli.models.fetch_api_models", return_value=["opencode-go/kimi-k2.5", "opencode-go/minimax-m2.7"]), \
-             patch("marlow_cli.auth._prompt_model_selection", return_value="kimi-k2.5"), \
-             patch("marlow_cli.auth.deactivate_provider"), \
-             patch("builtins.input", return_value=""):
-            _model_flow_api_key_provider(load_config(), "opencode-go", "opencode-go/kimi-k2.5")
-
-        import yaml
-        config = yaml.safe_load((config_home / "config.yaml").read_text()) or {}
-        model = config.get("model")
-        assert isinstance(model, dict)
-        assert model.get("provider") == "opencode-go"
-        assert model.get("default") == "kimi-k2.5"
-        assert model.get("api_mode") == "chat_completions"
-
-    def test_opencode_go_same_provider_switch_recomputes_api_mode(self, config_home, monkeypatch):
-        from marlow_cli.main import _model_flow_api_key_provider
-        from marlow_cli.config import load_config
-
-        monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-key")
-        (config_home / "config.yaml").write_text(
-            "model:\n"
-            "  default: kimi-k2.5\n"
-            "  provider: opencode-go\n"
-            "  base_url: https://opencode.ai/zen/go/v1\n"
-            "  api_mode: chat_completions\n"
-        )
-
-        with patch("marlow_cli.models.fetch_api_models", return_value=["opencode-go/kimi-k2.5", "opencode-go/minimax-m2.5"]), \
-             patch("marlow_cli.auth._prompt_model_selection", return_value="minimax-m2.5"), \
-             patch("marlow_cli.auth.deactivate_provider"), \
-             patch("builtins.input", return_value=""):
-            _model_flow_api_key_provider(load_config(), "opencode-go", "kimi-k2.5")
-
-        import yaml
-        config = yaml.safe_load((config_home / "config.yaml").read_text()) or {}
-        model = config.get("model")
-        assert isinstance(model, dict)
-        assert model.get("provider") == "opencode-go"
-        assert model.get("default") == "minimax-m2.5"
-        assert model.get("api_mode") == "anthropic_messages"
-
-
-
-class TestBaseUrlValidation:
-    """Reject non-URL values in the base URL prompt (e.g. shell commands)."""
 
     def test_invalid_base_url_rejected(self, config_home, monkeypatch, capsys):
         """Typing a non-URL string should not be saved as the base URL."""
@@ -389,4 +226,3 @@ class TestBaseUrlValidation:
 
         saved = get_env_value("GLM_BASE_URL") or ""
         assert saved == "", "Empty input should not save a base URL"
-

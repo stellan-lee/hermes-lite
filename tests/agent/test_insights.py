@@ -137,10 +137,6 @@ def populated_db(db):
 
 
 class TestHasKnownPricing:
-    def test_known_commercial_model(self):
-        assert _has_known_pricing("gpt-4o", provider="openai") is True
-        assert _has_known_pricing("anthropic/claude-sonnet-4-20250514") is True
-        assert _has_known_pricing("gpt-4.1", provider="openai") is True
 
     def test_unknown_custom_model(self):
         assert _has_known_pricing("FP16_Marlow_4.5") is False
@@ -152,36 +148,6 @@ class TestHasKnownPricing:
     def test_heuristic_matched_models_are_not_considered_known(self):
         assert _has_known_pricing("some-opus-model") is False
         assert _has_known_pricing("future-sonnet-v2") is False
-
-
-class TestEstimateCost:
-    def test_basic_cost(self):
-        cost, status = _estimate_cost(
-            "anthropic/claude-sonnet-4-20250514",
-            1_000_000,
-            1_000_000,
-            provider="anthropic",
-        )
-        assert status == "estimated"
-        assert cost == pytest.approx(18.0, abs=0.01)
-
-    def test_zero_tokens(self):
-        cost, status = _estimate_cost("gpt-4o", 0, 0, provider="openai")
-        assert status == "estimated"
-        assert cost == 0.0
-
-    def test_cache_aware_usage(self):
-        cost, status = _estimate_cost(
-            "anthropic/claude-sonnet-4-20250514",
-            1000,
-            500,
-            cache_read_tokens=2000,
-            cache_write_tokens=400,
-            provider="anthropic",
-        )
-        assert status == "estimated"
-        expected = (1000 * 3.0 + 500 * 15.0 + 2000 * 0.30 + 400 * 3.75) / 1_000_000
-        assert cost == pytest.approx(expected, abs=0.0001)
 
 
 # =========================================================================
@@ -289,10 +255,6 @@ class TestInsightsPopulated:
         assert overview["total_output_tokens"] == expected_output
         assert overview["total_tokens"] == expected_input + expected_output
 
-    def test_overview_cost_positive(self, populated_db):
-        engine = InsightsEngine(populated_db)
-        report = engine.generate(days=30)
-        assert report["overview"]["estimated_cost"] > 0
 
     def test_overview_duration_stats(self, populated_db):
         engine = InsightsEngine(populated_db)
@@ -643,36 +605,6 @@ class TestEdgeCases:
         # Should be JSON-serializable
         _json.dumps(report["overview"])  # would raise if sets present
 
-    def test_mixed_commercial_and_custom_models(self, db):
-        """Mix of commercial and custom models: only commercial ones get costs."""
-        db.create_session(session_id="s1", source="cli", model="anthropic/claude-sonnet-4-20250514")
-        db.update_token_counts(
-            "s1",
-            input_tokens=10000,
-            output_tokens=5000,
-            billing_provider="anthropic",
-        )
-        db.create_session(session_id="s2", source="cli", model="my-local-llama")
-        db.update_token_counts("s2", input_tokens=10000, output_tokens=5000)
-        db._conn.commit()
-
-        engine = InsightsEngine(db)
-        report = engine.generate(days=30)
-
-        # Cost should only come from gpt-4o, not from the custom model
-        overview = report["overview"]
-        assert overview["estimated_cost"] > 0
-        assert "claude-sonnet-4-20250514" in overview["models_with_pricing"]  # list now, not set
-        assert "my-local-llama" in overview["models_without_pricing"]
-
-        # Verify individual model entries
-        claude = next(m for m in report["models"] if m["model"] == "claude-sonnet-4-20250514")
-        assert claude["has_pricing"] is True
-        assert claude["cost"] > 0
-
-        llama = next(m for m in report["models"] if m["model"] == "my-local-llama")
-        assert llama["has_pricing"] is False
-        assert llama["cost"] == 0.0
 
     def test_single_session_streak(self, db):
         """Single session should have streak of 0 or 1."""

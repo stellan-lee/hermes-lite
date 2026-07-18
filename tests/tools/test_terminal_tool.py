@@ -91,17 +91,23 @@ def test_cached_sudo_password_is_used_when_env_is_unset(monkeypatch):
 
 
 def test_cached_sudo_password_isolated_by_session_key(monkeypatch):
+    from gateway.session_context import _VAR_MAP
+
     monkeypatch.delenv("SUDO_PASSWORD", raising=False)
     monkeypatch.delenv("MARLOW_INTERACTIVE", raising=False)
 
-    monkeypatch.setenv("MARLOW_SESSION_KEY", "session-a")
-    terminal_tool._set_cached_sudo_password("alpha-pass")
+    session_key_var = _VAR_MAP["MARLOW_SESSION_KEY"]
+    token = session_key_var.set("session-a")
+    try:
+        terminal_tool._set_cached_sudo_password("alpha-pass")
 
-    monkeypatch.setenv("MARLOW_SESSION_KEY", "session-b")
-    assert terminal_tool._get_cached_sudo_password() == ""
+        session_key_var.set("session-b")
+        assert terminal_tool._get_cached_sudo_password() == ""
 
-    monkeypatch.setenv("MARLOW_SESSION_KEY", "session-a")
-    assert terminal_tool._get_cached_sudo_password() == "alpha-pass"
+        session_key_var.set("session-a")
+        assert terminal_tool._get_cached_sudo_password() == "alpha-pass"
+    finally:
+        session_key_var.reset(token)
 
 
 def test_passwordless_sudo_skips_interactive_prompt_and_rewrite(monkeypatch):

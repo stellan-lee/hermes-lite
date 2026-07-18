@@ -77,10 +77,6 @@ _PREFIX_PATTERNS = [
     r"ghr_[A-Za-z0-9]{10,}",            # GitHub refresh token
     r"xox[baprs]-[A-Za-z0-9-]{10,}",    # Slack tokens
     r"AIza[A-Za-z0-9_-]{30,}",          # Google API keys
-    r"pplx-[A-Za-z0-9]{10,}",           # Perplexity
-    r"fal_[A-Za-z0-9_-]{10,}",          # Fal.ai
-    r"fc-[A-Za-z0-9]{10,}",             # Firecrawl
-    r"bb_live_[A-Za-z0-9_-]{10,}",      # BrowserBase
     r"gAAAA[A-Za-z0-9_=-]{20,}",        # Codex encrypted tokens
     r"AKIA[A-Z0-9]{16}",                # AWS Access Key ID
     r"sk_live_[A-Za-z0-9]{10,}",        # Stripe secret key (live)
@@ -88,22 +84,13 @@ _PREFIX_PATTERNS = [
     r"rk_live_[A-Za-z0-9]{10,}",        # Stripe restricted key
     r"SG\.[A-Za-z0-9_-]{10,}",          # SendGrid API key
     r"hf_[A-Za-z0-9]{10,}",             # HuggingFace token
-    r"r8_[A-Za-z0-9]{10,}",             # Replicate API token
     r"npm_[A-Za-z0-9]{10,}",            # npm access token
     r"pypi-[A-Za-z0-9_-]{10,}",         # PyPI API token
     r"dop_v1_[A-Za-z0-9]{10,}",         # DigitalOcean PAT
     r"doo_v1_[A-Za-z0-9]{10,}",         # DigitalOcean OAuth
     r"am_[A-Za-z0-9_-]{10,}",           # AgentMail API key
     r"sk_[A-Za-z0-9_]{10,}",            # ElevenLabs TTS key (sk_ underscore, not sk- dash)
-    r"tvly-[A-Za-z0-9]{10,}",           # Tavily search API key
-    r"exa_[A-Za-z0-9]{10,}",            # Exa search API key
     r"gsk_[A-Za-z0-9]{10,}",            # Groq Cloud API key
-    r"syt_[A-Za-z0-9]{10,}",            # Matrix access token
-    r"retaindb_[A-Za-z0-9]{10,}",       # RetainDB API key
-    r"hsk-[A-Za-z0-9]{10,}",            # Hindsight API key
-    r"mem0_[A-Za-z0-9]{10,}",           # Mem0 Platform API key
-    r"brv_[A-Za-z0-9]{10,}",            # ByteRover API key
-    r"xai-[A-Za-z0-9]{30,}",            # xAI (Grok) API key
 ]
 
 # ENV assignment patterns: KEY=value where KEY contains a secret-like name
@@ -152,7 +139,7 @@ _JWT_RE = re.compile(
 
 # E.164 phone numbers: +<country><number>, 7-15 digits
 # Negative lookahead prevents matching hex strings or identifiers
-_SIGNAL_PHONE_RE = re.compile(r"(\+[1-9]\d{6,14})(?![A-Za-z0-9])")
+_E164_PHONE_RE = re.compile(r"(\+[1-9]\d{6,14})(?![A-Za-z0-9])")
 
 # URLs containing query strings — matches `scheme://...?...[# or end]`.
 # Used to scan text for URLs whose query params may contain secrets.
@@ -415,14 +402,14 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if "&" in text and "=" in text:
         text = _redact_form_body(text)
 
-    # E.164 phone numbers (Signal, WhatsApp)
+    # E.164 phone numbers
     if "+" in text:
         def _redact_phone(m):
             phone = m.group(1)
             if len(phone) <= 8:
                 return phone[:2] + "****" + phone[-2:]
             return phone[:4] + "****" + phone[-4:]
-        text = _SIGNAL_PHONE_RE.sub(_redact_phone, text)
+        text = _E164_PHONE_RE.sub(_redact_phone, text)
 
     return text
 

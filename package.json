@@ -5,8 +5,7 @@
   "private": true,
   "workspaces": [
     "ui-tui",
-    "ui-tui/packages/*",
-    "web"
+    "ui-tui/packages/*"
   ],
   "scripts": {
     "postinstall": "echo '✅ Browser tools ready. Run: python run_agent.py --help'"

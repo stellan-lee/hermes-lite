@@ -10,8 +10,8 @@ Tracks processes spawned via terminal(background=true), providing:
   - Session-scoped tracking for gateway reset protection
 
 Background processes execute THROUGH the environment interface -- nothing
-runs on the host machine unless TERMINAL_ENV=local. For Docker, Singularity,
-Modal, Daytona, and SSH backends, the command runs inside the sandbox.
+runs on the host machine unless TERMINAL_ENV=local. For Docker and SSH
+backends, the command runs inside the sandbox.
 
 Usage:
     from tools.process_registry import process_registry
@@ -32,7 +32,6 @@ Usage:
 import json
 import logging
 import os
-import platform
 import shlex
 import signal
 import subprocess
@@ -40,9 +39,7 @@ import threading
 import time
 import uuid
 
-_IS_WINDOWS = platform.system() == "Windows"
 from tools.environments.local import _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env
-from marlow_cli._subprocess_compat import windows_hide_flags
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -414,8 +411,6 @@ class ProcessRegistry:
         """Best-effort liveness check for host-visible PIDs."""
         if not pid:
             return False
-        # ``os.kill(pid, 0)`` is NOT a no-op on Windows (bpo-14484) — use
-        # the cross-platform existence check.
         from gateway.status import _pid_exists
         return _pid_exists(pid)
 
@@ -447,45 +442,10 @@ class ProcessRegistry:
         renderers/GPU helpers spawned by an ``agent-browser`` daemon)
         don't get reparented to init and survive cleanup.
 
-        Windows: shells out to ``taskkill /PID <pid> /T /F``. This is
-        the documented Microsoft primitive for tree-kill and matches the
-        existing convention in ``gateway.status.terminate_pid``. We can't
-        reuse the POSIX psutil path on Windows because:
-
-          1. Windows doesn't maintain a Unix-style process tree —
-             ``psutil.Process.children(recursive=True)`` walks PPID
-             links that go stale when intermediate processes exit, so
-             enumeration is best-effort and misses orphaned descendants.
-          2. ``psutil.Process.terminate()`` on Windows is
-             ``TerminateProcess()`` which kills only the target handle
-             and is a hard kill — there is no Windows equivalent of a
-             SIGTERM that cascades through a process group. (See the
-             warning in ``gateway/status.py::terminate_pid``: "os.kill
-             with SIGTERM is not equivalent to a tree-killing hard stop"
-             on Windows.) Headless Chromium has no GUI window, so the
-             softer ``taskkill /T`` without ``/F`` won't reach it either.
-
         ``psutil`` is a hard dependency (see ``pyproject.toml``); the
         bare-``os.kill`` fallback covers OSError / PermissionError on
-        POSIX and a missing ``taskkill.exe`` on Windows (effectively
-        unreachable on real Windows installs, but cheap insurance).
+        POSIX.
         """
-        if _IS_WINDOWS:
-            try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    creationflags=windows_hide_flags(),
-                )
-            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except (OSError, ProcessLookupError, PermissionError):
-                    pass
-            return
-
         import psutil
         try:
             parent = psutil.Process(pid)
@@ -549,10 +509,7 @@ class ProcessRegistry:
         if use_pty:
             # Try PTY mode for interactive CLI tools
             try:
-                if _IS_WINDOWS:
-                    from winpty import PtyProcess as _PtyProcessCls
-                else:
-                    from ptyprocess import PtyProcess as _PtyProcessCls
+                from ptyprocess import PtyProcess as _PtyProcessCls
                 user_shell = _find_shell()
                 pty_env = _sanitize_subprocess_env(os.environ, env_vars)
                 pty_env["PYTHONUNBUFFERED"] = "1"
@@ -597,8 +554,6 @@ class ProcessRegistry:
         # stdout is a pipe, hiding output from process(action="poll")).
         bg_env = _sanitize_subprocess_env(os.environ, env_vars)
         bg_env["PYTHONUNBUFFERED"] = "1"
-        _popen_kwargs = {"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}
-
         proc = subprocess.Popen(
             [user_shell, "-lic", f"set +m; {command}"],
             text=True,
@@ -609,8 +564,7 @@ class ProcessRegistry:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            preexec_fn=None if _IS_WINDOWS else os.setsid,
-            **_popen_kwargs,
+            preexec_fn=os.setsid,
         )
 
         session.process = proc
@@ -637,13 +591,9 @@ class ProcessRegistry:
             # descendants spawned via setsid) before re-raising so they do not
             # leak as untracked background processes.
             try:
-                if not _IS_WINDOWS:
-                    try:
-                        kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
-                        os.killpg(os.getpgid(proc.pid), kill_signal)  # windows-footgun: ok - guarded by _IS_WINDOWS above
-                    except (ProcessLookupError, PermissionError, OSError):
-                        proc.kill()
-                else:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
                     proc.kill()
             except Exception:
                 pass
@@ -667,7 +617,7 @@ class ProcessRegistry:
         """
         Spawn a background process through a non-local environment backend.
 
-        For Docker/Singularity/Modal/Daytona/SSH: runs the command inside the sandbox
+        For Docker/SSH: runs the command inside the sandbox
         using the environment's execute() interface. We wrap the command to
         capture the in-sandbox PID and redirect output to a log file inside
         the sandbox, then poll the log via subsequent execute() calls.
@@ -962,7 +912,7 @@ class ProcessRegistry:
         # available and we stop.
         drained = ""
         stdout = getattr(proc, "stdout", None)
-        if stdout is not None and not _IS_WINDOWS:
+        if stdout is not None:
             try:
                 import fcntl
                 fd = stdout.fileno()
@@ -1159,20 +1109,17 @@ class ProcessRegistry:
             elif session.process:
                 # Local process -- kill the process tree
                 try:
-                    if _IS_WINDOWS:
-                        session.process.terminate()
-                    else:
-                        import psutil
-                        try:
-                            parent = psutil.Process(session.process.pid)
-                            for child in parent.children(recursive=True):
-                                try:
-                                    child.terminate()
-                                except psutil.NoSuchProcess:
-                                    pass
-                            parent.terminate()
-                        except psutil.NoSuchProcess:
-                            pass
+                    import psutil
+                    try:
+                        parent = psutil.Process(session.process.pid)
+                        for child in parent.children(recursive=True):
+                            try:
+                                child.terminate()
+                            except psutil.NoSuchProcess:
+                                pass
+                        parent.terminate()
+                    except psutil.NoSuchProcess:
+                        pass
                 except (ProcessLookupError, PermissionError):
                     session.process.kill()
             elif session.env_ref and session.pid:

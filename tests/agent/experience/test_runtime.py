@@ -9,7 +9,6 @@ from agent.experience.runtime import (
     TurnOrigin,
     _effective_mode,
     copy_messages_with_experience_context,
-    locate_and_clear_experience_target,
     normalize_experience_mode,
     normalize_turn_origin,
     provider_identity,
@@ -126,28 +125,6 @@ def test_request_copy_fails_closed_for_invalid_target_or_shape() -> None:
         current_user_index=0,
         context="must not leak",
     ) == [{"role": "user", "content": {"opaque": True}}]
-
-
-def test_current_turn_marker_survives_prompt_cache_copy_and_is_removed() -> None:
-    from agent.experience.runtime import _EXPERIENCE_TARGET_KEY
-    from agent.prompt_caching import apply_anthropic_cache_control
-
-    marker = "turn-test"
-    source = [
-        {"role": "system", "content": "stable"},
-        {
-            "role": "user",
-            "content": "current",
-            _EXPERIENCE_TARGET_KEY: marker,
-        },
-    ]
-
-    transformed = apply_anthropic_cache_control(source)
-    index = locate_and_clear_experience_target(transformed, marker=marker)
-
-    assert index == 1
-    assert all(_EXPERIENCE_TARGET_KEY not in message for message in transformed)
-    assert source[1][_EXPERIENCE_TARGET_KEY] == marker
 
 
 def test_fallback_provider_rechecks_egress_before_injection() -> None:

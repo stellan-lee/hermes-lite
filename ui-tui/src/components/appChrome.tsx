@@ -340,8 +340,8 @@ const shortModelLabel = (model: string) =>
     .replace(/\b(\d+)\s+(\d+)\b/g, '$1.$2')
     .trim()
 
-const modelLabel = (model: string, effort?: string, fast?: boolean) =>
-  [shortModelLabel(model), effortLabel(effort), fast ? 'fast' : ''].filter(Boolean).join(' ')
+const modelLabel = (model: string, effort?: string) =>
+  [shortModelLabel(model), effortLabel(effort)].filter(Boolean).join(' ')
 
 export function GoodVibesHeart({ tick, t }: { tick: number; t: Theme }) {
   const [active, setActive] = useState(false)
@@ -375,7 +375,6 @@ export function StatusRule({
   status,
   statusColor,
   model,
-  modelFast,
   modelReasoningEffort,
   indicatorStyle = 'kaomoji',
   usage,
@@ -403,7 +402,7 @@ export function StatusRule({
       : ''
 
   const bar = !segs.compactCtx && usage.context_max ? ctxBar(pct) : ''
-  const modelText = modelLabel(model, modelReasoningEffort, modelFast)
+  const modelText = modelLabel(model, modelReasoningEffort)
 
   // Width of the must-keep left segments (indicator + model + context). They
   // are pinned (never shrink) and reserved so the cwd/branch on the right
@@ -661,7 +660,6 @@ interface StatusRuleProps {
   cols: number
   cwdLabel: string
   model: string
-  modelFast?: boolean
   modelReasoningEffort?: string
   indicatorStyle?: IndicatorStyle
   sessionStartedAt?: null | number
