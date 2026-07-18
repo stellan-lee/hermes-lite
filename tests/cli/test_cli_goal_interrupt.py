@@ -176,7 +176,8 @@ class TestHealthyTurnStillRuns:
         # Continuation prompt must be queued.
         assert not cli._pending_input.empty()
         queued = cli._pending_input.get_nowait()
-        assert "Continuing toward your standing goal" in queued
+        assert "Continuing toward your standing goal" in queued.text
+        assert queued.raw_user_message is None
         assert mgr.state.status == "active"
 
     def test_clean_response_marks_done_when_judge_says_done(self, hermes_home):
