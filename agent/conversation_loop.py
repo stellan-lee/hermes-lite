@@ -30,8 +30,17 @@ from typing import Any, Dict, List, Optional
 from agent.codex_responses_adapter import _summarize_user_message_for_log
 from agent.display import KawaiiSpinner
 from agent.error_classifier import FailoverReason, classify_api_error
+from agent.experience.runtime import (
+    TurnOrigin,
+    _EXPERIENCE_TARGET_KEY,
+    locate_and_clear_experience_target,
+    normalize_turn_origin,
+)
 from agent.iteration_budget import IterationBudget
-from agent.memory_manager import build_memory_context_block
+from agent.memory_manager import (
+    build_memory_context_block,
+    scrub_internal_context_payload,
+)
 from agent.memory_prefetch import short_hash
 from agent.memory_recall_merge import merge_recall_results
 from agent.memory_recall_query import build_recall_query_plan
@@ -447,6 +456,8 @@ def run_conversation(
     task_id: str = None,
     stream_callback: Optional[callable] = None,
     persist_user_message: Optional[str] = None,
+    raw_user_message: Optional[str] = None,
+    turn_origin: TurnOrigin | str | None = None,
 ) -> Dict[str, Any]:
     """
     Run a complete conversation with tool calling until completion.
@@ -463,6 +474,12 @@ def run_conversation(
             transcripts/history when user_message contains API-only
             synthetic prefixes.
                 or queuing follow-up prefetch work.
+        raw_user_message: Exact user-authored request text captured before
+            attachment, context-reference, voice, or system-note expansion.
+            This is a separate trust boundary and never aliases
+            ``persist_user_message``.
+        turn_origin: Explicit frontend/runtime identity. Unknown callers are
+            ineligible for Work Experience reads.
 
     Returns:
         Dict: Complete conversation result with final response and message history
@@ -514,6 +531,14 @@ def run_conversation(
         user_message = _sanitize_surrogates(user_message)
     if isinstance(persist_user_message, str):
         persist_user_message = _sanitize_surrogates(persist_user_message)
+    if isinstance(raw_user_message, str):
+        raw_user_message = _sanitize_surrogates(raw_user_message)
+    else:
+        raw_user_message = None
+    turn_origin = normalize_turn_origin(turn_origin)
+    # Never carry a prior turn's retrieval into this invocation. Unsupported
+    # origins and disabled modes leave this as None without opening the store.
+    agent._experience_turn = None
 
     # Store stream callback for _interruptible_api_call to pick up
     agent._stream_callback = stream_callback
@@ -964,6 +989,24 @@ def run_conversation(
             should_review_memory=_should_review_memory,
         )
 
+    # Work Experience retrieval is local and once-per-turn. The adapter checks
+    # origin, raw-input availability, global mode, project policy, and scope in
+    # that order; any failure leaves the user's normal task path untouched.
+    try:
+        from agent.experience.runtime import prepare_experience_turn
+
+        agent._experience_turn = prepare_experience_turn(
+            agent,
+            raw_user_message=raw_user_message,
+            turn_origin=turn_origin,
+        )
+    except Exception as _experience_error:
+        logger.info(
+            "Work Experience preparation failed safely: error_type=%s",
+            type(_experience_error).__name__,
+        )
+        agent._experience_turn = None
+
     while (api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
         # Reset per-turn checkpoint dedup so each iteration can take one snapshot
         agent._checkpoint_mgr.new_turn()
@@ -1109,8 +1152,11 @@ def run_conversation(
             )
 
         api_messages = []
+        _experience_turn_marker = f"turn-{uuid.uuid4().hex}"
         for idx, msg in enumerate(messages):
             api_msg = msg.copy()
+            if idx == current_turn_user_idx and msg.get("role") == "user":
+                api_msg[_EXPERIENCE_TARGET_KEY] = _experience_turn_marker
 
             # Inject ephemeral context into the current turn's user message.
             # Sources: memory manager prefetch + plugin pre_llm_call hooks
@@ -1209,6 +1255,16 @@ def run_conversation(
         # stored conversation history keeps the reasoning block for the
         # UI transcript and session persistence.
         api_messages = agent._drop_thinking_only_and_merge_users(api_messages)
+
+        # Resolve the current turn after cache-control deep copies and other
+        # API-only transforms. The private marker is removed unconditionally
+        # before provider serialization. If sanitization merged or duplicated
+        # the marked message, fail closed rather than attach experience to the
+        # wrong turn.
+        _experience_user_api_index = locate_and_clear_experience_target(
+            api_messages,
+            marker=_experience_turn_marker,
+        )
 
         # Normalize message whitespace and tool-call JSON for consistent
         # prefix matching.  Ensures bit-perfect prefixes across turns,
@@ -1376,6 +1432,33 @@ def run_conversation(
 
             try:
                 agent._reset_stream_delivery_tracking()
+                # Rebuild the wire-only copy for EVERY retry. Provider fallback
+                # can change both trust domain and locality mid-turn, so a block
+                # authorized for the primary must never be reused blindly.
+                request_api_messages = api_messages
+                _experience_context = None
+                _experience_turn = getattr(agent, "_experience_turn", None)
+                if _experience_turn is not None:
+                    try:
+                        from agent.experience.runtime import (
+                            copy_messages_with_experience_context,
+                        )
+
+                        _experience_context = _experience_turn.context_for_request(
+                            provider=getattr(agent, "provider", None),
+                            base_url=getattr(agent, "base_url", None),
+                        )
+                        request_api_messages = copy_messages_with_experience_context(
+                            api_messages,
+                            current_user_index=_experience_user_api_index,
+                            context=_experience_context,
+                        )
+                    except Exception as _experience_error:
+                        logger.info(
+                            "Work Experience request context omitted safely: error_type=%s",
+                            type(_experience_error).__name__,
+                        )
+                        request_api_messages = api_messages
                 # api_messages is built once, before this retry loop, while the
                 # primary provider is active.  A mid-conversation fallback can
                 # switch to a require-side provider (DeepSeek / Kimi / MiMo) that
@@ -1383,8 +1466,8 @@ def run_conversation(
                 # echo-back pad for the *current* provider here (idempotent no-op
                 # unless the active provider needs it) so the fallback request
                 # isn't sent with stale, primary-shaped reasoning fields.
-                agent._reapply_reasoning_echo_for_provider(api_messages)
-                api_kwargs = agent._build_api_kwargs(api_messages)
+                agent._reapply_reasoning_echo_for_provider(request_api_messages)
+                api_kwargs = agent._build_api_kwargs(request_api_messages)
                 if agent._force_ascii_payload:
                     _sanitize_structure_non_ascii(api_kwargs)
                 if agent.api_mode == "codex_responses":
@@ -1396,7 +1479,7 @@ def run_conversation(
                     if not isinstance(request_messages, list):
                         request_messages = api_kwargs.get("input")
                     if not isinstance(request_messages, list):
-                        request_messages = api_messages
+                        request_messages = request_api_messages
                     # Shallow-copy the outer list so plugins that retain the
                     # reference for async snapshotting don't observe later
                     # mutations of api_messages.  The inner dicts are not
@@ -1415,8 +1498,12 @@ def run_conversation(
                         base_url=agent.base_url,
                         api_mode=agent.api_mode,
                         api_call_count=api_call_count,
-                        request_messages=list(request_messages) if isinstance(request_messages, list) else [],
-                        message_count=len(api_messages),
+                        request_messages=(
+                            scrub_internal_context_payload(request_messages)
+                            if isinstance(request_messages, list)
+                            else []
+                        ),
+                        message_count=len(request_api_messages),
                         tool_count=len(agent.tools or []),
                         approx_input_tokens=approx_tokens,
                         request_char_count=total_chars,
@@ -1517,6 +1604,10 @@ def run_conversation(
                                     else str(_codex_error_obj) if _codex_error_obj
                                     else f"Responses API returned status '{_codex_resp_status}'"
                                 )
+                                _codex_error_msg = agent._sanitize_api_error_text(
+                                    _codex_error_msg,
+                                    fallback="<provider details omitted>",
+                                )
                                 logger.warning(
                                     "Codex response status='%s' (error=%s). Routing to fallback. %s",
                                     _codex_resp_status, _codex_error_msg,
@@ -1541,7 +1632,8 @@ def run_conversation(
                                     logger.warning(
                                         "Codex response.output is empty after stream backfill "
                                         "(status=%s, incomplete_details=%s, model=%s). %s",
-                                        _resp_status, _resp_incomplete,
+                                        agent._sanitize_api_error_text(_resp_status),
+                                        agent._sanitize_api_error_text(_resp_incomplete),
                                         getattr(response, "model", None),
                                         f"api_mode={agent.api_mode} provider={agent.provider}",
                                     )
@@ -1604,21 +1696,37 @@ def run_conversation(
                     error_msg = "Unknown"
                     provider_name = "Unknown"
                     if response and hasattr(response, 'error') and response.error:
-                        error_msg = str(response.error)
+                        error_msg = agent._sanitize_api_error_text(
+                            response.error,
+                            fallback="<provider details omitted>",
+                        )
                         # Try to extract provider from error metadata
                         if hasattr(response.error, 'metadata') and response.error.metadata:
-                            provider_name = response.error.metadata.get('provider_name', 'Unknown')
+                            provider_name = agent._sanitize_api_error_text(
+                                response.error.metadata.get('provider_name', 'Unknown'),
+                                fallback="Unknown",
+                            )
                     elif response and hasattr(response, 'message') and response.message:
-                        error_msg = str(response.message)
+                        error_msg = agent._sanitize_api_error_text(
+                            response.message,
+                            fallback="<provider details omitted>",
+                        )
                     
                     # Try to get provider from model field (OpenRouter often returns actual model used)
                     if provider_name == "Unknown" and response and hasattr(response, 'model') and response.model:
-                        provider_name = f"model={response.model}"
+                        provider_name = agent._sanitize_api_error_text(
+                            f"model={response.model}",
+                            fallback="model=unknown",
+                        )
                     
                     # Check for x-openrouter-provider or similar metadata
                     if provider_name == "Unknown" and response:
                         # Log all response attributes for debugging
-                        resp_attrs = {k: str(v)[:100] for k, v in vars(response).items() if not k.startswith('_')}
+                        resp_attrs = {
+                            k: agent._sanitize_api_error_text(v)[:100]
+                            for k, v in vars(response).items()
+                            if not k.startswith('_')
+                        }
                         if agent.verbose_logging:
                             logging.debug(f"Response attributes for invalid response: {resp_attrs}")
                     
@@ -2598,7 +2706,10 @@ def run_conversation(
                     try:
                         _body = getattr(api_error, "body", None) or getattr(api_error, "response", None)
                         if _body is not None:
-                            _body_text = str(_body)[:200]
+                            _body_text = agent._sanitize_api_error_text(
+                                _body,
+                                fallback="<provider details omitted>",
+                            )[:200]
                     except Exception:
                         pass
                     print(f"{agent.log_prefix}🔐 Nous 401 — Portal authentication failed.")
@@ -2799,7 +2910,14 @@ def run_conversation(
                 agent._buffer_vprint(f"   📝 Error: {_error_summary}")
                 if status_code and status_code < 500:
                     _err_body = getattr(api_error, "body", None)
-                    _err_body_str = str(_err_body)[:300] if _err_body else None
+                    _err_body_str = (
+                        agent._sanitize_api_error_text(
+                            _err_body,
+                            fallback="<provider details omitted>",
+                        )[:300]
+                        if _err_body
+                        else None
+                    )
                     if _err_body_str:
                         agent._buffer_vprint(f"   📋 Details: {_err_body_str}")
                 agent._buffer_vprint(f"   ⏱️  Elapsed: {elapsed_time:.2f}s  Context: {len(api_messages)} msgs, ~{approx_tokens:,} tokens")
@@ -2832,7 +2950,7 @@ def run_conversation(
                     agent._persist_session(messages, conversation_history)
                     agent.clear_interrupt()
                     return {
-                        "final_response": f"Operation interrupted: handling API error ({error_type}: {agent._clean_error_message(str(api_error))}).",
+                        "final_response": f"Operation interrupted: handling API error ({error_type}: {agent._clean_error_message(_error_summary)}).",
                         "messages": messages,
                         "api_calls": api_call_count,
                         "completed": False,
@@ -3417,7 +3535,11 @@ def run_conversation(
                             f"{agent.log_prefix}        hermes fallback add   (interactive picker — same as `hermes model`)",
                             force=True,
                         )
-                    logger.error(f"{agent.log_prefix}Non-retryable client error: {api_error}")
+                    logger.error(
+                        "%sNon-retryable client error: %s",
+                        agent.log_prefix,
+                        _error_summary,
+                    )
                     # Skip session persistence when the error is likely
                     # context-overflow related (status 400 + large session).
                     # Persisting the failed user message would make the
@@ -3454,7 +3576,7 @@ def run_conversation(
                         "api_calls": api_call_count,
                         "completed": False,
                         "failed": True,
-                        "error": str(api_error),
+                        "error": _error_summary,
                     }
 
                 if retry_count >= max_retries:
@@ -3586,7 +3708,7 @@ def run_conversation(
                     retry_count,
                     max_retries,
                     agent._client_log_context(),
-                    api_error,
+                    _error_summary,
                 )
                 # Sleep in small increments so we can respond to interrupts quickly
                 # instead of blocking the entire wait_time in one sleep() call
@@ -3684,6 +3806,75 @@ def run_conversation(
                 else:
                     assistant_message.content = str(raw)
 
+            # A provider may echo internal memory/experience context. Remove
+            # exact fenced spans before any plugin, UI, trajectory, history,
+            # or session-persistence boundary. This mutates only the normalized
+            # response, never the raw provider response used for transport
+            # bookkeeping. Protocol-specific values live in ``provider_data``;
+            # replacing that dict also covers reasoning summaries and Codex
+            # message items without assigning to their read-only compatibility
+            # properties. Opaque signatures/encrypted blobs remain byte-for-byte
+            # unchanged unless they themselves contain an internal plaintext
+            # fence.
+            _response_internal_context_scrubbed = False
+            if isinstance(assistant_message.content, str):
+                _original_content = assistant_message.content
+                assistant_message.content = scrub_internal_context_payload(
+                    _original_content
+                )
+                if assistant_message.content != _original_content:
+                    _response_internal_context_scrubbed = True
+            if isinstance(getattr(assistant_message, "reasoning", None), str):
+                _original_reasoning = assistant_message.reasoning
+                assistant_message.reasoning = scrub_internal_context_payload(
+                    _original_reasoning
+                )
+                if assistant_message.reasoning != _original_reasoning:
+                    _response_internal_context_scrubbed = True
+            _provider_data = getattr(assistant_message, "provider_data", None)
+            if isinstance(_provider_data, dict):
+                _safe_provider_data = scrub_internal_context_payload(
+                    _provider_data
+                )
+                assistant_message.provider_data = _safe_provider_data
+                if _safe_provider_data != _provider_data:
+                    _response_internal_context_scrubbed = True
+            for _tool_call in getattr(assistant_message, "tool_calls", None) or ():
+                _tool_provider_data = getattr(_tool_call, "provider_data", None)
+                if isinstance(_tool_provider_data, dict):
+                    _safe_tool_provider_data = scrub_internal_context_payload(
+                        _tool_provider_data
+                    )
+                    _tool_call.provider_data = _safe_tool_provider_data
+                    if _safe_tool_provider_data != _tool_provider_data:
+                        _response_internal_context_scrubbed = True
+                _arguments = getattr(_tool_call, "arguments", None)
+                if not isinstance(_arguments, str) or "<" not in _arguments:
+                    continue
+                _arguments_internal_context_scrubbed = False
+                try:
+                    _parsed_arguments = json.loads(_arguments)
+                except (TypeError, ValueError):
+                    _safe_arguments = scrub_internal_context_payload(_arguments)
+                    _arguments_internal_context_scrubbed = (
+                        _safe_arguments != _arguments
+                    )
+                else:
+                    _safe_parsed_arguments = scrub_internal_context_payload(
+                        _parsed_arguments
+                    )
+                    _arguments_internal_context_scrubbed = (
+                        _safe_parsed_arguments != _parsed_arguments
+                    )
+                    _safe_arguments = json.dumps(
+                        _safe_parsed_arguments,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                _tool_call.arguments = _safe_arguments
+                if _arguments_internal_context_scrubbed:
+                    _response_internal_context_scrubbed = True
+
             try:
                 from hermes_cli.plugins import invoke_hook as _invoke_hook
                 _assistant_tool_calls = getattr(assistant_message, "tool_calls", None) or []
@@ -3702,7 +3893,13 @@ def run_conversation(
                     finish_reason=finish_reason,
                     message_count=len(api_messages),
                     response_model=getattr(response, "model", None),
-                    response=response,
+                    # Preserve the long-standing raw-response hook contract on
+                    # ordinary turns. If normalization actually removed an
+                    # echoed internal block, withhold the raw object because it
+                    # still contains the pre-scrubbed copy.
+                    response=(
+                        None if _response_internal_context_scrubbed else response
+                    ),
                     usage=agent._usage_summary_for_api_request_hook(response),
                     assistant_message=assistant_message,
                     assistant_content_chars=len(_assistant_text),
@@ -4501,19 +4698,30 @@ def run_conversation(
                 break
             
         except Exception as e:
-            error_msg = f"Error during OpenAI-compatible API call #{api_call_count}: {str(e)}"
+            _safe_outer_error = agent._sanitize_api_error_text(
+                e,
+                fallback=f"{type(e).__name__}: <details omitted>",
+            )
+            error_msg = (
+                f"Error during OpenAI-compatible API call #{api_call_count}: "
+                f"{_safe_outer_error}"
+            )
             try:
                 print(f"❌ {error_msg}")
             except (OSError, ValueError):
                 logger.error(error_msg)
 
-            # Emit the full traceback at ERROR level so it lands in both
-            # agent.log AND errors.log.  Previously this was logged at DEBUG,
-            # which meant intermittent outer-loop failures were unreproducible
-            # — users would see a one-line summary on screen with no way to
-            # recover the call site.  logger.exception() includes the
-            # traceback automatically and emits at ERROR.
-            logger.exception("Outer loop error in API call #%d", api_call_count)
+            # Keep the traceback breadcrumb without letting logging format the
+            # raw exception after this boundary. Provider exceptions can echo
+            # wire-only memory/experience context in ``str(exc)``; an ordinary
+            # ``logger.exception`` would persist that text verbatim.
+            from agent.agent_runtime_helpers import format_exception_traceback_for_log
+
+            logger.error(
+                "Outer loop error in API call #%d\n%s",
+                api_call_count,
+                format_exception_traceback_for_log(e),
+            )
             
             # If an assistant message with tool_calls was already appended,
             # the API expects a role="tool" result for every tool_call_id.

@@ -7,6 +7,7 @@ from queue import Queue
 import subprocess
 from unittest.mock import patch
 
+import cli as cli_module
 from cli import HermesCLI
 from hermes_cli.browser_connect import (
     get_chrome_debug_candidates,
@@ -244,7 +245,10 @@ class TestChromeDebugLaunch:
              redirect_stdout(StringIO()):
             cli._handle_browser_command("/browser connect")
 
-        note = cli._pending_input.get_nowait()
+        queued = cli._pending_input.get_nowait()
+        note = queued.text
+        assert queued.raw_user_message is None
+        assert cli_module._resolve_raw_user_message(queued.text, None) is None
         assert "Chromium-family" in note
         assert "dev/debug" in note
         assert "using browser tools for their current browser-related request is expected" in note

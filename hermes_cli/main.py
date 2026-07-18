@@ -10286,6 +10286,7 @@ def _coalesce_session_name_args(argv: list) -> list:
         "acp",
         "webhook",
         "memory",
+        "experience",
         "dump",
         "debug",
         "backup",
@@ -11136,7 +11137,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "computer-use",
         "config", "cron", "curator", "dashboard", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
-        "journey", "learning", "memory-graph",
+        "experience", "journey", "learning", "memory-graph",
         "login", "logout", "logs", "lsp", "mcp", "memory", "migrate",
         "model", "pairing", "plugins", "portal", "postinstall", "profile", "proxy",
         "prompt-size",
@@ -13219,6 +13220,21 @@ Examples:
         _register_journey_cli(journey_parser)
     except Exception as _exc:
         logging.getLogger(__name__).debug("journey CLI wiring failed: %s", _exc)
+
+    # =========================================================================
+    # experience command — user governance for durable work experience
+    # =========================================================================
+    experience_parser = subparsers.add_parser(
+        "experience",
+        help="Inspect and govern durable work experience",
+        description=(
+            "Manage project-scoped Work Experience lessons and recall policy. "
+            "Policies are stored in the active profile's state.db."
+        ),
+    )
+    from hermes_cli.experience import register_cli as _register_experience_cli
+
+    _register_experience_cli(experience_parser)
 
     # =========================================================================
     # memory command
