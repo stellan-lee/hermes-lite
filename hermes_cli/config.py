@@ -1696,6 +1696,24 @@ DEFAULT_CONFIG = {
         "guard_agent_created": False,
     },
 
+    # Work Experience — durable, user-governed lessons from completed work.
+    #
+    # These settings are global availability/tuning defaults only. They do
+    # not authorize storage, retrieval, or provider egress for a repository.
+    # An explicit project policy in the profile-local state.db is required;
+    # the database policy is the canonical consent and scope boundary.
+    "experience": {
+        "mode": "off",  # off | capture | shadow | assist
+        "max_retrieved_items": 3,
+        "max_injected_chars": 1500,
+        "min_retrieval_confidence": 0.55,
+        "default_scope": "project",
+        "default_egress": "local_only",
+        # Automatic retrospectives are intentionally deferred in the MVP.
+        "reflection_enabled": False,
+        "gateway_capture": False,
+    },
+
     # Curator — background skill maintenance.
     #
     # Periodically reviews AGENT-CREATED skills (never bundled or
