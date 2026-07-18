@@ -14,14 +14,12 @@ Hermes Lite includes only:
 - `AIAgent` and its synchronous OpenAI-compatible tool loop;
 - local SQLite sessions;
 - read, write, exact-patch, search, and confirmed terminal tools;
-- the five-section YAML configuration;
-- the pre-cleanup OpenAI Codex Responses/app-server modules and fixed Codex
-  provider profile as an isolated compatibility exception.
+- the five-section YAML configuration.
 
-Do not add bundled skills, general plugin discovery, MCP, memory providers,
-messaging connectors, servers, dashboards, schedulers, other proprietary model
-protocols, or hosted account integrations. A proposal to expand this boundary
-requires an approved engineering design document.
+Do not add bundled skills, plugins, MCP, memory providers, messaging
+connectors, servers, dashboards, schedulers, proprietary model protocols, or
+hosted account integrations. A proposal to expand this boundary requires an
+approved engineering design document.
 
 ## Architecture
 
@@ -31,12 +29,6 @@ hermes_cli/main.py -> cli.py -> run_agent.py -> model_tools.py
                                 OpenAI client     tools/registry.py
 cli.py -> hermes_cli/config.py
 cli.py -> hermes_state.py
-
-retained Codex compatibility:
-agent/codex_responses_adapter.py -> agent/transports/codex.py
-agent/transports/codex_app_server.py -> agent/transports/codex_app_server_session.py
-hermes_cli/codex_models.py
-hermes_cli/codex_runtime_switch.py
 ```
 
 - `hermes_cli/config.py` is the only config schema and loader.
@@ -71,8 +63,6 @@ and user-facing behavior as a separate step.
 - Keep terminal execution non-shell, confirmed by default, time-bounded, and
   environment-limited.
 - Preserve the `AIAgent.chat()` and `AIAgent.run_conversation()` entry points.
-- Keep the retained Codex registry fixed to `openai-codex`; do not restore
-  arbitrary provider or user-plugin discovery.
 - Do not add a migration for a feature that is outside the product boundary.
 
 ## Validation

@@ -1,10 +1,9 @@
 # Hermes Lite
 
 Hermes Lite is a small local coding agent for OpenAI-compatible models. It is
-the CLI and agent loop without bundled skills, general plugin discovery, MCP,
-memory providers, messaging connectors, dashboards, schedulers, media
-generation, or hosted account services. The original OpenAI Codex-specific
-modules are retained as a narrow exception.
+the CLI and agent loop without bundled skills, plugins, MCP, memory providers,
+messaging connectors, dashboards, schedulers, media generation, or hosted
+account services.
 
 ## What remains
 
@@ -13,14 +12,8 @@ modules are retained as a narrow exception.
 - Local SQLite conversation sessions
 - Five explicit tools: `read_file`, `write_file`, `patch`, `search_files`, and
   `terminal`
-- The original Codex Responses adapter, app-server client/session, model
-  discovery, runtime switch, and fixed `openai-codex` provider profile
-- One YAML config and three direct runtime dependencies
+- One YAML config and two runtime dependencies
 - The `AIAgent.chat()` and `AIAgent.run_conversation()` Python API
-
-The default CLI continues to use the compact chat-completions loop. The
-restored Codex modules remain importable for existing Codex integrations; no
-other provider catalog or extension framework is restored.
 
 ## Install
 
@@ -177,12 +170,11 @@ The complete cleanup rationale and success criteria are recorded in
 
 ## Deliberately removed
 
-Hermes Lite does not contain compatibility shims for upstream skills, general
-plugins, MCP servers, memory engines, gateways, messaging platforms, browser
-control, computer use, voice/image/video generation, cron jobs, ACP,
-dashboard/TUI bridges, provider catalogs other than the fixed OpenAI Codex
-profile, or Nous account and portal integrations. Use the full upstream Hermes
-Agent project if those are required.
+Hermes Lite does not contain compatibility shims for upstream skills, plugins,
+MCP servers, memory engines, gateways, messaging platforms, browser control,
+computer use, voice/image/video generation, cron jobs, ACP, dashboard/TUI
+bridges, provider catalogs, or Nous account and portal integrations. Use the
+full upstream Hermes Agent project if those are required.
 
 ## License
 
