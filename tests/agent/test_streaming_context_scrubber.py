@@ -6,7 +6,11 @@ regex can't survive chunk boundaries, so _fire_stream_delta routes deltas
 through a stateful scrubber.
 """
 
-from agent.memory_manager import StreamingContextScrubber, sanitize_context
+from agent.memory_manager import (
+    StreamingContextScrubber,
+    sanitize_context,
+    scrub_internal_context_payload,
+)
 
 
 class TestStreamingContextScrubberBasics:
@@ -101,6 +105,19 @@ class TestStreamingContextScrubberBasics:
         assert out == "pre \n post"
         assert "leak" not in out
 
+    def test_fragmented_work_experience_block_is_stripped(self):
+        s = StreamingContextScrubber()
+        deltas = [
+            "Visible intro\n<work-experience",
+            "-context>\nprivate lesson guidance",
+            "</work-experience-context>\nVisible answer",
+        ]
+
+        out = "".join(s.feed(delta) for delta in deltas) + s.flush()
+
+        assert out == "Visible intro\n\nVisible answer"
+        assert "private lesson" not in out
+
 
 class TestStreamingContextScrubberPartialTagFalsePositives:
     def test_partial_open_tag_tail_emitted_on_flush(self):
@@ -186,6 +203,43 @@ class TestSanitizeContextUnchanged:
         )
         out = sanitize_context(leaked).strip()
         assert out == "Visible"
+
+    def test_work_experience_block_with_metadata_is_sanitized(self):
+        leaked = (
+            "<work-experience-context retrieval_id=\"retrieval-1\">\n"
+            "private lesson guidance\n"
+            "</work-experience-context>\nVisible"
+        )
+
+        out = sanitize_context(leaked).strip()
+
+        assert out == "Visible"
+
+    def test_nested_hook_or_debug_payload_is_scrubbed_without_mutating_source(self):
+        source = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "question\n<work-experience-context>private lesson"
+                        "</work-experience-context>"
+                    ),
+                }
+            ]
+        }
+
+        scrubbed = scrub_internal_context_payload(source)
+
+        assert "private lesson" not in scrubbed["messages"][0]["content"]
+        assert "private lesson" in source["messages"][0]["content"]
+
+    def test_unclosed_work_experience_echo_is_dropped_to_end(self):
+        echoed = (
+            "Visible answer\n<work-experience-context>"
+            "private lesson without a closing tag"
+        )
+
+        assert sanitize_context(echoed).strip() == "Visible answer"
 
 
 class TestStreamingContextScrubberCrossTurn:

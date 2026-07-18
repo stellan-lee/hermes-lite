@@ -76,15 +76,43 @@ except Exception:
 import threading
 import queue
 
+_RAW_USER_MESSAGE_UNSET = object()
 
-class _PendingProcessNotification:
-    """Queue item that keeps a durable completion id attached to its turn."""
 
-    __slots__ = ("text", "delegation_id")
+def _resolve_raw_user_message(message, raw_user_message):
+    """Distinguish omitted provenance from an explicit synthetic ``None``."""
+
+    if raw_user_message is _RAW_USER_MESSAGE_UNSET:
+        return message if isinstance(message, str) else None
+    return raw_user_message if isinstance(raw_user_message, str) else None
+
+
+class _PendingCLIInput:
+    """Queue item with explicit user-authored provenance for experience recall."""
+
+    __slots__ = ("text", "raw_user_message", "delegation_id")
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        raw_user_message: str | None,
+        delegation_id: str = "",
+    ):
+        self.text = text
+        self.raw_user_message = raw_user_message
+        self.delegation_id = delegation_id
+
+
+class _PendingProcessNotification(_PendingCLIInput):
+    """Synthetic process event with a durable completion id."""
 
     def __init__(self, text: str, delegation_id: str = ""):
-        self.text = text
-        self.delegation_id = delegation_id
+        super().__init__(
+            text,
+            raw_user_message=None,
+            delegation_id=delegation_id,
+        )
 
 
 def _queue_cli_process_notifications(
@@ -121,7 +149,7 @@ def _queue_cli_process_notifications(
                 )
             )
         else:
-            pending_input.put(synth)
+            pending_input.put(_PendingProcessNotification(synth))
         queued += 1
     return queued
 
@@ -7972,7 +8000,12 @@ class HermesCLI:
         parts = cmd.strip().split(None, 1)
         user_request = parts[1] if len(parts) > 1 else ""
         self._console_print("  Learning from your description…")
-        self._pending_input.put(build_learn_prompt(user_request))
+        self._pending_input.put(
+            _PendingCLIInput(
+                build_learn_prompt(user_request),
+                raw_user_message=user_request or None,
+            )
+        )
 
     def _show_gateway_status(self):
         """Show status of the gateway and connected messaging platforms."""
@@ -8490,7 +8523,12 @@ class HermesCLI:
                     skill_name = skill_commands[base_cmd]["name"]
                     print(f"\n⚡ Loading skill: {skill_name}")
                     if hasattr(self, '_pending_input'):
-                        self._pending_input.put(msg)
+                        self._pending_input.put(
+                            _PendingCLIInput(
+                                msg,
+                                raw_user_message=user_instruction or None,
+                            )
+                        )
                 else:
                     ChatConsole().print(f"[bold red]Failed to load skill for {base_cmd}[/]")
             else:
@@ -8606,6 +8644,8 @@ class HermesCLI:
                 result = bg_agent.run_conversation(
                     user_message=prompt,
                     task_id=task_id,
+                    raw_user_message=prompt,
+                    turn_origin="cli_background",
                 )
 
                 response = result.get("final_response", "") if result else ""
@@ -8801,15 +8841,18 @@ class HermesCLI:
             # intentionally makes the dev/debug CDP browser available for use.
             if hasattr(self, '_pending_input'):
                 self._pending_input.put(
-                    "[System note: The user invoked /browser connect and connected your browser tools to "
-                    "a Chromium-family dev/debug browser via Chrome DevTools Protocol. "
-                    "Your browser_navigate, browser_snapshot, browser_click, and other browser tools now "
-                    "control that CDP browser. The command itself is a signal that using browser tools for "
-                    "their current browser-related request is expected; do not wait for separate permission "
-                    "just because CDP is connected. This is typically a Hermes-managed isolated debug "
-                    "profile, not the user's main everyday browser. It is still user-visible and may contain "
-                    "pages, logged-in sessions, or cookies in that debug profile, so avoid destructive actions, "
-                    "closing tabs, or navigating away unless the user's task calls for it.]"
+                    _PendingCLIInput(
+                        "[System note: The user invoked /browser connect and connected your browser tools to "
+                        "a Chromium-family dev/debug browser via Chrome DevTools Protocol. "
+                        "Your browser_navigate, browser_snapshot, browser_click, and other browser tools now "
+                        "control that CDP browser. The command itself is a signal that using browser tools for "
+                        "their current browser-related request is expected; do not wait for separate permission "
+                        "just because CDP is connected. This is typically a Hermes-managed isolated debug "
+                        "profile, not the user's main everyday browser. It is still user-visible and may contain "
+                        "pages, logged-in sessions, or cookies in that debug profile, so avoid destructive actions, "
+                        "closing tabs, or navigating away unless the user's task calls for it.]",
+                        raw_user_message=None,
+                    )
                 )
 
         elif sub == "disconnect":
@@ -8828,8 +8871,11 @@ class HermesCLI:
 
                 if hasattr(self, '_pending_input'):
                     self._pending_input.put(
-                        "[System note: The user has disconnected the browser tools from their live Chromium-family browser. "
-                        "Browser tools are back to the local headless browser.]"
+                        _PendingCLIInput(
+                            "[System note: The user has disconnected the browser tools from their live Chromium-family browser. "
+                            "Browser tools are back to the local headless browser.]",
+                            raw_user_message=None,
+                        )
                     )
             else:
                 print()
@@ -9174,7 +9220,9 @@ class HermesCLI:
             prompt = decision.get("continuation_prompt")
             if prompt:
                 try:
-                    self._pending_input.put(prompt)
+                    self._pending_input.put(
+                        _PendingCLIInput(prompt, raw_user_message=None)
+                    )
                 except Exception as exc:
                     logging.debug("goal continuation enqueue failed: %s", exc)
 
@@ -11272,7 +11320,13 @@ class HermesCLI:
             except Exception:
                 pass
 
-    def chat(self, message, images: list = None) -> Optional[str]:
+    def chat(
+        self,
+        message,
+        images: list = None,
+        *,
+        raw_user_message=_RAW_USER_MESSAGE_UNSET,
+    ) -> Optional[str]:
         """
         Send a message to the agent and get a response.
         
@@ -11291,6 +11345,12 @@ class HermesCLI:
         Returns:
             The agent's response, or None on error
         """
+        # Snapshot user-authored text before native image conversion, vision
+        # enrichment, @ reference expansion, voice prefixes, or queued notes.
+        # Work Experience must not infer this boundary from the later
+        # persisted/synthetic message.
+        raw_user_message = _resolve_raw_user_message(message, raw_user_message)
+
         # Single-query and direct chat callers do not go through run(), so
         # register secure secret capture here as well.
         set_secret_capture_callback(self._secret_capture_callback)
@@ -11548,6 +11608,8 @@ class HermesCLI:
                         stream_callback=stream_callback,
                         task_id=self.session_id,
                         persist_user_message=message if _voice_prefix else None,
+                        raw_user_message=raw_user_message,
+                        turn_origin="classic_cli",
                     )
                 except Exception as exc:
                     logging.error("run_conversation raised: %s", exc, exc_info=True)
@@ -14148,11 +14210,17 @@ class HermesCLI:
                     # post-resize transient suppression should end here.
                     self._status_bar_suppressed_after_resize = False
 
-                    # Unpack image payload: (text, [Path, ...]) or plain str
+                    # Unpack queue provenance, then image payload. Synthetic
+                    # notes and continuations carry raw_user_message=None and
+                    # therefore cannot trigger Work Experience recall.
                     submit_images = []
                     durable_completion_id = ""
-                    if isinstance(user_input, _PendingProcessNotification):
+                    raw_user_input_override = None
+                    has_raw_user_input_override = False
+                    if isinstance(user_input, _PendingCLIInput):
                         durable_completion_id = user_input.delegation_id
+                        raw_user_input_override = user_input.raw_user_message
+                        has_raw_user_input_override = True
                         user_input = user_input.text
                     if isinstance(user_input, tuple):
                         user_input, submit_images = user_input
@@ -14162,6 +14230,15 @@ class HermesCLI:
                         user_input, _had_mouse_reports = _strip_leaked_terminal_responses_with_meta(user_input)
                         if _had_mouse_reports:
                             self._recover_terminal_input_modes(reason="mouse reports leaked into submitted input")
+
+                    # Preserve exactly what the user submitted before file-drop
+                    # handling and paste-reference expansion add attachment
+                    # content. `chat()` receives the expanded request separately.
+                    raw_user_input = (
+                        raw_user_input_override
+                        if has_raw_user_input_override
+                        else (user_input if isinstance(user_input, str) else None)
+                    )
                     
                     # Check for commands — but detect dragged/pasted file paths first.
                     # See _detect_file_drop() for details.
@@ -14232,7 +14309,11 @@ class HermesCLI:
                     app.invalidate()  # Refresh status line
 
                     try:
-                        self.chat(user_input, images=submit_images or None)
+                        self.chat(
+                            user_input,
+                            images=submit_images or None,
+                            raw_user_message=raw_user_input,
+                        )
                         _acknowledge_completion_after_turn(
                             durable_completion_id,
                             bool(getattr(self, "_last_chat_turn_succeeded", False)),
@@ -14837,6 +14918,8 @@ def main(
                     result = cli.agent.run_conversation(
                         user_message=effective_query,
                         conversation_history=cli.conversation_history,
+                        raw_user_message=query if isinstance(query, str) else None,
+                        turn_origin="classic_cli",
                     )
                     # Sync session_id if mid-run compression created a
                     # continuation session. The exit line below reports

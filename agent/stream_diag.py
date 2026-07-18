@@ -17,6 +17,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from agent.agent_runtime_helpers import sanitize_api_error_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,7 +108,7 @@ def flatten_exception_chain(error: BaseException) -> str:
         link = nxt
     parts: List[str] = []
     for e in seen:
-        msg = str(e).strip().replace("\n", " ")
+        msg = sanitize_api_error_text(e).strip().replace("\n", " ")
         if len(msg) > 140:
             msg = msg[:140] + "…"
         parts.append(f"{type(e).__name__}({msg})" if msg else type(e).__name__)
@@ -141,7 +143,10 @@ def log_stream_retry(
         try:
             _summary = agent._summarize_api_error(error)
         except Exception:
-            _summary = str(error)
+            _summary = sanitize_api_error_text(
+                error,
+                fallback=type(error).__name__,
+            )
         if _summary and len(_summary) > 240:
             _summary = _summary[:240] + "…"
 

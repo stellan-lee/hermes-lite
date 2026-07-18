@@ -828,7 +828,10 @@ class AIAgent:
         try:
             detail = self._summarize_api_error(exc)
         except Exception:
-            detail = str(exc)
+            detail = self._sanitize_api_error_text(
+                exc,
+                fallback=type(exc).__name__,
+            )
         detail = (detail or exc.__class__.__name__).strip()
         if len(detail) > 220:
             detail = detail[:217].rstrip() + "..."
@@ -1366,6 +1369,13 @@ class AIAgent:
         _save_trajectory_to_file(trajectory, self.model, completed)
 
     @staticmethod
+    def _sanitize_api_error_text(value: Any, *, fallback: str = "") -> str:
+        """Return an API-error-derived string safe for disclosure."""
+        from agent.agent_runtime_helpers import sanitize_api_error_text
+
+        return sanitize_api_error_text(value, fallback=fallback)
+
+    @staticmethod
     def _summarize_api_error(error: Exception) -> str:
         """Extract a human-readable one-liner from an API error.
 
@@ -1373,7 +1383,10 @@ class AIAgent:
         <title> tag instead of dumping raw HTML.  Falls back to a truncated
         str(error) for everything else.
         """
-        raw = str(error)
+        raw = AIAgent._sanitize_api_error_text(
+            error,
+            fallback=f"{type(error).__name__}: <details omitted>",
+        )
 
         if (
             isinstance(error, ValueError)
@@ -1404,7 +1417,11 @@ class AIAgent:
             if msg:
                 status_code = getattr(error, "status_code", None)
                 prefix = f"HTTP {status_code}: " if status_code else ""
-                return f"{prefix}{msg[:300]}"
+                safe_msg = AIAgent._sanitize_api_error_text(
+                    msg,
+                    fallback="<provider details omitted>",
+                )
+                return f"{prefix}{safe_msg[:300]}"
 
         # Fallback: truncate the raw string but give more room than 200 chars
         status_code = getattr(error, "status_code", None)
@@ -1431,6 +1448,10 @@ class AIAgent:
         Returns:
             Clean, user-friendly error message
         """
+        error_msg = self._sanitize_api_error_text(
+            error_msg,
+            fallback="Unknown error",
+        )
         if not error_msg:
             return "Unknown error"
             
@@ -3794,10 +3815,22 @@ class AIAgent:
         task_id: str = None,
         stream_callback: Optional[callable] = None,
         persist_user_message: Optional[str] = None,
+        raw_user_message: Optional[str] = None,
+        turn_origin: "TurnOrigin | str | None" = None,
     ) -> Dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
         from agent.conversation_loop import run_conversation
-        return run_conversation(self, user_message, system_message, conversation_history, task_id, stream_callback, persist_user_message)
+        return run_conversation(
+            self,
+            user_message,
+            system_message,
+            conversation_history,
+            task_id,
+            stream_callback,
+            persist_user_message,
+            raw_user_message,
+            turn_origin,
+        )
 
     def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
         """

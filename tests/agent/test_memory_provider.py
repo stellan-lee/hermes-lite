@@ -815,7 +815,9 @@ class TestMemoryContextFencing:
         assert "</memory-context>" not in result
         assert "<memory-context>" not in result
         assert "fact one" in result
-        assert "fact two" in result
+        # An unmatched opening fence fails closed so provider-controlled
+        # trailing content cannot escape the internal-context boundary.
+        assert "fact two" not in result
 
     def test_sanitize_context_case_insensitive(self):
         from agent.memory_manager import sanitize_context

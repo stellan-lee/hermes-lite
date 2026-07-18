@@ -454,6 +454,154 @@ def test_run_conversation_codex_plain_text(monkeypatch):
     assert result["messages"][-1]["content"] == "OK"
 
 
+def test_run_conversation_does_not_persist_or_hook_echoed_experience(monkeypatch):
+    import json
+
+    agent = _build_agent(monkeypatch)
+    private = "private lesson must remain wire-only"
+    echoed = (
+        "Visible answer\n<work-experience-context>"
+        f"{private}</work-experience-context>"
+    )
+    monkeypatch.setattr(
+        agent,
+        "_interruptible_api_call",
+        lambda api_kwargs: _codex_message_response(echoed),
+    )
+    hooks: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "hermes_cli.plugins.invoke_hook",
+        lambda name, **kwargs: hooks.append((name, kwargs)),
+    )
+
+    result = agent.run_conversation("Give a visible answer")
+
+    assert result["final_response"] == "Visible answer"
+    assert private not in json.dumps(result["messages"])
+    assert private not in repr(hooks)
+    post_api = [payload for name, payload in hooks if name == "post_api_request"]
+    assert post_api
+    assert post_api[-1]["response"] is None
+
+
+def test_post_api_hook_keeps_raw_response_when_no_internal_echo(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    response = _codex_message_response("Visible answer")
+    monkeypatch.setattr(
+        agent,
+        "_interruptible_api_call",
+        lambda _api_kwargs: response,
+    )
+    hooks: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "hermes_cli.plugins.invoke_hook",
+        lambda name, **kwargs: hooks.append((name, kwargs)),
+    )
+
+    result = agent.run_conversation("Give a visible answer")
+
+    assert result["final_response"] == "Visible answer"
+    post_api = [payload for name, payload in hooks if name == "post_api_request"]
+    assert post_api
+    assert post_api[-1]["response"] is response
+
+
+def test_run_conversation_scrubs_echoed_experience_from_reasoning_state(monkeypatch):
+    import json
+
+    agent = _build_agent(monkeypatch)
+    private = "reasoning summary copied the private lesson"
+    encrypted = "enc_opaque_blob_must_survive"
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="reasoning",
+                id="rs_echo",
+                encrypted_content=encrypted,
+                summary=[
+                    SimpleNamespace(
+                        type="summary_text",
+                        text=(
+                            "Safe reasoning summary\n<work-experience-context>"
+                            f"{private}</work-experience-context>"
+                        ),
+                    )
+                ],
+                status="completed",
+            ),
+            SimpleNamespace(
+                type="message",
+                status="completed",
+                content=[SimpleNamespace(type="output_text", text="Visible answer")],
+            ),
+        ],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=3, total_tokens=8),
+        status="completed",
+        model="gpt-5-codex",
+    )
+    monkeypatch.setattr(agent, "_interruptible_api_call", lambda _kwargs: response)
+    hooks: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "hermes_cli.plugins.invoke_hook",
+        lambda name, **kwargs: hooks.append((name, kwargs)),
+    )
+
+    result = agent.run_conversation("Give a visible answer")
+
+    serialized = json.dumps(result["messages"])
+    assert result["final_response"] == "Visible answer"
+    assert private not in serialized
+    assert private not in repr(hooks)
+    assert encrypted in serialized
+
+
+def test_experience_is_wire_only_with_prompt_cache_and_observability_hook(monkeypatch):
+    import json
+
+    agent = _build_agent(monkeypatch)
+    agent._use_prompt_caching = True
+    private = "provider-only lesson context"
+
+    class Turn:
+        def context_for_request(self, **_kwargs):
+            return (
+                "<work-experience-context>"
+                f"{private}</work-experience-context>"
+            )
+
+    monkeypatch.setattr(
+        "agent.experience.runtime.prepare_experience_turn",
+        lambda *_args, **_kwargs: Turn(),
+    )
+    provider_requests: list[dict] = []
+    monkeypatch.setattr(
+        agent,
+        "_interruptible_api_call",
+        lambda api_kwargs: (
+            provider_requests.append(api_kwargs)
+            or _codex_message_response("OK")
+        ),
+    )
+    hooks: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "hermes_cli.plugins.invoke_hook",
+        lambda name, **kwargs: hooks.append((name, kwargs)),
+    )
+
+    result = agent.run_conversation(
+        "Use prior experience",
+        raw_user_message="Use prior experience",
+        turn_origin="classic_cli",
+    )
+
+    assert private in json.dumps(provider_requests)
+    pre_api = [payload for name, payload in hooks if name == "pre_api_request"]
+    assert pre_api
+    assert private not in json.dumps(pre_api[-1]["request_messages"])
+    assert private not in json.dumps(result["messages"])
+    assert private not in result["final_response"]
+
+
 def test_run_conversation_codex_empty_output_with_output_text(monkeypatch):
     """Regression: empty response.output + valid output_text should succeed,
     not trigger retry/fallback. The validation stage must defer to
@@ -607,6 +755,68 @@ def test_run_conversation_codex_tool_round_trip(monkeypatch):
     assert result["final_response"] == "done"
     assert any(msg.get("tool_calls") for msg in result["messages"] if msg.get("role") == "assistant")
     assert any(msg.get("role") == "tool" and msg.get("tool_call_id") == "call_1" for msg in result["messages"])
+
+
+def test_run_conversation_scrubs_experience_from_tool_arguments(monkeypatch):
+    import json
+
+    agent = _build_agent(monkeypatch)
+    private = "wire-only lesson echoed into a tool call"
+    tool_response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="function_call",
+                id="fc_echo",
+                call_id="call_echo",
+                name="terminal",
+                arguments=json.dumps(
+                    {
+                        "command": (
+                            "safe-prefix<work-experience-context>"
+                            f"{private}</work-experience-context>safe-suffix"
+                        )
+                    }
+                ),
+            )
+        ],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=3, total_tokens=8),
+        status="completed",
+        model="gpt-5-codex",
+    )
+    responses = [tool_response, _codex_message_response("done")]
+    monkeypatch.setattr(
+        agent,
+        "_interruptible_api_call",
+        lambda _kwargs: responses.pop(0),
+    )
+    executed_arguments: list[str] = []
+
+    def _fake_execute_tool_calls(assistant_message, messages, _task_id, _api_call_count):
+        for call in assistant_message.tool_calls:
+            executed_arguments.append(call.arguments)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": '{"ok":true}',
+                }
+            )
+
+    monkeypatch.setattr(agent, "_execute_tool_calls", _fake_execute_tool_calls)
+    hooks: list[tuple[str, dict]] = []
+
+    def _capture_hook(name, **kwargs):
+        hooks.append((name, kwargs))
+        return []
+
+    monkeypatch.setattr("hermes_cli.plugins.invoke_hook", _capture_hook)
+
+    result = agent.run_conversation("run a command")
+
+    assert result["completed"] is True
+    assert json.loads(executed_arguments[0])["command"] == "safe-prefixsafe-suffix"
+    assert private not in json.dumps(result["messages"])
+    assert private not in repr(hooks)
 
 
 def test_chat_messages_to_responses_input_uses_call_id_for_function_call(monkeypatch):
@@ -1299,6 +1509,30 @@ def test_dump_api_request_debug_uses_chat_completions_url(monkeypatch, tmp_path)
 
     payload = json.loads(dump_file.read_text())
     assert payload["request"]["url"] == "http://127.0.0.1:9208/v1/chat/completions"
+
+
+def test_dump_api_request_debug_strips_internal_experience_context(monkeypatch, tmp_path):
+    import json
+
+    agent = _build_agent(monkeypatch)
+    agent.logs_dir = tmp_path
+    private = "private lesson must not enter debug logs"
+    kwargs = _codex_request_kwargs()
+    kwargs["input"] = [
+        {
+            "role": "user",
+            "content": (
+                "question\n<work-experience-context>"
+                f"{private}</work-experience-context>"
+            ),
+        }
+    ]
+
+    dump_file = agent._dump_api_request_debug(kwargs, reason="preflight")
+
+    serialized = json.dumps(json.loads(dump_file.read_text()))
+    assert private not in serialized
+    assert "work-experience-context" not in serialized
 
 
 # --- Reasoning-only response tests (fix for empty content retry loop) ---

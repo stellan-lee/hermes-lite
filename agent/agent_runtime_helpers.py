@@ -21,10 +21,12 @@ Methods covered:
 from __future__ import annotations
 
 import copy
+import html
 import json
 import logging
 import re
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -35,6 +37,136 @@ from agent.trajectory import convert_scratchpad_to_think
 from utils import env_var_enabled, atomic_json_write
 
 logger = logging.getLogger(__name__)
+
+
+_ESCAPED_CONTEXT_DELIMITERS = (
+    (re.compile(r"\\u003c", re.IGNORECASE), "<"),
+    (re.compile(r"\\u003e", re.IGNORECASE), ">"),
+    (re.compile(r"\\x3c", re.IGNORECASE), "<"),
+    (re.compile(r"\\x3e", re.IGNORECASE), ">"),
+)
+_HTML_ESCAPED_CONTEXT_HINT_RE = re.compile(
+    r"(?:&lt;|&#0*60;|&#x0*3c;)\s*/?\s*"
+    r"(?:memory-context|work-experience-context)\b",
+    re.IGNORECASE,
+)
+
+
+def sanitize_api_error_text(value: Any, *, fallback: str = "") -> str:
+    """Return a disclosure-safe string derived from an API error value.
+
+    Provider errors sometimes echo request text, including wire-only
+    ``<memory-context>`` or ``<work-experience-context>`` blocks.  The raw
+    exception must remain untouched for classification and recovery, but any
+    string derived from it that crosses a log, UI, persistence, debug-dump, or
+    plugin boundary must pass through this helper first.
+
+    Besides literal tags, handle the two common encodings used by JSON/HTML
+    error wrappers.  If conversion or scrubbing itself fails, fail closed and
+    return *fallback* rather than the original value.
+    """
+
+    try:
+        raw = value if isinstance(value, str) else str(value)
+    except Exception:
+        return fallback
+
+    try:
+        decoded = raw
+        for pattern, replacement in _ESCAPED_CONTEXT_DELIMITERS:
+            decoded = pattern.sub(replacement, decoded)
+        if _HTML_ESCAPED_CONTEXT_HINT_RE.search(decoded):
+            decoded = html.unescape(decoded)
+
+        from agent.memory_manager import scrub_internal_context_payload
+
+        scrubbed = scrub_internal_context_payload(decoded)
+        return scrubbed if isinstance(scrubbed, str) else fallback
+    except Exception:
+        return fallback
+
+
+def sanitize_api_error_payload(
+    value: Any,
+    *,
+    _depth: int = 0,
+    _seen: Optional[set[int]] = None,
+) -> Any:
+    """Recursively make an API-error/debug value safe and JSON-compatible.
+
+    ``scrub_internal_context_payload`` deliberately leaves unknown objects
+    alone.  Debug serialization would later call ``str()`` on those objects,
+    creating a second, unsanitized path.  This stricter helper converts every
+    non-primitive leaf to a sanitized string and bounds recursion/cycles.
+    """
+
+    if _depth > 12:
+        return "<nested error payload omitted>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return sanitize_api_error_text(value)
+    if isinstance(value, bytes):
+        try:
+            decoded = value.decode("utf-8", errors="replace")
+        except Exception:
+            return "<binary error payload omitted>"
+        return sanitize_api_error_text(decoded)
+
+    if _seen is None:
+        _seen = set()
+    marker = id(value)
+    if marker in _seen:
+        return "<cyclic error payload omitted>"
+
+    if isinstance(value, dict):
+        _seen.add(marker)
+        try:
+            return {
+                sanitize_api_error_text(key, fallback=type(key).__name__):
+                sanitize_api_error_payload(
+                    item,
+                    _depth=_depth + 1,
+                    _seen=_seen,
+                )
+                for key, item in value.items()
+            }
+        finally:
+            _seen.discard(marker)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        _seen.add(marker)
+        try:
+            return [
+                sanitize_api_error_payload(
+                    item,
+                    _depth=_depth + 1,
+                    _seen=_seen,
+                )
+                for item in value
+            ]
+        finally:
+            _seen.discard(marker)
+
+    return sanitize_api_error_text(value, fallback=f"<{type(value).__name__} omitted>")
+
+
+def format_exception_traceback_for_log(error: BaseException) -> str:
+    """Format a traceback while removing echoed internal context.
+
+    Logging with ``exc_info=True`` or ``logger.exception`` formats the raw
+    exception after the log call and bypasses ordinary message sanitization.
+    Callers that may be handling provider-derived exceptions should log this
+    preformatted, scrubbed traceback instead.
+    """
+
+    try:
+        rendered = "".join(traceback.TracebackException.from_exception(error).format())
+    except Exception:
+        rendered = f"{type(error).__name__}: {sanitize_api_error_text(error)}"
+    return sanitize_api_error_text(
+        rendered,
+        fallback=f"{type(error).__name__}: <error details omitted>",
+    )
 
 
 def _ra():
@@ -845,7 +977,7 @@ def dump_api_request_debug(
     retries are not useful.
     """
     try:
-        body = copy.deepcopy(api_kwargs)
+        body = sanitize_api_error_payload(copy.deepcopy(api_kwargs))
         body.pop("timeout", None)
         body = {k: v for k, v in body.items() if v is not None}
 
@@ -853,7 +985,10 @@ def dump_api_request_debug(
         try:
             api_key = getattr(agent.client, "api_key", None)
         except Exception as e:
-            _ra().logger.debug("Could not extract API key for debug dump: %s", e)
+            _ra().logger.debug(
+                "Could not extract API key for debug dump: %s",
+                sanitize_api_error_text(e, fallback=type(e).__name__),
+            )
 
         dump_payload: Dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
@@ -873,26 +1008,42 @@ def dump_api_request_debug(
         if error is not None:
             error_info: Dict[str, Any] = {
                 "type": type(error).__name__,
-                "message": str(error),
+                "message": sanitize_api_error_text(
+                    error,
+                    fallback=f"{type(error).__name__}: <details omitted>",
+                ),
             }
             for attr_name in ("status_code", "request_id", "code", "param", "type"):
                 attr_value = getattr(error, attr_name, None)
                 if attr_value is not None:
-                    error_info[attr_name] = attr_value
+                    error_info[attr_name] = sanitize_api_error_payload(attr_value)
 
             body_attr = getattr(error, "body", None)
             if body_attr is not None:
-                error_info["body"] = body_attr
+                error_info["body"] = sanitize_api_error_payload(body_attr)
 
             response_obj = getattr(error, "response", None)
             if response_obj is not None:
                 try:
-                    error_info["response_status"] = getattr(response_obj, "status_code", None)
-                    error_info["response_text"] = response_obj.text
+                    error_info["response_status"] = sanitize_api_error_payload(
+                        getattr(response_obj, "status_code", None)
+                    )
+                    error_info["response_text"] = sanitize_api_error_text(
+                        response_obj.text,
+                        fallback="<response details omitted>",
+                    )
                 except Exception as e:
-                    _ra().logger.debug("Could not extract error response details: %s", e)
+                    _ra().logger.debug(
+                        "Could not extract error response details: %s",
+                        sanitize_api_error_text(e, fallback=type(e).__name__),
+                    )
 
             dump_payload["error"] = error_info
+
+        # Final fail-closed pass before either filesystem or stdout output.
+        # This also catches a custom object's string representation introduced
+        # by a future field added above.
+        dump_payload = sanitize_api_error_payload(dump_payload)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         dump_file = agent.logs_dir / f"request_dump_{agent.session_id}_{timestamp}.json"
@@ -906,7 +1057,13 @@ def dump_api_request_debug(
         return dump_file
     except Exception as dump_error:
         if agent.verbose_logging:
-            logger.warning(f"Failed to dump API request debug payload: {dump_error}")
+            logger.warning(
+                "Failed to dump API request debug payload: %s",
+                sanitize_api_error_text(
+                    dump_error,
+                    fallback=type(dump_error).__name__,
+                ),
+            )
         return None
 
 
@@ -1681,14 +1838,14 @@ def extract_api_error_context(error: Exception) -> Dict[str, Any]:
     if isinstance(payload, dict):
         reason = payload.get("code") or payload.get("type") or payload.get("error")
         if isinstance(reason, str) and reason.strip():
-            context["reason"] = reason.strip()
+            context["reason"] = sanitize_api_error_text(reason).strip()
         message = payload.get("message") or payload.get("error_description")
         if isinstance(message, str) and message.strip():
-            context["message"] = message.strip()
+            context["message"] = sanitize_api_error_text(message).strip()
         for key in ("resets_at", "reset_at"):
             value = payload.get(key)
             if value not in {None, ""}:
-                context["reset_at"] = value
+                context["reset_at"] = sanitize_api_error_payload(value)
                 break
         retry_after = payload.get("retry_after")
         if retry_after not in {None, ""} and "reset_at" not in context:
@@ -1708,10 +1865,10 @@ def extract_api_error_context(error: Exception) -> Dict[str, Any]:
                 pass
         ratelimit_reset = headers.get("x-ratelimit-reset")
         if ratelimit_reset and "reset_at" not in context:
-            context["reset_at"] = ratelimit_reset
+            context["reset_at"] = sanitize_api_error_payload(ratelimit_reset)
 
     if "message" not in context:
-        raw_message = str(error).strip()
+        raw_message = sanitize_api_error_text(error).strip()
         if raw_message:
             context["message"] = raw_message[:500]
 
@@ -1869,6 +2026,9 @@ def force_close_tcp_sockets(client: Any) -> int:
 
 
 __all__ = [
+    "sanitize_api_error_text",
+    "sanitize_api_error_payload",
+    "format_exception_traceback_for_log",
     "convert_to_trajectory_format",
     "sanitize_tool_call_arguments",
     "repair_message_sequence",

@@ -587,6 +587,10 @@ def init_agent(
     agent._codex_reasoning_replay_enabled = True
     agent._memory_write_origin = "assistant_tool"
     agent._memory_write_context = "foreground"
+    # Work Experience initializes lazily at the per-turn boundary. These slots
+    # keep its lifetime explicit without opening state.db for unsupported
+    # runtimes or when the global mode is off.
+    agent._experience_turn = None
     
     # Cached system prompt -- built once per session, only rebuilt on compression
     agent._cached_system_prompt: Optional[str] = None
