@@ -12699,7 +12699,7 @@ class HermesCLI:
             2. Ghost text suggestion available → accept auto-suggestion
             3. Otherwise → start completion menu
 
-            After accepting a provider like 'anthropic:', the completion menu
+            After accepting a provider prefix, the completion menu
             closes and complete_while_typing doesn't fire (no keystroke).
             This binding re-triggers completions so stage-2 models appear
             immediately.
