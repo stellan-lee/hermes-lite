@@ -78,7 +78,7 @@ def test_container_pip_install_without_stamp_is_pip(tmp_path):
 
 def test_recommended_update_command_docker():
     from marlow_cli.config import recommended_update_command_for_method
-    assert "docker pull" in recommended_update_command_for_method("docker")
+    assert recommended_update_command_for_method("docker") == "docker compose build --pull"
 
 
 def test_banner_warns_on_pip_install(tmp_path):

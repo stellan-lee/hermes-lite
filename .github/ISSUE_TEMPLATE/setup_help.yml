@@ -12,8 +12,8 @@ body:
         - Run `marlow debug share` and paste the links in the Debug Report section below
         - If you're in a chat session, you can use `/debug` instead — it does the same thing
         - Try `marlow update` to get the latest version
-        - Check the [README troubleshooting section](https://github.com/NousResearch/marlow-agent#troubleshooting)
-        - For general questions, consider the [Nous Research Discord](https://discord.gg/NousResearch) for faster help
+        - Check the [README](https://github.com/stellan-lee/Marlow#readme)
+        - Search [existing issues](https://github.com/stellan-lee/Marlow/issues) for similar setup problems
 
   - type: textarea
     id: description
@@ -21,7 +21,7 @@ body:
       label: What's Going Wrong?
       description: Describe what you're trying to do and where it fails.
       placeholder: |
-        I ran `marlow setup` and selected Nous Portal, but when I try to
+        I ran `marlow setup` and selected OpenRouter, but when I try to
         start the gateway I get...
     validations:
       required: true

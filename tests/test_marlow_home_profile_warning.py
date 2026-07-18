@@ -1,6 +1,6 @@
 """Tests for get_marlow_home() profile-mode fallback warning.
 
-Regression test for https://github.com/NousResearch/marlow-agent/issues/18594.
+Regression test for upstream issue #18594.
 
 When MARLOW_HOME is unset but an active_profile file indicates a non-default
 profile is active, get_marlow_home() should:

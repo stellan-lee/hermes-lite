@@ -81,19 +81,31 @@ def resolve_marlow_bin() -> Optional[str]:
     """Find the marlow entry point.
 
     Priority:
-      1. ``sys.argv[0]`` if it resolves to a real executable.
+      1. ``sys.argv[0]`` if it resolves to a real, non-legacy executable.
       2. ``shutil.which("marlow")`` on PATH.
       3. ``None`` → caller should fall back to ``python -m marlow_cli.main``.
 
     """
     argv0 = sys.argv[0]
 
+    # A pre-rename installation may still enter the current package through an
+    # orphaned ``hermes`` console script. Re-executing that same path during
+    # /update fails as soon as its old editable-install target moves. Skip it
+    # and resolve the canonical launcher (or the current Python module) below.
+    legacy_names = {"hermes", "hermes-agent", "hermes.exe", "hermes-agent.exe"}
+    argv0_is_legacy = os.path.basename(argv0).lower() in legacy_names
+
     # Absolute path to an executable (covers venv and packaged wrappers).
-    if os.path.isabs(argv0) and os.path.isfile(argv0) and os.access(argv0, os.X_OK):
+    if (
+        not argv0_is_legacy
+        and os.path.isabs(argv0)
+        and os.path.isfile(argv0)
+        and os.access(argv0, os.X_OK)
+    ):
         return argv0
 
     # Relative path — resolve against CWD
-    if not argv0.startswith("-") and os.path.isfile(argv0):
+    if not argv0_is_legacy and not argv0.startswith("-") and os.path.isfile(argv0):
         abs_path = os.path.abspath(argv0)
         if os.access(abs_path, os.X_OK):
             return abs_path

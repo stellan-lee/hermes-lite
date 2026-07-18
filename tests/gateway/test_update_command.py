@@ -151,34 +151,36 @@ class TestHandleUpdateCommand:
         assert "marlow_cli.main" in joined or "bash" in call_args[0]
 
     @pytest.mark.asyncio
-    async def test_resolve_marlow_bin_prefers_which(self, tmp_path):
-        """_resolve_marlow_bin returns argv parts from shutil.which when available."""
-        from gateway.run import _resolve_marlow_bin
-
-        with patch("shutil.which", return_value="/custom/path/marlow"):
-            result = _resolve_marlow_bin()
-
-        assert result == ["/custom/path/marlow"]
-
-    @pytest.mark.asyncio
-    async def test_resolve_marlow_bin_fallback(self):
-        """_resolve_marlow_bin falls back to sys.executable argv when which fails."""
+    async def test_resolve_marlow_bin_prefers_current_module(self):
+        """The current source script wins over a stale launcher on PATH."""
         import sys
         from gateway.run import _resolve_marlow_bin
 
-        fake_spec = MagicMock()
-        with patch("shutil.which", return_value=None), \
-             patch("importlib.util.find_spec", return_value=fake_spec):
+        with patch("shutil.which", return_value="/stale/path/marlow"):
             result = _resolve_marlow_bin()
 
-        assert result == [sys.executable, "-m", "marlow_cli.main"]
+        assert result[0] == sys.executable
+        assert result[1].endswith("/marlow_cli/main.py")
+
+    @pytest.mark.asyncio
+    async def test_resolve_marlow_bin_falls_back_to_path(self):
+        """Packaged runtimes without an importable module can use PATH."""
+        from gateway.run import _resolve_marlow_bin
+
+        with patch("gateway.run.Path.is_file", return_value=False), \
+             patch("importlib.util.find_spec", return_value=None), \
+             patch("shutil.which", return_value="/custom/path/marlow"):
+            result = _resolve_marlow_bin()
+
+        assert result == ["/custom/path/marlow"]
 
     @pytest.mark.asyncio
     async def test_resolve_marlow_bin_returns_none_when_both_fail(self):
         """_resolve_marlow_bin returns None when both strategies fail."""
         from gateway.run import _resolve_marlow_bin
 
-        with patch("shutil.which", return_value=None), \
+        with patch("gateway.run.Path.is_file", return_value=False), \
+             patch("shutil.which", return_value=None), \
              patch("importlib.util.find_spec", return_value=None):
             result = _resolve_marlow_bin()
 

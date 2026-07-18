@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from utils import base_url_hostname
-from marlow_constants import get_optional_skills_dir
+from marlow_constants import MARLOW_REPOSITORY_URL, get_optional_skills_dir
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
-_DOCS_BASE = "https://marlow-agent.nousresearch.com/docs"
+_PROJECT_GUIDE = f"{MARLOW_REPOSITORY_URL}#readme"
 
 
 def _model_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -536,7 +536,7 @@ def setup_model_provider(config: dict, *, quick: bool = False):
 
     print_header("Inference Provider")
     print_info("Choose how to connect to your main chat model.")
-    print_info(f"   Guide: {_DOCS_BASE}/integrations/providers")
+    print_info(f"   Project guide: {_PROJECT_GUIDE}")
     print()
 
     # Delegate to the shared marlow model flow — handles provider picker,
@@ -852,7 +852,7 @@ def setup_terminal_backend(config: dict):
     print_header("Terminal Backend")
     print_info("Choose where Marlow runs shell commands and code.")
     print_info("This affects tool execution, file access, and isolation.")
-    print_info(f"   Guide: {_DOCS_BASE}/developer-guide/environments")
+    print_info(f"   Project guide: {_PROJECT_GUIDE}")
     print()
 
     current_backend = cfg_get(config, "terminal", "backend", default="local")
@@ -999,7 +999,7 @@ def setup_agent_settings(config: dict):
     """Configure agent behavior: iterations, progress display, compression, session reset."""
 
     print_header("Agent Settings")
-    print_info(f"   Guide: {_DOCS_BASE}/user-guide/configuration")
+    print_info(f"   Project guide: {_PROJECT_GUIDE}")
     print()
 
     # ── Max Iterations ──
@@ -1268,7 +1268,7 @@ def _setup_slack():
     print_info("   3. Install to Workspace: Settings → Install App")
     print_info("   4. After installing, invite the bot to channels: /invite @YourBot")
     print()
-    print_info("   Full guide: https://marlow-agent.nousresearch.com/docs/user-guide/messaging/slack/")
+    print_info(f"   Project guide: {_PROJECT_GUIDE}")
     print()
 
     # Generate and write manifest up-front so the user can paste it into
@@ -1369,7 +1369,7 @@ def _setup_webhooks():
     print_warning("   internet. For security, run the gateway in a sandboxed environment")
     print_warning("   (Docker, VM, etc.) to limit blast radius from prompt injection.")
     print()
-    print_info("   Full guide: https://marlow-agent.nousresearch.com/docs/user-guide/messaging/webhooks/")
+    print_info(f"   Project guide: {_PROJECT_GUIDE}")
     print()
 
     port = prompt("Webhook port (default 8644)")
@@ -1395,10 +1395,6 @@ def _setup_webhooks():
     print_info("   2. Point your service (GitHub, GitLab, etc.) at:")
     print_info("      http://your-server:8644/webhooks/<route-name>")
     print()
-    print_info("   Route configuration guide:")
-    print_info("   https://marlow-agent.nousresearch.com/docs/user-guide/messaging/webhooks/#configuring-routes")
-    print()
-    print_info("   Open config in your editor:  marlow config edit")
     print_info("   Open config in your editor:  marlow config edit")
 
 

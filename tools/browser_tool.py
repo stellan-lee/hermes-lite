@@ -554,8 +554,8 @@ def _run_chrome_fallback_command(
         if _running_in_docker():
             hint = (
                 "Chrome fallback requires Chromium, but it is missing. "
-                "You're running in Docker — pull the latest image: "
-                "docker pull ghcr.io/nousresearch/marlow-agent:latest"
+                "You're running in Docker — rebuild the image from the latest "
+                "Marlow checkout with: docker compose build --pull"
             )
         else:
             hint = (
@@ -1353,9 +1353,9 @@ def _run_browser_command(
     if _is_local_mode() and not _chromium_installed() and _get_browser_engine() != "lightpanda":
         if _running_in_docker():
             hint = (
-                "Chromium browser is missing. You're running in Docker — pull "
-                "the latest image to get the bundled Chromium: "
-                "docker pull ghcr.io/nousresearch/marlow-agent:latest"
+                "Chromium browser is missing. You're running in Docker — rebuild "
+                "the image from the latest Marlow checkout with: "
+                "docker compose build --pull"
             )
         else:
             hint = (
@@ -2902,10 +2902,10 @@ if __name__ == "__main__":
                 print(f"     Searched: {searched}")
                 if _running_in_docker():
                     print(
-                        "     Docker: pull the latest image — the current one "
+                        "     Docker: rebuild the image — the current one "
                         "predates the bundled Chromium install"
                     )
-                    print("       docker pull ghcr.io/nousresearch/marlow-agent:latest")
+                    print("       docker compose build --pull")
                 else:
                     print("     Install it with:")
                     print("       npx agent-browser install --with-deps")

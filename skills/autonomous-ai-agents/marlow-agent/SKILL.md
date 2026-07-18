@@ -8,13 +8,13 @@ platforms: [linux, macos]
 metadata:
   marlow:
     tags: [marlow, setup, configuration, multi-agent, spawning, cli, gateway, development]
-    homepage: https://github.com/NousResearch/marlow-agent
+    homepage: https://github.com/stellan-lee/Marlow
     related_skills: [claude-code, codex, opencode]
 ---
 
 # Marlow Agent
 
-Marlow Agent is an open-source AI agent framework by Nous Research that runs in your terminal and messaging platforms. It provides autonomous coding and task execution through tool calling, using Codex OAuth or a custom/local OpenAI-compatible endpoint on Linux and macOS.
+Marlow Agent is an open-source AI agent framework that runs in your terminal and messaging platforms. It provides autonomous coding and task execution through tool calling, using Codex OAuth or a custom/local OpenAI-compatible endpoint on Linux and macOS.
 
 What makes Marlow different:
 
@@ -29,13 +29,13 @@ People use Marlow for software development, research, system administration, dat
 
 **This skill helps you work with Marlow Agent effectively** — setting it up, configuring features, spawning additional agent instances, troubleshooting issues, finding the right commands and settings, and understanding how the system works when you need to extend or contribute to it.
 
-**Docs:** https://marlow-agent.nousresearch.com/docs/
+**Project guide:** https://github.com/stellan-lee/Marlow#readme
 
 ## Quick Start
 
 ```bash
 # Install
-curl -fsSL https://raw.githubusercontent.com/NousResearch/marlow-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/stellan-lee/Marlow/main/scripts/install.sh | bash
 
 # Interactive chat (default)
 marlow
@@ -141,7 +141,7 @@ marlow gateway setup        Configure platforms
 
 Supported platforms: Telegram, Discord, Slack, Feishu/Lark, Email, and signed webhooks.
 
-Platform docs: https://marlow-agent.nousresearch.com/docs/user-guide/messaging/
+Run `marlow gateway --help` for platform commands.
 
 ### Sessions
 
@@ -209,7 +209,7 @@ marlow uninstall            Uninstall Marlow
 
 Type these during an interactive chat session. New commands land fairly
 often; if something below looks stale, run `/help` in-session for the
-authoritative list or see the [live slash commands reference](https://marlow-agent.nousresearch.com/docs/reference/slash-commands).
+authoritative list.
 The registry of record is `marlow_cli/commands.py` — every consumer
 (autocomplete, Telegram menu, Slack mapping, `/help`) derives from it.
 
@@ -340,7 +340,7 @@ Edit with `marlow config edit` or `marlow config set section.key value`.
 | `delegation` | `model`, `provider`, `base_url`, `api_key`, `max_iterations` (50), `reasoning_effort` |
 | `checkpoints` | `enabled`, `max_snapshots` (50) |
 
-Full config reference: https://marlow-agent.nousresearch.com/docs/user-guide/configuration
+Use `marlow config --help` and `marlow config edit` for the active configuration.
 
 ### Providers
 
@@ -351,7 +351,7 @@ Choose Codex or a custom/local endpoint with `marlow model` or `marlow setup`.
 | OpenAI Codex | OAuth | `marlow login` |
 | Custom/local endpoint | Config | `model.base_url` + `model.api_key` in config.yaml |
 
-Full provider docs: https://marlow-agent.nousresearch.com/docs/integrations/providers
+Use `marlow model` or `marlow setup` to inspect and configure providers.
 
 ### Toolsets
 
@@ -568,8 +568,7 @@ terminal(command="tmux new-session -d -s resumed 'marlow --resume 20260225_14305
 ## Durable & Background Systems
 
 Four systems run alongside the main conversation loop. Quick reference
-here; full developer notes live in `AGENTS.md`, user-facing docs under
-https://marlow-agent.nousresearch.com/docs/user-guide/features/
+here; full developer notes live in `AGENTS.md` and command-specific help.
 
 ### Delegation (`delegate_task`)
 
@@ -606,7 +605,7 @@ the `cronjob` tool, the `marlow cron` CLI (`list`, `add`, `edit`,
   header/footer instead of being mirrored into the target gateway
   session (keeps role alternation intact).
 
-User docs: https://marlow-agent.nousresearch.com/docs/user-guide/features/cron
+Run `marlow cron --help` for current usage.
 
 ### Curator (skill lifecycle)
 
@@ -627,7 +626,7 @@ so nothing is lost.
 
 Config: `curator.*` (`enabled`, `interval_hours`, `min_idle_hours`,
 `stale_after_days`, `archive_after_days`, `backup.*`).
-User docs: https://marlow-agent.nousresearch.com/docs/user-guide/features/curator
+Run `marlow curator --help` for current usage.
 
 ## Troubleshooting
 
@@ -683,18 +682,18 @@ marlow config set auxiliary.vision.model <model_name>
 
 | Looking for... | Location |
 |----------------|----------|
-| Config options | `marlow config edit` or [Configuration docs](https://marlow-agent.nousresearch.com/docs/user-guide/configuration) |
-| Available tools | `marlow tools list` or [Tools reference](https://marlow-agent.nousresearch.com/docs/reference/tools-reference) |
-| Slash commands | `/help` in session or [Slash commands reference](https://marlow-agent.nousresearch.com/docs/reference/slash-commands) |
+| Config options | `marlow config edit` or `marlow config --help` |
+| Available tools | `marlow tools list` |
+| Slash commands | `/help` in session |
 | Installed skills | `marlow skills` or `~/.marlow/skills/` |
-| Provider setup | `marlow model` or [Providers guide](https://marlow-agent.nousresearch.com/docs/integrations/providers) |
-| Platform setup | `marlow gateway setup` or [Messaging docs](https://marlow-agent.nousresearch.com/docs/user-guide/messaging/) |
-| MCP servers | `marlow mcp list` or [MCP guide](https://marlow-agent.nousresearch.com/docs/user-guide/features/mcp) |
-| Profiles | `marlow profile list` or [Profiles docs](https://marlow-agent.nousresearch.com/docs/user-guide/profiles) |
-| Cron jobs | `marlow cron list` or [Cron docs](https://marlow-agent.nousresearch.com/docs/user-guide/features/cron) |
-| Memory | `marlow memory status` or [Memory docs](https://marlow-agent.nousresearch.com/docs/user-guide/features/memory) |
-| Env variables | `marlow config env-path` or [Env vars reference](https://marlow-agent.nousresearch.com/docs/reference/environment-variables) |
-| CLI commands | `marlow --help` or [CLI reference](https://marlow-agent.nousresearch.com/docs/reference/cli-commands) |
+| Provider setup | `marlow model` |
+| Platform setup | `marlow gateway setup` |
+| MCP servers | `marlow mcp list` |
+| Profiles | `marlow profile list` |
+| Cron jobs | `marlow cron list` |
+| Memory | `marlow memory status` |
+| Env variables | `marlow config env-path` |
+| CLI commands | `marlow --help` |
 | Gateway logs | `~/.marlow/logs/gateway.log` |
 | Session files | `marlow sessions browse` (reads state.db) |
 | Source code | `~/.marlow/marlow-agent/` |
@@ -703,7 +702,7 @@ marlow config set auxiliary.vision.model <model_name>
 
 ## Contributor Quick Reference
 
-For occasional contributors and PR authors. Full developer docs: https://marlow-agent.nousresearch.com/docs/developer-guide/
+For occasional contributors and PR authors. See `CONTRIBUTING.md` in the repository.
 
 ### Project Layout
 

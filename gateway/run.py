@@ -1556,17 +1556,18 @@ def _resolve_marlow_bin() -> Optional[list[str]]:
     """Resolve the Marlow update command as argv parts.
 
     Tries in order:
-    1. ``shutil.which("marlow")`` — standard PATH lookup
-    2. ``sys.executable -m marlow_cli.main`` — fallback when Marlow is running
-       from a venv/module invocation and the ``marlow`` shim is not on PATH
+    1. The current checkout's ``marlow_cli/main.py`` under ``sys.executable``.
+       This survives a stale or broken editable-install entry point.
+    2. ``sys.executable -m marlow_cli.main`` for non-filesystem packages.
+    3. ``shutil.which("marlow")`` as a final packaged-runtime fallback.
 
     Returns argv parts ready for quoting/joining, or ``None`` if neither works.
     """
     import shutil
 
-    marlow_bin = shutil.which("marlow")
-    if marlow_bin:
-        return [marlow_bin]
+    main_script = Path(__file__).parent.parent.resolve() / "marlow_cli" / "main.py"
+    if main_script.is_file():
+        return [sys.executable, str(main_script)]
 
     try:
         import importlib.util
@@ -1575,6 +1576,10 @@ def _resolve_marlow_bin() -> Optional[list[str]]:
             return [sys.executable, "-m", "marlow_cli.main"]
     except Exception:
         pass
+
+    marlow_bin = shutil.which("marlow")
+    if marlow_bin:
+        return [marlow_bin]
 
     return None
 

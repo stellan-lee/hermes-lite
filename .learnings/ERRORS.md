@@ -1,5 +1,267 @@
 # Errors
 
+## [ERR-20260718-029] missing-repository-rule-files
+
+**Logged**: 2026-07-18T21:30:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: docs
+
+### Summary
+
+The root AGENTS.md references three repository rule files that are absent from
+this worktree.
+
+### Error
+
+```
+sed: rules/workflow.md: No such file or directory
+sed: rules/agent-usage.md: No such file or directory
+sed: rules/task-tracking.md: No such file or directory
+```
+
+### Resolution
+
+Used the complete root AGENTS.md instructions already supplied for this
+worktree and continued without inventing missing rule content.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: AGENTS.md
+
+---
+
+## [ERR-20260718-028] cmd-update-test-process-termination
+
+**Logged**: 2026-07-18T20:43:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The broader `test_cmd_update.py` run terminated its parent shell after 14 tests, before pytest or the shell could emit an exit status.
+
+### Error
+
+```
+..............
+```
+
+No pytest summary or subsequent shell exit marker was emitted.
+
+### Resolution
+
+Kept the completed focused update/identity suite as the validation signal and isolated the broader file rather than reporting an ambiguous run as passing.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: tests/marlow_cli/test_cmd_update.py
+
+---
+
+## [ERR-20260718-027] generic-skill-validator-incompatible
+
+**Logged**: 2026-07-18T20:35:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+The generic Codex skill validator could not validate this Marlow skill: the first runtime lacked PyYAML, and the project test runtime then rejected Marlow-supported `author`, `platforms`, and `version` fields.
+
+### Error
+
+```
+ModuleNotFoundError: No module named 'yaml'
+
+Unexpected key(s) in SKILL.md frontmatter: author, platforms, version.
+```
+
+### Resolution
+
+Kept the project-required metadata and validated the skill through Marlow's own loader instead of weakening its schema for an incompatible generic validator.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: skills/autonomous-ai-agents/marlow-agent/SKILL.md
+
+---
+
+## [ERR-20260718-026] documentation-cleanup-patch-context
+
+**Logged**: 2026-07-18T20:20:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+A combined documentation cleanup patch and its first retry missed the exact AGENTS.md companion-plugin paragraph, so both were rejected atomically.
+
+### Error
+
+```
+apply_patch verification failed: Failed to find expected lines in AGENTS.md
+```
+
+### Resolution
+
+Inspected the exact source wording, including the leading `plug into` text, and applied one-line replacements before the paragraph cleanup.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: AGENTS.md, marlow_cli/setup.py, marlow_cli/main.py
+
+---
+
+## [ERR-20260718-025] mixed-quote-legacy-search
+
+**Logged**: 2026-07-18T19:53:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+A final compound legacy-path regex mixed shell quote characters and was rejected by zsh.
+
+### Error
+
+```
+zsh: unmatched "
+```
+
+### Resolution
+
+Replaced compound shell expressions with separate fixed-string Git searches.
+
+### Metadata
+
+- Reproducible: no
+- Related Files: none
+- See Also: ERR-20260718-021, ERR-20260718-024
+
+---
+
+## [ERR-20260718-024] url-inventory-shell-quoting
+
+**Logged**: 2026-07-18T19:46:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+A shell regex for extracting Marlow URLs contained an unmatched quote under zsh.
+
+### Error
+
+```
+zsh: unmatched "
+```
+
+### Resolution
+
+Moved URL extraction into a Python reader over Git-tracked files so shell quoting is no longer involved.
+
+### Metadata
+
+- Reproducible: no
+- Related Files: none
+- See Also: ERR-20260718-021
+
+---
+
+## [ERR-20260718-023] default-homebrew-python-killed
+
+**Logged**: 2026-07-18T19:37:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+The default Homebrew `python3` (3.14.6) was terminated with exit code 137 even for a one-line command, so the initial compile validation could not run.
+
+### Error
+
+```
+compile_status=137
+```
+
+### Resolution
+
+Verified the repository's uv-managed Python 3.11 runtime works and used that interpreter for targeted syntax validation.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: marlow_cli/main.py, marlow_cli/banner.py, marlow_cli/config.py, scripts/install.sh
+
+---
+
+## [ERR-20260718-022] zsh-readonly-status-variable
+
+**Logged**: 2026-07-18T19:35:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+A validation wrapper assigned the command exit code to `status`, which is a read-only special parameter in zsh.
+
+### Error
+
+```
+zsh: read-only variable: status
+```
+
+### Resolution
+
+Reran the validation with a task-specific variable name.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: none
+
+---
+
+## [ERR-20260718-021] legacy-audit-shell-regex-quoting
+
+**Logged**: 2026-07-18T19:20:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+A broad legacy-brand audit regex embedded a single quote inside a single-quoted shell argument, so zsh rejected the read-only scan.
+
+### Error
+
+```
+zsh: parse error near `)'
+```
+
+### Resolution
+
+Split the audit into multiple simple, independently quoted ripgrep searches.
+
+### Metadata
+
+- Reproducible: no
+- Related Files: none
+
+---
+
 ## [ERR-20260718-020] broad-legacy-config-patch-context
 
 **Logged**: 2026-07-18T00:00:00+08:00

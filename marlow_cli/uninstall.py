@@ -11,7 +11,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from marlow_constants import get_marlow_home
+from marlow_constants import MARLOW_INSTALL_SCRIPT_URL, get_marlow_home
 
 from marlow_cli.colors import Colors, color
 
@@ -517,7 +517,7 @@ def run_uninstall(args):
         print(f"  {marlow_home}/")
         print()
         print("To reinstall later with your existing settings:")
-        print(color("  curl -fsSL https://raw.githubusercontent.com/NousResearch/marlow-agent/main/scripts/install.sh | bash", Colors.DIM))
+        print(color(f"  curl -fsSL {MARLOW_INSTALL_SCRIPT_URL} | bash", Colors.DIM))
         print()
 
     print(color("Reload your shell to complete the process:", Colors.YELLOW))

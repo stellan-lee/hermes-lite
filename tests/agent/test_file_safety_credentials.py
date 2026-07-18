@@ -1,6 +1,6 @@
 """Tests for MARLOW_HOME credential-file read blocking in file_safety.
 
-Regression for https://github.com/NousResearch/marlow-agent/issues/17656 —
+Regression for upstream issue #17656 —
 ``read_file`` was previously only sandboxed against ``MARLOW_HOME`` itself,
 which left ``auth.json`` (plaintext provider keys and tokens) readable by the
 agent. A prompt-injection reaching

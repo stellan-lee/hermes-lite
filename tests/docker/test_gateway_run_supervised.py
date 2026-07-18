@@ -1,7 +1,7 @@
 """Harness: `docker run <image> gateway run` redirects to supervised mode.
 
-Before the s6 migration, ``docker run nousresearch/marlow-agent gateway
-run`` was the standard pattern — the gateway ran as the container's
+Before the s6 migration, ``docker run marlow-agent gateway run`` was the
+standard pattern — the gateway ran as the container's
 main process, container exit code matched gateway exit code, no
 supervision. With s6 as PID 1, the same invocation now auto-redirects
 to the supervised path (`gateway start`) so users get auto-restart on

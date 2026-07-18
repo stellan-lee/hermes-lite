@@ -66,7 +66,7 @@ Watch a GitHub repo (set `GITHUB_TOKEN` in `~/.marlow/.env` to avoid the 60 req/
 
 ```bash
 python $MARLOW_HOME/skills/devops/watchers/scripts/watch_github.py \
-  --name marlow-issues --repo NousResearch/marlow-agent --scope issues
+  --name marlow-issues --repo stellan-lee/Marlow --scope issues
 ```
 
 Poll an arbitrary JSON API:

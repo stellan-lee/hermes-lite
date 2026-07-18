@@ -8,8 +8,9 @@ version = "0.15.1"
 description = "A self-improving AI agent with local tools, gateways, skills, and extensions"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "Nous Research" }]
+authors = [{ name = "Marlow contributors" }]
 license = { text = "MIT" }
+urls = { Repository = "https://github.com/stellan-lee/Marlow", Issues = "https://github.com/stellan-lee/Marlow/issues" }
 dependencies = [
   # Core — every direct dep is exact-pinned to ==X.Y.Z (no ranges).
   # Rationale: ranges allow PyPI to ship a fresh version of a transitive

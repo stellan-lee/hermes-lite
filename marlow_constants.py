@@ -10,6 +10,16 @@ from contextvars import ContextVar, Token
 from pathlib import Path
 
 
+MARLOW_REPOSITORY_SLUG = "stellan-lee/Marlow"
+MARLOW_REPOSITORY_URL = f"https://github.com/{MARLOW_REPOSITORY_SLUG}"
+MARLOW_REPOSITORY_GIT_URL = f"{MARLOW_REPOSITORY_URL}.git"
+MARLOW_REPOSITORY_SSH_URL = f"git@github.com:{MARLOW_REPOSITORY_SLUG}.git"
+MARLOW_ISSUES_URL = f"{MARLOW_REPOSITORY_URL}/issues"
+MARLOW_INSTALL_SCRIPT_URL = (
+    f"https://raw.githubusercontent.com/{MARLOW_REPOSITORY_SLUG}/main/scripts/install.sh"
+)
+
+
 _profile_fallback_warned: bool = False
 _UNSET = object()
 _MARLOW_HOME_OVERRIDE: ContextVar[str | object] = ContextVar(
@@ -53,7 +63,7 @@ def get_marlow_home() -> Path:
     ``~/.marlow`` — because raising here would brick 30+ module-level
     callers that import this at load time.  Subprocess spawners are
     expected to propagate ``MARLOW_HOME`` explicitly (see the systemd
-    template in ``marlow_cli/gateway.py``).  See https://github.com/NousResearch/marlow-agent/issues/18594.
+    template in ``marlow_cli/gateway.py``).  See upstream issue #18594.
     """
     override = get_marlow_home_override()
     if override:
@@ -176,10 +186,10 @@ def get_optional_skills_dir(default: Path | None = None) -> Path:
 def get_optional_mcps_dir(default: Path | None = None) -> Path:
     """Return the optional-mcps directory, honoring package-manager wrappers.
 
-    Mirrors :func:`get_optional_skills_dir` for the MCP catalog (Nous-approved
-    Model Context Protocol servers shipped with the repo but disabled by
-    default). Packaged installs may ship ``optional-mcps`` outside the Python
-    package tree and expose it via ``MARLOW_OPTIONAL_MCPS``.
+    Mirrors :func:`get_optional_skills_dir` for the repository-shipped MCP
+    catalog, which is disabled by default. Packaged installs may ship
+    ``optional-mcps`` outside the Python package tree and expose it via
+    ``MARLOW_OPTIONAL_MCPS``.
     """
     override = os.getenv("MARLOW_OPTIONAL_MCPS", "").strip()
     if override:
@@ -261,7 +271,7 @@ def secure_parent_dir(path: Path) -> None:
     prevent catastrophic host bricking when ``MARLOW_HOME`` or other path
     env vars resolve to an unexpected location.
 
-    See https://github.com/NousResearch/marlow-agent/issues/25821.
+    See upstream issue #25821.
     """
     parent = path.parent.resolve()
     # Refuse root and its direct children (/usr, /home, /var, /tmp, …).

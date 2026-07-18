@@ -6,10 +6,11 @@ scope for vulnerability reports.
 
 ## 1. Reporting a Vulnerability
 
-Report privately via [GitHub Security Advisories](https://github.com/NousResearch/marlow-agent/security/advisories/new)
-or **security@nousresearch.com**. Do not open public issues for
-security vulnerabilities. **Marlow Agent does not operate a bug
-bounty program.**
+Report privately through the repository's
+[Security page](https://github.com/stellan-lee/Marlow/security). Do not open
+public issues for security vulnerabilities. If private vulnerability reporting
+is unavailable, contact a repository maintainer before disclosing details.
+**Marlow Agent does not operate a bug bounty program.**
 
 A useful report includes:
 
@@ -321,7 +322,6 @@ that:
 
 - **Coordinated disclosure window:** 90 days from report, or until a
   fix is released, whichever comes first.
-- **Channel:** the GHSA thread or email correspondence with
-  security@nousresearch.com.
+- **Channel:** the private GitHub vulnerability report thread.
 - **Credit:** reporters are credited in release notes unless
   anonymity is requested.

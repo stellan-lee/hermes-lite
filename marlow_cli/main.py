@@ -159,6 +159,13 @@ def _require_tty(command_name: str) -> None:
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from marlow_constants import (  # noqa: E402
+    MARLOW_INSTALL_SCRIPT_URL,
+    MARLOW_REPOSITORY_GIT_URL,
+    MARLOW_REPOSITORY_SSH_URL,
+    MARLOW_REPOSITORY_URL,
+)
+
 
 # ---------------------------------------------------------------------------
 # Profile override — MUST happen before any marlow module import.
@@ -3732,7 +3739,7 @@ def _print_curator_first_run_notice() -> None:
     print("  Preview now:  marlow curator run --dry-run")
     print("  Pause it:     marlow curator pause")
     print(
-        "  Docs:         https://marlow-agent.nousresearch.com/docs/user-guide/features/curator"
+        "  Project:      https://github.com/stellan-lee/Marlow#readme"
     )
 
 
@@ -4019,12 +4026,12 @@ def _restore_stashed_changes(
 # =========================================================================
 
 OFFICIAL_REPO_URLS = {
-    "https://github.com/NousResearch/marlow-agent.git",
-    "git@github.com:NousResearch/marlow-agent.git",
-    "https://github.com/NousResearch/marlow-agent",
-    "git@github.com:NousResearch/marlow-agent",
+    MARLOW_REPOSITORY_GIT_URL,
+    MARLOW_REPOSITORY_SSH_URL,
+    MARLOW_REPOSITORY_URL,
+    MARLOW_REPOSITORY_SSH_URL.removesuffix(".git"),
 }
-OFFICIAL_REPO_URL = "https://github.com/NousResearch/marlow-agent.git"
+OFFICIAL_REPO_URL = MARLOW_REPOSITORY_GIT_URL
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 
 
@@ -4158,7 +4165,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         # Ask user if they want to add upstream
         print()
         print("ℹ Your fork is not tracking the official Marlow repository.")
-        print("  This means you may miss updates from NousResearch/marlow-agent.")
+        print(f"  This means you may miss updates from {MARLOW_REPOSITORY_URL}.")
         print()
         try:
             response = (
@@ -4171,16 +4178,14 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         if response in {"", "y", "yes"}:
             print("→ Adding upstream remote...")
             if _add_upstream_remote(git_cmd, cwd):
-                print(
-                    "  ✓ Added upstream: https://github.com/NousResearch/marlow-agent.git"
-                )
+                print(f"  ✓ Added upstream: {MARLOW_REPOSITORY_GIT_URL}")
                 has_upstream = True
             else:
                 print("  ✗ Failed to add upstream remote. Skipping upstream sync.")
                 return
         else:
             print(
-                "  Skipped. Run 'git remote add upstream https://github.com/NousResearch/marlow-agent.git' to add later."
+                f"  Skipped. Run 'git remote add upstream {MARLOW_REPOSITORY_GIT_URL}' to add later."
             )
             _mark_skip_upstream_prompt()
             return
@@ -4710,7 +4715,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     method = detect_install_method(PROJECT_ROOT)
     if method == "docker":
         # Docker can't ``git fetch`` from within the container.  Surface the
-        # same long-form ``docker pull`` guidance ``marlow update`` (apply
+        # same long-form source-rebuild guidance ``marlow update`` (apply
         # path) uses — telling the user to "reinstall via curl" or that
         # ".git is missing" would point them at the wrong remediation.
         from marlow_cli.config import format_docker_update_message
@@ -4969,11 +4974,11 @@ def cmd_update(args):
         return
 
     # Docker users can't ``git pull`` — the image excludes ``.git`` from
-    # the build context.  Bail with a friendly explanation pointing at
-    # ``docker pull`` BEFORE any of the apply-path / check-path branches
+    # the build context. Bail with a friendly explanation pointing at a
+    # host-side source rebuild BEFORE any apply/check branches
     # below get a chance to error out with misleading "Not a git
     # repository" text.  See format_docker_update_message() for the full
-    # rationale and tag-pinning / config-persistence notes.
+    # rationale and config-persistence notes.
     if detect_install_method(PROJECT_ROOT) == "docker":
         print(format_docker_update_message())
         sys.exit(1)
@@ -5084,9 +5089,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _cmd_update_pip(args)
             return
         print("✗ Not a git repository. Please reinstall:")
-        print(
-            "  curl -fsSL https://raw.githubusercontent.com/NousResearch/marlow-agent/main/scripts/install.sh | bash"
-        )
+        print(f"  curl -fsSL {MARLOW_INSTALL_SCRIPT_URL} | bash")
         sys.exit(1)
 
     # Build git command once — reused for fork detection and the update itself.
@@ -7247,7 +7250,7 @@ def main():
             "Manage the fallback provider chain.  Fallback providers are tried "
             "in order when the primary model fails with rate-limit, overload, or "
             "connection errors.  See: "
-            "https://marlow-agent.nousresearch.com/docs/user-guide/features/fallback-providers"
+            "https://github.com/stellan-lee/Marlow#readme"
         ),
     )
     fallback_subparsers = fallback_parser.add_subparsers(dest="fallback_command")

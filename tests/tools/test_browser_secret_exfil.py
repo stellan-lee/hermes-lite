@@ -33,10 +33,10 @@ class TestBrowserSecretExfil:
         from tools.browser_tool import browser_navigate
         # Patch the actual browser command — we only care that the secret
         # check doesn't block a clean URL, not that Chrome starts in CI.
-        mock_result = {"success": True, "data": {"title": "ok", "url": "https://github.com/NousResearch/marlow-agent"}}
+        mock_result = {"success": True, "data": {"title": "ok", "url": "https://github.com/stellan-lee/Marlow"}}
         with patch("tools.browser_tool._run_browser_command", return_value=mock_result), \
              patch("tools.browser_tool._get_session_info", return_value={"_first_nav": False}):
-            result = browser_navigate("https://github.com/NousResearch/marlow-agent")
+            result = browser_navigate("https://github.com/stellan-lee/Marlow")
         parsed = json.loads(result)
         # Should NOT be blocked by secret detection
         assert "API key or token" not in parsed.get("error", "")

@@ -81,8 +81,8 @@ This isn't a quality bar — it's a coupling-and-maintenance decision. Memory pr
 ### Clone and install
 
 ```bash
-git clone --recurse-submodules https://github.com/NousResearch/marlow-agent.git
-cd marlow-agent
+git clone --recurse-submodules https://github.com/stellan-lee/Marlow.git
+cd Marlow
 
 # Create venv with Python 3.11
 uv venv venv --python 3.11
@@ -707,7 +707,7 @@ test(tools): add unit tests for file_operations
 
 ## Reporting Issues
 
-- Use [GitHub Issues](https://github.com/NousResearch/marlow-agent/issues)
+- Use [GitHub Issues](https://github.com/stellan-lee/Marlow/issues)
 - Include: OS, Python version, Marlow version (`marlow version`), full error traceback
 - Include steps to reproduce
 - Check existing issues before creating duplicates
@@ -717,7 +717,6 @@ test(tools): add unit tests for file_operations
 
 ## Community
 
-- **Discord**: [discord.gg/NousResearch](https://discord.gg/NousResearch) — for questions, showcasing projects, and sharing skills
 - **GitHub Discussions**: For design proposals and architecture discussions
 - **Skills**: Share standalone `SKILL.md` packages with the community
 

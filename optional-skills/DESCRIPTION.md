@@ -1,6 +1,6 @@
 # Optional Skills
 
-Official skills maintained by Nous Research that are **not activated by default**.
+Bundled skills that are **not activated by default**.
 
 These skills ship with the marlow-agent repository but are not copied to
 `~/.marlow/skills/` during setup. To activate one, copy its directory into
