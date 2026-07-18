@@ -36,6 +36,7 @@ def test_file_tool_relative_paths_use_terminal_cwd(monkeypatch, tmp_path):
     workspace.mkdir()
 
     monkeypatch.setenv("TERMINAL_CWD", str(workspace))
+    monkeypatch.setattr(file_tools, "_get_live_tracking_cwd", lambda _task_id: None)
 
     resolved = file_tools._resolve_path_for_task("notes/today.md", task_id="cwd-contract")
 

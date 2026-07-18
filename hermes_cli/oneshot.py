@@ -342,7 +342,7 @@ def _run_agent(
         quiet_mode=True,
         platform="cli",
         session_db=session_db,
-        fallback_model=_fb or None,
+        fallback_providers=_fb or None,
         # Interactive callbacks are intentionally NOT wired beyond this
         # one.  In oneshot mode there's no user sitting at a terminal:
         #   - clarify  → returns a synthetic "pick a default" instruction

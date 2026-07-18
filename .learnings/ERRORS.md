@@ -1128,3 +1128,163 @@ after mechanical pruning.
 - **Error:** The patch omitted two live continuation lines and did not match.
 - **Resolution:** Re-read the exact paragraph and replaced it with a retained-backend description.
 - **Status:** Resolved
+
+## ERR-038: OpenClaw cleanup missed two live comment suffixes
+
+- **Date:** 2026-07-18
+- **Context:** Removing the retired OpenClaw migration onboarding surface.
+- **Error:** The combined patch omitted the suffixes on two `except` comments in the live CLI block.
+- **Resolution:** Re-read the exact block and split onboarding, CLI, and Honcho edits.
+- **Status:** Resolved
+
+## ERR-039: Legacy-fallback patch used mismatched combined context
+
+- **Date:** 2026-07-18
+- **Context:** Removing the root-level fallback alias and terminal config aliases.
+- **Error:** Two broad `apply_patch` calls failed because one hunk in each used inexact live context.
+- **Resolution:** Re-read the affected sections and applied smaller exact hunks.
+- **Status:** Resolved
+
+## ERR-040: Retained-provider fixtures changed assertion semantics
+
+- **Date:** 2026-07-18
+- **Context:** Replacing removed provider fixtures with Codex/custom equivalents.
+- **Error:** One cooldown test initially reused the primary custom provider, and one CLI assertion still required a slash-form remote model name.
+- **Resolution:** Used two Codex fallback models for the cooldown chain and asserted the retained local model directly.
+- **Status:** Resolved
+
+## ERR-041: TUI parity helper received the wrong venv path
+
+- **Date:** 2026-07-18
+- **Context:** Final retained TUI validation from the `ui-tui` working directory.
+- **Error:** The command-registry parity test reads `PYTHON`, not the gateway client's `HERMES_PYTHON`, so it used a system Python without PyYAML even though Vitest passed.
+- **Resolution:** Reran with `PYTHON` set to the repository venv's absolute interpreter path.
+- **Status:** Resolved
+
+## ERR-042: Monolithic suite was contaminated by Docker and leaked threads
+
+- **Date:** 2026-07-18
+- **Context:** Final repository-wide validation.
+- **Error:** The unrestricted pytest run entered `tests/docker`, timed out while building the image, then accumulated Honcho/TUI/gateway background threads and cascaded timeout failures across otherwise unrelated modules.
+- **Resolution:** Stopped the contaminated run and validated Docker-independent tests plus each reported module in fresh processes; Docker/package behavior is checked separately.
+- **Status:** Resolved
+
+## ERR-043: CLI reload test leaked a mocked renderer into resume output
+
+- **Date:** 2026-07-18
+- **Context:** Fail-fast Docker-independent suite validation.
+- **Error:** `test_cli_init` reloads `cli` under prompt-toolkit stubs, so a later resume test's `_cprint` call produced no capturable stdout despite passing alone.
+- **Resolution:** Made the resume stdout test bind `_cprint` to `print`, isolating its output-channel assertion from prior module reload state.
+- **Status:** Resolved
+
+## ERR-044: Discord import tests changed the DMChannel class identity
+
+- **Date:** 2026-07-18
+- **Context:** Ordered Discord gateway test validation.
+- **Error:** Earlier lazy-import tests replaced the adapter module's `discord.DMChannel`, so reply extraction fixtures were no longer recognized as DMs and returned before dispatch.
+- **Resolution:** Bound the adapter module's `DMChannel` to the fixture class for each reply extraction test.
+- **Status:** Resolved
+
+## ERR-045: Telegram module globals outlived fake-module fixtures
+
+- **Date:** 2026-07-18
+- **Context:** Ordered Telegram gateway test validation.
+- **Error:** Tests replaced `sys.modules["telegram"]`, but an already-imported adapter retained older `ChatType` and rendering classes, causing group messages to be classified as DMs.
+- **Resolution:** The fake-Telegram fixture now also patches the live adapter module globals for each test.
+- **Status:** Resolved
+
+## ERR-046: Skin assertion depended on prior global state
+
+- **Date:** 2026-07-18
+- **Context:** Fresh-process agent test-area validation.
+- **Error:** A todo-display test asserted the default prefix after earlier tests had intentionally selected another global skin.
+- **Resolution:** The test now selects the default skin for its assertion and restores the prior skin afterward.
+- **Status:** Resolved
+
+## ERR-047: Update stream assertion held a stale class after reload
+
+- **Date:** 2026-07-18
+- **Context:** Fresh-process `hermes_cli` test-area validation.
+- **Error:** Earlier tests reloaded `hermes_cli.main`; the imported `_UpdateOutputStream` class no longer matched the current class used by `_install_hangup_protection`.
+- **Resolution:** The integration assertion now checks against the installer function's live module-global class.
+- **Status:** Resolved
+
+## ERR-048: Deselected integration area stopped the test loop
+
+- **Date:** 2026-07-18
+- **Context:** Fresh-process validation by top-level test area.
+- **Error:** `tests/integration` is excluded by the default marker configuration, so pytest returned its no-tests-selected status and stopped a `set -e` loop.
+- **Resolution:** Recorded the 37 intentional deselections and resumed the remaining areas explicitly.
+- **Status:** Resolved
+
+## ERR-049: Tools tests inherited live task and session context
+
+- **Date:** 2026-07-18
+- **Context:** Fresh-process tools-area validation.
+- **Error:** CWD and sudo-cache assertions inherited live terminal/session context from earlier tools tests; a config-sync assertion also still encoded the removed `env_type` alias.
+- **Resolution:** Scoped the CWD test to its env fallback, explicitly set/reset the session ContextVar, and updated the config-map assertion to canonical `backend` parity.
+- **Status:** Resolved
+
+## ERR-050: Telegram parse-mode tests asserted enum repr internals
+
+- **Date:** 2026-07-18
+- **Context:** Full messaging-gateway area validation.
+- **Error:** Six MarkdownV2 tests expected the fake enum name inside `repr()`, while the real retained Telegram library correctly supplies the value `'MarkdownV2'`.
+- **Resolution:** Assertions now compare against the adapter method's live `ParseMode.MARKDOWN_V2` value.
+- **Status:** Resolved
+
+## ERR-051: Empty skill directories produced an empty deletion patch
+
+- **Date:** 2026-07-18
+- **Context:** Final checklist audit of removed bundled skill categories.
+- **Error:** `find` previously listed the category directories, which looked like retained content, but a generated deletion patch was empty because the directories contained no tracked files.
+- **Resolution:** Verified both the filesystem and Git index report zero files in those checked categories, then limited the cleanup to stale references.
+- **Status:** Resolved
+
+## ERR-052: TUI tests still expected the removed root max-turns alias
+
+- **Date:** 2026-07-18
+- **Context:** Focused validation after removing the last root-level `max_turns` compatibility reads.
+- **Error:** Three TUI gateway tests expected root `max_turns` to override the canonical `agent.max_turns` defaults.
+- **Resolution:** Updated the tests to verify that a missing or null `agent` section uses the documented foreground/background defaults and ignores the legacy root key.
+- **Status:** Resolved
+
+## ERR-053: Zsh did not split the changed-file lint list
+
+- **Date:** 2026-07-18
+- **Context:** Final lint of all changed Python files.
+- **Error:** Passing a newline-delimited shell variable to Ruff under zsh produced one overlong filename because zsh does not perform sh-style implicit word splitting.
+- **Resolution:** Switched to a newline-safe `xargs` pipeline so each changed Python path is passed as a separate argument.
+- **Status:** Resolved
+
+## ERR-054: Combined suite leaked gateway session context into a skills test
+
+- **Date:** 2026-07-18
+- **Context:** Full combined Cron, Hermes CLI, and TUI-gateway validation.
+- **Error:** A prior gateway test left `HERMES_SESSION_PLATFORM` explicitly cleared in its ContextVar, which correctly suppresses the process-environment fallback and made one skills-config test order-dependent.
+- **Resolution:** Ran the environment-fallback assertion in a fresh `contextvars.Context`, matching a normal non-gateway caller without mutating production behavior.
+- **Status:** Resolved
+
+## ERR-055: A quoted audit search was malformed
+
+- **Date:** 2026-07-18
+- **Context:** Final fallback-schema audit.
+- **Error:** A mixed single/double-quoted `rg` command left an unmatched quote in zsh.
+- **Resolution:** Reissued the searches with simple single-quoted patterns and kept later audit commands similarly scoped.
+- **Status:** Resolved
+
+## ERR-056: A zsh loop variable overwrote the command search path
+
+- **Date:** 2026-07-18
+- **Context:** Preservation audit of retained feature files.
+- **Error:** Naming a zsh loop variable `path` overwrote zsh's special `$path` array, so subsequent `git`, `rg`, and `head` commands were no longer discoverable.
+- **Resolution:** Renamed the loop variable and reran the remaining audit command separately.
+- **Status:** Resolved
+
+## ERR-057: Vision tests inherited Codex native-routing state
+
+- **Date:** 2026-07-18
+- **Context:** Final mixed validation across fallback, Cron, delegation, Codex, and vision areas.
+- **Error:** Three tests of the auxiliary vision handler inherited native-vision routing enabled by earlier retained Codex tests, so their mocked auxiliary client was intentionally bypassed.
+- **Resolution:** Scoped the auxiliary-handler test class to the auxiliary route; native fast-path behavior remains covered in its dedicated test module.
+- **Status:** Resolved

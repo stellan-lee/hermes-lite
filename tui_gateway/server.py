@@ -2079,7 +2079,7 @@ def _cfg_max_turns(cfg: dict, default: int) -> int:
     except (TypeError, ValueError):
         pass
     agent_cfg = cfg.get("agent") or {}
-    return int(agent_cfg.get("max_turns") or cfg.get("max_turns") or default)
+    return int(agent_cfg.get("max_turns") or default)
 
 
 def _background_agent_kwargs(agent, task_id: str) -> dict:
@@ -2104,7 +2104,7 @@ def _background_agent_kwargs(agent, task_id: str) -> dict:
         "request_overrides": dict(getattr(agent, "request_overrides", {}) or {}),
         "platform": "tui",
         "session_db": _get_db(),
-        "fallback_model": getattr(agent, "_fallback_model", None),
+        "fallback_providers": getattr(agent, "_fallback_chain", None),
     }
 
 

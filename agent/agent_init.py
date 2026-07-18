@@ -179,7 +179,7 @@ def init_agent(
     session_db=None,
     parent_session_id: str = None,
     iteration_budget: "IterationBudget" = None,
-    fallback_model: Dict[str, Any] = None,
+    fallback_providers: List[Dict[str, Any]] = None,
     checkpoints_enabled: bool = False,
     checkpoint_max_snapshots: int = 20,
     checkpoint_max_total_size_mb: int = 500,
@@ -478,23 +478,17 @@ def init_agent(
         print(f"🤖 AI Agent initialized with model: {agent.model}")
         print(f"🔗 Endpoint: {base_url}")
     
-    # Provider fallback chain — ordered list of backup providers tried
-    # when the primary is exhausted (rate-limit, overload, connection
-    # failure).  Supports both legacy single-dict ``fallback_model`` and
-    # new list ``fallback_providers`` format.
-    if isinstance(fallback_model, list):
+    # Provider fallback chain — ordered list of backup providers tried when
+    # the primary is exhausted (rate-limit, overload, connection failure).
+    if isinstance(fallback_providers, list):
         agent._fallback_chain = [
-            f for f in fallback_model
+            f for f in fallback_providers
             if isinstance(f, dict) and f.get("provider") and f.get("model")
         ]
-    elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
-        agent._fallback_chain = [fallback_model]
     else:
         agent._fallback_chain = []
     agent._fallback_index = 0
     agent._fallback_activated = getattr(agent, "_fallback_activated", False)
-    # Legacy attribute kept for backward compat (tests, external callers)
-    agent._fallback_model = agent._fallback_chain[0] if agent._fallback_chain else None
     if agent._fallback_chain and not agent.quiet_mode:
         if len(agent._fallback_chain) == 1:
             fb = agent._fallback_chain[0]

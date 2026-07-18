@@ -26,7 +26,7 @@ def _make_agent(*, provider="custom", model="local-a", api_mode="chat_completion
     agent._fallback_activated = False
     agent._fallback_index = 0
     agent._fallback_chain = []
-    agent._fallback_model = None
+    agent._fallback_chain = []
     agent._config_context_length = None
     agent._transport_cache = {}
     return agent

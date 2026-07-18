@@ -406,7 +406,7 @@ def load_cli_config() -> Dict[str, Any]:
             "provider": "auto",
         },
         "terminal": {
-            "env_type": "local",
+            "backend": "local",
             "cwd": ".",  # "." is resolved to os.getcwd() at runtime
             "timeout": 60,
             "lifetime_seconds": 300,
@@ -548,14 +548,6 @@ def load_cli_config() -> Dict[str, Any]:
                 if key not in defaults and key != "model":
                     defaults[key] = file_config[key]
             
-            # Handle legacy root-level max_turns (backwards compat) - copy to
-            # agent.max_turns whenever the nested key is missing.
-            agent_file_config = file_config.get("agent")
-            if "max_turns" in file_config and not (
-                isinstance(agent_file_config, dict)
-                and agent_file_config.get("max_turns") is not None
-            ):
-                defaults["agent"]["max_turns"] = file_config["max_turns"]
         except Exception as e:
             logger.warning("Failed to load cli-config.yaml: %s", e)
 
@@ -566,19 +558,13 @@ def load_cli_config() -> Dict[str, Any]:
     # Apply terminal config to environment variables (so terminal_tool picks them up)
     terminal_config = defaults.get("terminal", {})
     
-    # Normalize config key: the new config system (hermes_cli/config.py) and all
-    # documentation use "backend", the legacy cli-config.yaml uses "env_type".
-    # Accept both, with "backend" taking precedence (it's the documented key).
-    if "backend" in terminal_config:
-        terminal_config["env_type"] = terminal_config["backend"]
-    
     # CWD resolution for CLI/TUI. The gateway has its own config bridge in
     # gateway/run.py but may lazily import cli.py (triggering this code).
     # Local backend: always os.getcwd(). Use `cd /dir && hermes` to control it.
     # Non-local with placeholder: pop so terminal_tool uses its per-backend default.
     # Non-local with explicit path: keep as-is.
     _CWD_PLACEHOLDERS = (".", "auto", "cwd")
-    effective_backend = terminal_config.get("env_type", "local")
+    effective_backend = terminal_config.get("backend", "local")
 
     if effective_backend == "local":
         terminal_config["cwd"] = os.getcwd()
@@ -587,7 +573,7 @@ def load_cli_config() -> Dict[str, Any]:
         terminal_config.pop("cwd", None)
     
     env_mappings = {
-        "env_type": "TERMINAL_ENV",
+        "backend": "TERMINAL_ENV",
         "cwd": "TERMINAL_CWD",
         "timeout": "TERMINAL_TIMEOUT",
         "lifetime_seconds": "TERMINAL_LIFETIME_SECONDS",
@@ -3007,8 +2993,6 @@ class HermesCLI:
             self.max_turns = max_turns
         elif CLI_CONFIG["agent"].get("max_turns"):
             self.max_turns = CLI_CONFIG["agent"]["max_turns"]
-        elif CLI_CONFIG.get("max_turns"):  # Backwards compat: root-level max_turns
-            self.max_turns = CLI_CONFIG["max_turns"]
         elif os.getenv("HERMES_MAX_ITERATIONS"):
             try:
                 self.max_turns = int(os.getenv("HERMES_MAX_ITERATIONS", ""))
@@ -3063,9 +3047,7 @@ class HermesCLI:
         )
         
         # Fallback provider chain — tried in order when primary fails after retries.
-        # Merge new ``fallback_providers`` entries with any legacy
-        # ``fallback_model`` entries so old configs still participate.
-        self._fallback_model = get_fallback_chain(CLI_CONFIG)
+        self._fallback_providers = get_fallback_chain(CLI_CONFIG)
 
         # Signature of the currently-initialised agent's runtime.  Used to
         # rebuild the agent when provider / model / base_url changes across
@@ -3913,7 +3895,7 @@ class HermesCLI:
 
         # 2. Replace untouched default with a Codex model
         if self._model_is_default:
-            fallback_model = "gpt-5.3-codex"
+            default_model = "gpt-5.3-codex"
             try:
                 from hermes_cli.codex_models import get_codex_model_ids
 
@@ -3921,12 +3903,12 @@ class HermesCLI:
                     access_token=self.api_key if self.api_key else None,
                 )
                 if available:
-                    fallback_model = available[0]
+                    default_model = available[0]
             except Exception:
                 pass
 
-            if current_model != fallback_model:
-                self.model = fallback_model
+            if current_model != default_model:
+                self.model = default_model
                 changed = True
 
         return changed
@@ -4544,7 +4526,7 @@ class HermesCLI:
         if runtime is None and _primary_exc is not None:
             from hermes_cli.auth import AuthError
             if isinstance(_primary_exc, AuthError):
-                _fb_chain = self._fallback_model if isinstance(self._fallback_model, list) else []
+                _fb_chain = self._fallback_providers
                 for _fb in _fb_chain:
                     _fb_provider = (_fb.get("provider") or "").strip().lower()
                     _fb_model = (_fb.get("model") or "").strip()
@@ -4856,7 +4838,7 @@ class HermesCLI:
                 clarify_callback=self._clarify_callback,
                 reasoning_callback=self._current_reasoning_callback(),
 
-                fallback_model=self._fallback_model,
+                fallback_providers=self._fallback_providers,
                 thinking_callback=self._on_thinking,
                 checkpoints_enabled=self.checkpoints_enabled,
                 checkpoint_max_snapshots=self.checkpoint_max_snapshots,
@@ -8662,7 +8644,7 @@ class HermesCLI:
                     session_db=self._session_db,
                     reasoning_config=self.reasoning_config,
                     request_overrides=turn_route.get("request_overrides"),
-                    fallback_model=self._fallback_model,
+                    fallback_providers=self._fallback_providers,
                 )
                 # Silence raw spinner; route thinking through TUI widget when no foreground agent is active.
                 bg_agent._print_fn = lambda *_a, **_kw: None
@@ -12319,30 +12301,6 @@ class HermesCLI:
                 )
         except Exception:
             pass
-        # First-time OpenClaw-residue banner — fires once if ~/.openclaw/ exists
-        # after an OpenClaw→Hermes migration (especially migrations done by
-        # OpenClaw's own tool, which doesn't archive the source directory).
-        try:
-            from agent.onboarding import (
-                OPENCLAW_RESIDUE_FLAG,
-                detect_openclaw_residue,
-                is_seen,
-                mark_seen,
-                openclaw_residue_hint_cli,
-            )
-            if not is_seen(self.config, OPENCLAW_RESIDUE_FLAG) and detect_openclaw_residue():
-                try:
-                    _resid_color = _welcome_skin.get_color("banner_dim", "#B8860B")
-                except Exception:
-                    _resid_color = "#B8860B"
-                self._console_print(f"[{_resid_color}]{openclaw_residue_hint_cli()}[/]")
-                try:
-                    from hermes_cli.config import get_config_path as _get_cfg_path_resid
-                    mark_seen(_get_cfg_path_resid(), OPENCLAW_RESIDUE_FLAG)
-                except Exception:
-                    pass  # best-effort — banner will fire again next session
-        except Exception:
-            pass  # banner is non-critical — never break startup
         # Show a random tip to help users discover features
         try:
             from hermes_cli.tips import get_random_tip

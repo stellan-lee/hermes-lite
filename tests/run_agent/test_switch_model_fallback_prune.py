@@ -20,7 +20,6 @@ def _make_agent(chain):
     agent._fallback_activated = False
     agent._fallback_index = 0
     agent._fallback_chain = list(chain)
-    agent._fallback_model = chain[0] if chain else None
     agent._config_context_length = None
     agent._transport_cache = {}
     agent._create_openai_client = lambda *_a, **_kw: MagicMock()
@@ -48,23 +47,19 @@ def test_switch_drops_old_and_new_primary_from_fallback_chain():
     _switch_to_custom(agent)
 
     assert agent._fallback_chain == []
-    assert agent._fallback_model is None
 
 
 def test_switch_with_empty_chain_stays_empty():
     agent = _make_agent([])
     _switch_to_custom(agent)
     assert agent._fallback_chain == []
-    assert agent._fallback_model is None
 
 
 def test_switch_initializes_missing_fallback_attrs():
     agent = _make_agent([])
     del agent._fallback_chain
-    del agent._fallback_model
     _switch_to_custom(agent)
     assert agent._fallback_chain == []
-    assert agent._fallback_model is None
 
 
 def test_switch_within_same_provider_preserves_chain():

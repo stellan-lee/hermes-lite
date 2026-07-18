@@ -1600,8 +1600,7 @@ DEFAULT_CONFIG = {
     #
     # Core Hermes tools (terminal, read_file, write_file, patch,
     # search_files, todo, memory, browser_*, etc.) are NEVER deferred.
-    # See tools/tool_search.py for full design notes and the
-    # openclaw-tool-search-report PDF in this PR for the rationale.
+    # See tools/tool_search.py for the design rationale.
     "tools": {
         "tool_search": {
             # "auto" (default) — activate only when deferrable tool schemas
@@ -2362,8 +2361,7 @@ def check_config_version() -> Tuple[int, int]:
 
 # Fields that are valid at root level of config.yaml
 _KNOWN_ROOT_KEYS = {
-    "_config_version", "model", "providers", "fallback_model",
-    "fallback_providers", "toolsets",
+    "_config_version", "model", "providers", "fallback_providers", "toolsets",
     "agent", "terminal", "display", "compression", "delegation",
     "auxiliary", "context", "memory", "gateway",
     "sessions", "streaming",
@@ -2420,53 +2418,39 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
                     "Add the API endpoint URL, e.g. base_url: https://api.example.com/v1",
                 ))
 
-    # ── fallback_model: single dict OR list of dicts (chain) ─────────────
-    fb = config.get("fallback_model")
+    # ── fallback_providers: ordered list of provider/model entries ───────
+    fb = config.get("fallback_providers")
     if fb is not None:
         if isinstance(fb, list):
-            # Chain fallback — validate each entry
             for i, entry in enumerate(fb):
                 if not isinstance(entry, dict):
                     issues.append(ConfigIssue(
                         "error",
-                        f"fallback_model[{i}] should be a dict, got {type(entry).__name__}",
+                        f"fallback_providers[{i}] should be a dict, got {type(entry).__name__}",
                         "Each entry needs provider + model",
                     ))
                 else:
                     if not entry.get("provider"):
                         issues.append(ConfigIssue(
                             "warning",
-                            f"fallback_model[{i}] is missing 'provider' field",
+                            f"fallback_providers[{i}] is missing 'provider' field",
                             "Add: provider: openai-codex or a configured custom provider",
                         ))
                     if not entry.get("model"):
                         issues.append(ConfigIssue(
                             "warning",
-                            f"fallback_model[{i}] is missing 'model' field",
+                            f"fallback_providers[{i}] is missing 'model' field",
                             "Add: model: <model-name>",
                         ))
-        elif not isinstance(fb, dict):
+        else:
             issues.append(ConfigIssue(
                 "error",
-                f"fallback_model should be a dict with 'provider' and 'model', got {type(fb).__name__}",
+                f"fallback_providers should be a list, got {type(fb).__name__}",
                 "Change to:\n"
-                "  fallback_model:\n"
-                "    provider: openai-codex\n"
-                "    model: gpt-5.3-codex",
+                "  fallback_providers:\n"
+                "    - provider: openai-codex\n"
+                "      model: gpt-5.3-codex",
             ))
-        elif fb:
-            if not fb.get("provider"):
-                issues.append(ConfigIssue(
-                    "warning",
-                    "fallback_model is missing 'provider' field — fallback will be disabled",
-                    "Add: provider: openai-codex or a configured custom provider",
-                ))
-            if not fb.get("model"):
-                issues.append(ConfigIssue(
-                    "warning",
-                    "fallback_model is missing 'model' field — fallback will be disabled",
-                    "Add a model exposed by the selected provider",
-                ))
 
     # ── model section: should exist when custom providers are configured ──
     model_cfg = config.get("model")
@@ -2858,10 +2842,10 @@ _FALLBACK_COMMENT = """
 #
 # For custom OpenAI-compatible endpoints, add base_url and key_env.
 #
-# fallback_model:
-#   provider: custom
-#   model: local-model
-#   base_url: http://localhost:8000/v1
+# fallback_providers:
+#   - provider: custom
+#     model: local-model
+#     base_url: http://localhost:8000/v1
 """
 
 
@@ -2883,10 +2867,10 @@ _COMMENTED_SECTIONS = """
 #
 # For custom OpenAI-compatible endpoints, add base_url and key_env.
 #
-# fallback_model:
-#   provider: custom
-#   model: local-model
-#   base_url: http://localhost:8000/v1
+# fallback_providers:
+#   - provider: custom
+#     model: local-model
+#     base_url: http://localhost:8000/v1
 """
 
 
@@ -2916,12 +2900,10 @@ def save_config(config: Dict[str, Any]):
         sec = normalized.get("security", {})
         if not sec or sec.get("redact_secrets") is None:
             parts.append(_SECURITY_COMMENT)
-        fb = normalized.get("fallback_model", {})
-        fb_is_valid = False
-        if isinstance(fb, list):
-            fb_is_valid = any(isinstance(e, dict) and e.get("provider") and e.get("model") for e in fb)
-        elif isinstance(fb, dict):
-            fb_is_valid = bool(fb.get("provider") and fb.get("model"))
+        fb = normalized.get("fallback_providers", [])
+        fb_is_valid = isinstance(fb, list) and any(
+            isinstance(e, dict) and e.get("provider") and e.get("model") for e in fb
+        )
         if not fb_is_valid:
             parts.append(_FALLBACK_COMMENT)
 

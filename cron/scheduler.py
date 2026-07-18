@@ -1518,7 +1518,7 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
                     prefill_messages = None
 
         # Max iterations
-        max_iterations = _cfg.get("agent", {}).get("max_turns") or _cfg.get("max_turns") or 90
+        max_iterations = _cfg.get("agent", {}).get("max_turns") or 90
 
         from hermes_cli.runtime_provider import (
             resolve_runtime_provider,
@@ -1540,8 +1540,7 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
         except AuthError as auth_exc:
             # Primary provider auth failed — try fallback chain before giving up.
             logger.warning("Job '%s': primary auth failed (%s), trying fallback", job_id, auth_exc)
-            fb = _cfg.get("fallback_providers") or _cfg.get("fallback_model")
-            fb_list = (fb if isinstance(fb, list) else [fb]) if fb else []
+            fb_list = _cfg.get("fallback_providers") or []
             runtime = None
             for entry in fb_list:
                 if not isinstance(entry, dict):
@@ -1563,7 +1562,7 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
             message = format_runtime_provider_error(exc)
             raise RuntimeError(message) from exc
 
-        fallback_model = _cfg.get("fallback_providers") or _cfg.get("fallback_model") or None
+        fallback_providers = _cfg.get("fallback_providers") or None
         # Initialize MCP servers so configured mcp_servers are available to
         # the agent's tool registry before AIAgent is constructed. Without
         # this, cron jobs never saw any MCP tools — only the gateway / CLI
@@ -1594,7 +1593,7 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
             max_iterations=max_iterations,
             reasoning_config=reasoning_config,
             prefill_messages=prefill_messages,
-            fallback_model=fallback_model,
+            fallback_providers=fallback_providers,
             enabled_toolsets=_resolve_cron_enabled_toolsets(job, _cfg),
             disabled_toolsets=_resolve_cron_disabled_toolsets(_cfg),
             quiet_mode=True,

@@ -30,7 +30,7 @@ def _make_tool_defs(*names: str) -> list:
     ]
 
 
-def _make_agent(fallback_model=None, provider="custom", base_url="https://my-llm.example.com/v1"):
+def _make_agent(fallback_providers=None, provider="custom", base_url="https://my-llm.example.com/v1"):
     """Create a minimal AIAgent with optional fallback config."""
     with (
         patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("web_search")),
@@ -44,13 +44,13 @@ def _make_agent(fallback_model=None, provider="custom", base_url="https://my-llm
             quiet_mode=True,
             skip_context_files=True,
             skip_memory=True,
-            fallback_model=fallback_model,
+            fallback_providers=fallback_providers,
         )
         agent.client = MagicMock()
         return agent
 
 
-def _mock_resolve(base_url="https://openrouter.ai/api/v1", api_key="fallback-key-1234"):
+def _mock_resolve(base_url="http://localhost:1234/v1", api_key="fallback-key-1234"):
     """Helper to create a mock client for resolve_provider_client."""
     mock_client = MagicMock()
     mock_client.api_key = api_key
@@ -101,7 +101,7 @@ class TestRestorePrimaryRuntime:
 
     def test_restores_model_and_provider(self):
         agent = _make_agent(
-            fallback_model={"provider": "openrouter", "model": "anthropic/claude-sonnet-4"},
+            fallback_providers=[{"provider": "custom", "model": "backup-model"}],
         )
         original_model = agent.model
         original_provider = agent.provider
@@ -112,8 +112,8 @@ class TestRestorePrimaryRuntime:
             agent._try_activate_fallback()
 
         assert agent._fallback_activated is True
-        assert agent.model == "anthropic/claude-sonnet-4"
-        assert agent.provider == "openrouter"
+        assert agent.model == "backup-model"
+        assert agent.provider == "custom"
 
         # Restore should bring back the primary
         with patch("run_agent.OpenAI", return_value=MagicMock()):
@@ -127,9 +127,9 @@ class TestRestorePrimaryRuntime:
     def test_resets_fallback_index(self):
         """After restore, the full fallback chain should be available again."""
         agent = _make_agent(
-            fallback_model=[
-                {"provider": "openrouter", "model": "model-a"},
-                {"provider": "anthropic", "model": "model-b"},
+            fallback_providers=[
+                {"provider": "openai-codex", "model": "gpt-5.3-codex"},
+                {"provider": "openai-codex", "model": "gpt-5.4"},
             ],
         )
         # Advance through the chain
@@ -146,7 +146,7 @@ class TestRestorePrimaryRuntime:
 
     def test_restores_compressor_state(self):
         agent = _make_agent(
-            fallback_model={"provider": "openrouter", "model": "anthropic/claude-sonnet-4"},
+            fallback_providers=[{"provider": "custom", "model": "backup-model"}],
         )
         original_ctx_len = agent.context_compressor.context_length
         original_threshold = agent.context_compressor.threshold_tokens
@@ -355,7 +355,7 @@ class TestRestoreInRunConversation:
     def test_full_cycle_fallback_then_restore(self):
         """Simulate: turn 1 activates fallback, turn 2 restores primary."""
         agent = _make_agent(
-            fallback_model={"provider": "openrouter", "model": "anthropic/claude-sonnet-4"},
+            fallback_providers=[{"provider": "custom", "model": "backup-model"}],
             provider="custom",
         )
 
@@ -365,8 +365,8 @@ class TestRestoreInRunConversation:
             assert agent._try_activate_fallback() is True
 
         assert agent._fallback_activated is True
-        assert agent.model == "anthropic/claude-sonnet-4"
-        assert agent.provider == "openrouter"
+        assert agent.model == "backup-model"
+        assert agent.provider == "custom"
         assert agent._fallback_index == 1
 
         # Turn 2: restore primary
@@ -389,7 +389,7 @@ class TestRateLimitCooldown:
     def test_restore_blocked_during_cooldown(self):
         """While _rate_limited_until is in the future, restore returns False."""
         agent = _make_agent(
-            fallback_model={"provider": "openrouter", "model": "anthropic/claude-sonnet-4"},
+            fallback_providers=[{"provider": "custom", "model": "backup-model"}],
         )
         mock_client = _mock_resolve()
         with patch("agent.auxiliary_client.resolve_provider_client", return_value=(mock_client, None)):
@@ -407,7 +407,7 @@ class TestRateLimitCooldown:
     def test_restore_allowed_after_cooldown_expires(self):
         """Once the cooldown window passes, restore proceeds normally."""
         agent = _make_agent(
-            fallback_model={"provider": "openrouter", "model": "anthropic/claude-sonnet-4"},
+            fallback_providers=[{"provider": "custom", "model": "backup-model"}],
         )
         mock_client = _mock_resolve()
         with patch("agent.auxiliary_client.resolve_provider_client", return_value=(mock_client, None)):
@@ -428,7 +428,7 @@ class TestRateLimitCooldown:
         """_try_activate_fallback with rate_limit reason sets _rate_limited_until."""
         from run_agent import FailoverReason
         agent = _make_agent(
-            fallback_model={"provider": "openrouter", "model": "anthropic/claude-sonnet-4"},
+            fallback_providers=[{"provider": "custom", "model": "backup-model"}],
         )
         before = time.monotonic()
         mock_client = _mock_resolve()
@@ -442,9 +442,9 @@ class TestRateLimitCooldown:
         """Chain-switching while already on fallback must not reset cooldown."""
         from run_agent import FailoverReason
         agent = _make_agent(
-            fallback_model=[
-                {"provider": "openrouter", "model": "model-a"},
-                {"provider": "anthropic", "model": "model-b"},
+            fallback_providers=[
+                {"provider": "openai-codex", "model": "gpt-5.3-codex"},
+                {"provider": "openai-codex", "model": "gpt-5.4"},
             ],
         )
         mock_client = _mock_resolve()

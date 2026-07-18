@@ -15,13 +15,13 @@ def _make_cli(env_overrides=None, config_overrides=None, **kwargs):
 
     _clean_config = {
         "model": {
-            "default": "anthropic/claude-opus-4.6",
-            "base_url": "https://openrouter.ai/api/v1",
-            "provider": "auto",
+            "default": "local-model",
+            "base_url": "http://localhost:11434/v1",
+            "provider": "custom",
         },
         "display": {"compact": False, "tool_progress": "all"},
         "agent": {},
-        "terminal": {"env_type": "local"},
+        "terminal": {"backend": "local"},
     }
     if config_overrides:
         _clean_config.update(config_overrides)
@@ -81,10 +81,6 @@ class TestMaxTurnsResolution:
         cli_obj = _make_cli(env_overrides={"HERMES_MAX_ITERATIONS": "not-a-number"})
         assert cli_obj.max_turns == 90
 
-    def test_legacy_root_max_turns_is_used_when_agent_key_exists_without_value(self):
-        cli_obj = _make_cli(config_overrides={"agent": {}, "max_turns": 77})
-        assert cli_obj.max_turns == 77
-
     def test_max_turns_never_none_for_agent(self):
         """The value passed to AIAgent must never be None (causes TypeError in run_conversation)."""
         cli = _make_cli()
@@ -103,16 +99,16 @@ class TestVerboseAndToolProgress:
 
 
 class TestFallbackChainInit:
-    def test_merges_new_and_legacy_fallback_config(self):
+    def test_reads_fallback_providers(self):
         cli = _make_cli(config_overrides={
             "fallback_providers": [
-                {"provider": "openrouter", "model": "anthropic/claude-sonnet-4.6"},
+                {"provider": "custom", "model": "local-backup"},
+                {"provider": "openai-codex", "model": "gpt-5.3-codex"},
             ],
-            "fallback_model": {"provider": "nous", "model": "Hermes-4"},
         })
-        assert cli._fallback_model == [
-            {"provider": "openrouter", "model": "anthropic/claude-sonnet-4.6"},
-            {"provider": "nous", "model": "Hermes-4"},
+        assert cli._fallback_providers == [
+            {"provider": "custom", "model": "local-backup"},
+            {"provider": "openai-codex", "model": "gpt-5.3-codex"},
         ]
 
 
@@ -488,4 +484,4 @@ class TestProviderResolution:
     def test_model_is_string(self):
         cli = _make_cli()
         assert isinstance(cli.model, str)
-        assert isinstance(cli.model, str) and '/' in cli.model
+        assert cli.model == "local-model"

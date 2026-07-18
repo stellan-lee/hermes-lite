@@ -181,8 +181,12 @@ class TestGetDisabledSkillNames:
         monkeypatch.delenv("HERMES_PLATFORM", raising=False)
         monkeypatch.setenv("HERMES_SESSION_PLATFORM", "discord")
 
+        from contextvars import Context
         from agent.skill_utils import get_disabled_skill_names
-        result = get_disabled_skill_names()
+
+        # Run in a fresh context so gateway ContextVars set by earlier tests
+        # do not suppress the documented environment fallback.
+        result = Context().run(get_disabled_skill_names)
         assert result == {"discord-skill"}
 
     def test_hermes_platform_takes_precedence(self, tmp_path, monkeypatch):

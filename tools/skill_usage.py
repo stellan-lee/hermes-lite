@@ -477,7 +477,7 @@ def _mutate(skill_name: str, mutator, *, require_curation_eligible: bool = False
 def bump_view(skill_name: str) -> None:
     """Bump view_count and last_viewed_at. Called from skill_view().
 
-    Tracks every skill regardless of provenance — built-ins and hub skills
+    Tracks every skill regardless of origin — built-in and local skills
     included. Usage telemetry is observability, not a curation signal.
     """
     def _apply(rec: Dict[str, Any]) -> None:
@@ -522,7 +522,7 @@ def mark_agent_created(skill_name: str) -> None:
 
 def set_state(skill_name: str, state: str) -> None:
     """Set lifecycle state. No-op if *state* is invalid or the skill isn't
-    curator-manageable (hub skills, or built-ins with pruning disabled)."""
+    curator-manageable (manually installed skills, or built-ins with pruning disabled)."""
     if state not in _VALID_STATES:
         logger.debug("set_state: invalid state %r for %s", state, skill_name)
         return

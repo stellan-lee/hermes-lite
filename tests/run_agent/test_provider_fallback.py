@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from run_agent import AIAgent
 
 
-def _make_agent(fallback_model=None):
+def _make_agent(fallback_providers=None):
     with (
         patch("run_agent.get_tool_definitions", return_value=[]),
         patch("run_agent.check_toolset_requirements", return_value={}),
@@ -19,7 +19,7 @@ def _make_agent(fallback_model=None):
             quiet_mode=True,
             skip_context_files=True,
             skip_memory=True,
-            fallback_model=fallback_model,
+            fallback_providers=fallback_providers,
         )
         agent.client = MagicMock()
         return agent

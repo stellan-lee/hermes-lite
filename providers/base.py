@@ -56,11 +56,6 @@ class ProviderProfile:
     auth_type: str = "api_key"   # api_key|oauth_external
     supports_health_check: bool = True  # False → doctor skips /models probe for this provider
 
-    # ── Model catalog ─────────────────────────────────────────
-    # fallback_models: curated list shown in /model picker when live fetch fails.
-    # Only agentic models that support tool calling should appear here.
-    fallback_models: tuple = ()
-
     # hostname: base hostname for URL→provider reverse-mapping in model_metadata.py
     # Derived from base_url when empty.
     hostname: str = ""

@@ -11,7 +11,7 @@ Interactive mode (tool_progress_mode == "full") still uses ChatConsole.
 """
 
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 from cli import HermesCLI
@@ -62,7 +62,8 @@ class TestResumeQuietStderr:
         db.get_session.return_value = None
         cli = _make_cli(quiet=False, db=db)
 
-        result = cli._init_agent()
+        with patch("cli._cprint", side_effect=print):
+            result = cli._init_agent()
 
         captured = capfd.readouterr()
         assert result is False

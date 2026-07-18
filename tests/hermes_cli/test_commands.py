@@ -1415,28 +1415,28 @@ class TestDiscordSkillCommandsByCategory:
         fake_skills_dir = str(tmp_path / "skills")
         # Create the directory structure so resolve() works
         for p in [
-            "skills/creative/ascii-art",
-            "skills/creative/excalidraw",
-            "skills/media/gif-search",
+            "skills/apple/apple-notes",
+            "skills/apple/apple-reminders",
+            "skills/research/paper-search",
         ]:
             (tmp_path / p).mkdir(parents=True, exist_ok=True)
             (tmp_path / p / "SKILL.md").write_text("---\nname: test\n---\n")
 
         fake_cmds = {
-            "/ascii-art": {
-                "name": "ascii-art",
-                "description": "Generate ASCII art",
-                "skill_md_path": f"{fake_skills_dir}/creative/ascii-art/SKILL.md",
+            "/apple-notes": {
+                "name": "apple-notes",
+                "description": "Work with Apple Notes",
+                "skill_md_path": f"{fake_skills_dir}/apple/apple-notes/SKILL.md",
             },
-            "/excalidraw": {
-                "name": "excalidraw",
-                "description": "Hand-drawn diagrams",
-                "skill_md_path": f"{fake_skills_dir}/creative/excalidraw/SKILL.md",
+            "/apple-reminders": {
+                "name": "apple-reminders",
+                "description": "Work with Apple Reminders",
+                "skill_md_path": f"{fake_skills_dir}/apple/apple-reminders/SKILL.md",
             },
-            "/gif-search": {
-                "name": "gif-search",
-                "description": "Search for GIFs",
-                "skill_md_path": f"{fake_skills_dir}/media/gif-search/SKILL.md",
+            "/paper-search": {
+                "name": "paper-search",
+                "description": "Search research papers",
+                "skill_md_path": f"{fake_skills_dir}/research/paper-search/SKILL.md",
             },
         }
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -1448,10 +1448,10 @@ class TestDiscordSkillCommandsByCategory:
                 reserved_names=set(),
             )
 
-        assert "creative" in categories
-        assert "media" in categories
-        assert len(categories["creative"]) == 2
-        assert len(categories["media"]) == 1
+        assert "apple" in categories
+        assert "research" in categories
+        assert len(categories["apple"]) == 2
+        assert len(categories["research"]) == 1
         assert uncategorized == []
         assert hidden == 0
 
@@ -1460,14 +1460,14 @@ class TestDiscordSkillCommandsByCategory:
         from unittest.mock import patch
 
         fake_skills_dir = str(tmp_path / "skills")
-        (tmp_path / "skills" / "dogfood").mkdir(parents=True, exist_ok=True)
-        (tmp_path / "skills" / "dogfood" / "SKILL.md").write_text("")
+        (tmp_path / "skills" / "custom-skill").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "skills" / "custom-skill" / "SKILL.md").write_text("")
 
         fake_cmds = {
-            "/dogfood": {
-                "name": "dogfood",
-                "description": "QA testing",
-                "skill_md_path": f"{fake_skills_dir}/dogfood/SKILL.md",
+            "/custom-skill": {
+                "name": "custom-skill",
+                "description": "Custom workflow",
+                "skill_md_path": f"{fake_skills_dir}/custom-skill/SKILL.md",
             },
         }
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -1481,7 +1481,7 @@ class TestDiscordSkillCommandsByCategory:
 
         assert categories == {}
         assert len(uncategorized) == 1
-        assert uncategorized[0][0] == "dogfood"
+        assert uncategorized[0][0] == "custom-skill"
 
     def test_deep_nested_skills_use_top_category(self, tmp_path, monkeypatch):
         """Skills like mlops/training/axolotl should group under 'mlops'."""

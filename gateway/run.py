@@ -1210,7 +1210,7 @@ def _resolve_runtime_agent_kwargs() -> dict:
 
 
 def _try_resolve_fallback_provider() -> dict | None:
-    """Attempt to resolve credentials from the fallback_model/fallback_providers config."""
+    """Attempt to resolve credentials from ``fallback_providers``."""
     from hermes_cli.runtime_provider import resolve_runtime_provider
     try:
         import yaml as _y
@@ -1865,7 +1865,7 @@ class GatewayRunner:
         self._busy_input_mode = self._load_busy_input_mode()
         self._busy_text_mode = self._load_busy_text_mode()
         self._restart_drain_timeout = self._load_restart_drain_timeout()
-        self._fallback_model = self._load_fallback_model()
+        self._fallback_providers = self._load_fallback_providers()
 
         # Wire process registry into session store for reset protection
         from tools.process_registry import process_registry
@@ -3254,12 +3254,10 @@ class GatewayRunner:
         return mode
 
     @staticmethod
-    def _load_fallback_model() -> list | None:
+    def _load_fallback_providers() -> list | None:
         """Load fallback provider chain from config.yaml.
 
-        Returns the merged effective chain from ``fallback_providers`` plus any
-        legacy ``fallback_model`` entries. ``fallback_providers`` stays first
-        when both keys are present.
+        Returns the canonical ``fallback_providers`` chain.
         """
         try:
             import yaml as _y
@@ -11218,7 +11216,7 @@ class GatewayRunner:
                     chat_type=source.chat_type,
                     thread_id=source.thread_id,
                     session_db=self._session_db,
-                    fallback_model=self._fallback_model,
+                    fallback_providers=self._fallback_providers,
                 )
                 try:
                     return agent.run_conversation(
@@ -16409,7 +16407,7 @@ class GatewayRunner:
                     thread_id=source.thread_id,
                     gateway_session_key=session_key,
                     session_db=self._session_db,
-                    fallback_model=self._fallback_model,
+                    fallback_providers=self._fallback_providers,
                 )
                 if _cache_lock and _cache is not None:
                     with _cache_lock:

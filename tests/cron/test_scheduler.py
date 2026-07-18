@@ -1528,7 +1528,7 @@ class TestRunJobConfigEnvVarExpansion:
             "config.yaml ${VAR} was not expanded in the cron execution path."
         )
 
-    def test_fallback_model_env_ref_in_config_yaml_is_expanded(self, tmp_path, monkeypatch):
+    def test_fallback_provider_env_ref_in_config_yaml_is_expanded(self, tmp_path, monkeypatch):
         """${VAR} in config.yaml fallback_providers model: is expanded."""
         (tmp_path / "config.yaml").write_text(
             "fallback_providers:\n"
@@ -1553,7 +1553,7 @@ class TestRunJobConfigEnvVarExpansion:
             run_job(job)
 
         kwargs = mock_agent_cls.call_args.kwargs
-        fb = kwargs.get("fallback_model") or []
+        fb = kwargs.get("fallback_providers") or []
         fb_list = fb if isinstance(fb, list) else [fb]
         expanded = [e.get("model") for e in fb_list if isinstance(e, dict)]
         assert "gpt-4o-fallback-test" in expanded, (
