@@ -1,4 +1,4 @@
-"""MCP catalog — curated, Nous-approved MCP servers shipped with the repo.
+"""MCP catalog — curated MCP server manifests shipped with the repo.
 
 Mirrors the optional-skills/ pattern: each catalog entry lives under
 ``optional-mcps/<name>/manifest.yaml`` and ships disabled. Users discover
@@ -8,8 +8,7 @@ picker, which flows them through any required env/OAuth setup).
 
 Catalog policy:
 - Entries are added only by merging a PR into hermes-agent. Presence in the
-  ``optional-mcps/`` directory = Nous approval. No community tier, no trust
-  signals beyond "it's in the catalog".
+  ``optional-mcps/`` directory marks entries bundled with this distribution.
 - Manifests pin transport details (commands, args, refs). MCPs are never
   auto-updated; users explicitly re-run ``hermes mcp install <name>`` to
   pull a new manifest version after a repo update.

@@ -402,23 +402,16 @@ def test_manual_skill_with_usage_is_not_curator_managed(skills_home):
     assert "manual-skill" not in {r["name"] for r in agent_created_report()}
 
 
-def test_agent_created_report_excludes_bundled_and_hub(skills_home):
+def test_agent_created_report_excludes_bundled(skills_home):
     from tools.skill_usage import agent_created_report, mark_agent_created
     skills_dir = skills_home / "skills"
     _write_skill(skills_dir, "mine")
     _write_skill(skills_dir, "bundled")
-    _write_skill(skills_dir, "hubbed")
     mark_agent_created("mine")
     (skills_dir / ".bundled_manifest").write_text("bundled:abc\n", encoding="utf-8")
-    hub = skills_dir / ".hub"
-    hub.mkdir()
-    (hub / "lock.json").write_text(
-        json.dumps({"installed": {"hubbed": {}}}), encoding="utf-8",
-    )
     names = {r["name"] for r in agent_created_report()}
     assert "mine" in names
     assert "bundled" not in names
-    assert "hubbed" not in names
 
 
 def test_agent_created_report_derives_activity_from_view_and_patch(skills_home, monkeypatch):
@@ -465,42 +458,6 @@ def test_bump_view_tracks_bundled_skill(skills_home):
     assert rec["view_count"] == 1
     # Pruning is off by default in this fixture → not a curation candidate.
     assert "ship-bundled" not in list_agent_created_skill_names()
-
-
-def test_bump_patch_tracks_hub_skill(skills_home):
-    from tools.skill_usage import (
-        bump_patch, load_usage, list_agent_created_skill_names,
-    )
-    skills_dir = skills_home / "skills"
-    _write_skill(skills_dir, "from-hub")
-    hub = skills_dir / ".hub"
-    hub.mkdir()
-    (hub / "lock.json").write_text(
-        json.dumps({"installed": {"from-hub": {}}}), encoding="utf-8",
-    )
-
-    bump_patch("from-hub")
-    rec = load_usage().get("from-hub")
-    assert isinstance(rec, dict), "hub skill telemetry should be recorded"
-    assert rec["patch_count"] == 1
-    # Hub skills are NEVER curation candidates regardless of any flag.
-    assert "from-hub" not in list_agent_created_skill_names()
-
-
-def test_bump_use_tracks_hub_skill(skills_home):
-    from tools.skill_usage import bump_use, load_usage
-    skills_dir = skills_home / "skills"
-    _write_skill(skills_dir, "from-hub")
-    hub = skills_dir / ".hub"
-    hub.mkdir()
-    (hub / "lock.json").write_text(
-        json.dumps({"installed": {"from-hub": {}}}), encoding="utf-8",
-    )
-
-    bump_use("from-hub")
-    rec = load_usage().get("from-hub")
-    assert isinstance(rec, dict)
-    assert rec["use_count"] == 1
 
 
 def test_set_state_no_op_for_bundled_skill(skills_home):

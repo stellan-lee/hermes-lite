@@ -131,7 +131,7 @@ def _count_tests(
 
     counts: dict[Path, int] = {}
     for line in result.stdout.splitlines():
-        # Lines look like: tests/acp/test_auth.py::TestClass::test_name
+        # Lines look like: tests/agent/test_auth.py::TestClass::test_name
         if "::" not in line:
             continue
         file_part = line.split("::", 1)[0]
@@ -359,8 +359,8 @@ def _parse_pytest_summary(output: str) -> dict[str, int]:
 
 def _format_file(file: Path, repo_root: Path) -> str:
     """Render a test-file path for display: strip the repo-root prefix
-    when possible so output reads ``tests/acp/test_auth.py`` instead of
-    ``/home/runner/work/hermes-agent/hermes-agent/tests/acp/test_auth.py``.
+    when possible so output reads ``tests/agent/test_auth.py`` instead of
+    ``/home/runner/work/hermes-agent/hermes-agent/tests/agent/test_auth.py``.
 
     Falls back to the absolute path for anything outside the repo root.
     """

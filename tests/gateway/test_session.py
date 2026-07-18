@@ -628,7 +628,7 @@ class TestSessionKeyConsistency:
         assert first_entry.session_id == second_entry.session_id
 
     def test_telegram_dm_includes_chat_id(self):
-        """Non-WhatsApp DMs should also include chat_id to separate users."""
+        """DM keys include chat_id so separate users cannot share a session."""
         source = SessionSource(platform=Platform.TELEGRAM, chat_id="99", chat_type="dm")
         key = build_session_key(source)
         assert key == "agent:main:telegram:dm:99"

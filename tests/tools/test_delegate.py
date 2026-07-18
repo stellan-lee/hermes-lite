@@ -996,25 +996,6 @@ class TestDelegationCredentialResolution(unittest.TestCase):
         )
 
     @patch("hermes_cli.runtime_provider.resolve_runtime_provider")
-    def test_standard_provider_not_overwritten_by_configured_name(self, mock_resolve):
-        """Standard (non-custom) providers must still return runtime identity,
-        not the configured name, to preserve existing behaviour for openrouter,
-        nous, etc.
-        """
-        mock_resolve.return_value = {
-            "provider": "openrouter",
-            "model": "anthropic/claude-sonnet-4",
-            "base_url": "https://openrouter.ai/api/v1",
-            "api_key": "or-key-xyz",
-            "api_mode": "chat_completions",
-        }
-        parent = _make_mock_parent(depth=0)
-        cfg = {"model": "anthropic/claude-sonnet-4", "provider": "openrouter"}
-        creds = _resolve_delegation_credentials(cfg, parent)
-        # Standard provider returns its own name, not "custom"
-        self.assertEqual(creds["provider"], "openrouter")
-
-    @patch("hermes_cli.runtime_provider.resolve_runtime_provider")
     def test_custom_provider_with_empty_configured_provider_falls_back_to_runtime(self, mock_resolve):
         """When configured_provider is empty/None, the early return kicks in and
         we return provider=None regardless of what runtime resolved. The runtime
@@ -1061,14 +1042,14 @@ class TestDelegationProviderIntegration(unittest.TestCase):
         """When delegation.provider is configured, child agent gets resolved credentials."""
         mock_cfg.return_value = {
             "max_iterations": 45,
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
+            "model": "child-model",
+            "provider": "custom-child",
         }
         mock_creds.return_value = {
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
-            "base_url": "https://openrouter.ai/api/v1",
-            "api_key": "sk-or-delegation-key",
+            "model": "child-model",
+            "provider": "custom-child",
+            "base_url": "https://child.example.com/v1",
+            "api_key": "child-key",
             "api_mode": "chat_completions",
         }
         parent = _make_mock_parent(depth=0)
@@ -1083,32 +1064,32 @@ class TestDelegationProviderIntegration(unittest.TestCase):
             delegate_task(goal="Test provider routing", parent_agent=parent)
 
             _, kwargs = MockAgent.call_args
-            self.assertEqual(kwargs["model"], "google/gemini-3-flash-preview")
-            self.assertEqual(kwargs["provider"], "openrouter")
-            self.assertEqual(kwargs["base_url"], "https://openrouter.ai/api/v1")
-            self.assertEqual(kwargs["api_key"], "sk-or-delegation-key")
+            self.assertEqual(kwargs["model"], "child-model")
+            self.assertEqual(kwargs["provider"], "custom-child")
+            self.assertEqual(kwargs["base_url"], "https://child.example.com/v1")
+            self.assertEqual(kwargs["api_key"], "child-key")
             self.assertEqual(kwargs["api_mode"], "chat_completions")
 
     @patch("tools.delegate_tool._load_config")
     @patch("tools.delegate_tool._resolve_delegation_credentials")
     def test_cross_provider_delegation(self, mock_creds, mock_cfg):
-        """Parent on Nous, subagent on OpenRouter — full credential switch."""
+        """Subagent switches between two explicitly configured endpoints."""
         mock_cfg.return_value = {
             "max_iterations": 45,
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
+            "model": "child-model",
+            "provider": "custom-child",
         }
         mock_creds.return_value = {
-            "model": "google/gemini-3-flash-preview",
-            "provider": "openrouter",
-            "base_url": "https://openrouter.ai/api/v1",
-            "api_key": "sk-or-key",
+            "model": "child-model",
+            "provider": "custom-child",
+            "base_url": "https://child.example.com/v1",
+            "api_key": "child-key",
             "api_mode": "chat_completions",
         }
         parent = _make_mock_parent(depth=0)
-        parent.provider = "nous"
-        parent.base_url = "https://inference-api.nousresearch.com/v1"
-        parent.api_key = "nous-key-abc"
+        parent.provider = "custom-parent"
+        parent.base_url = "https://parent.example.com/v1"
+        parent.api_key = "parent-key"
 
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = MagicMock()
@@ -1120,10 +1101,9 @@ class TestDelegationProviderIntegration(unittest.TestCase):
             delegate_task(goal="Cross-provider test", parent_agent=parent)
 
             _, kwargs = MockAgent.call_args
-            # Child should use OpenRouter, NOT Nous
-            self.assertEqual(kwargs["provider"], "openrouter")
-            self.assertEqual(kwargs["base_url"], "https://openrouter.ai/api/v1")
-            self.assertEqual(kwargs["api_key"], "sk-or-key")
+            self.assertEqual(kwargs["provider"], "custom-child")
+            self.assertEqual(kwargs["base_url"], "https://child.example.com/v1")
+            self.assertEqual(kwargs["api_key"], "child-key")
             self.assertNotEqual(kwargs["base_url"], parent.base_url)
             self.assertNotEqual(kwargs["api_key"], parent.api_key)
 
@@ -1859,7 +1839,6 @@ class TestOrchestratorRoleSchema(unittest.TestCase):
                 "api_calls": 1, "messages": [],
             }
             mock_child._delegate_saved_tool_names = []
-            mock_child._credential_pool = None
             mock_child.session_prompt_tokens = 0
             mock_child.session_completion_tokens = 0
             mock_child.model = "test"

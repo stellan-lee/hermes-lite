@@ -39,7 +39,6 @@ class TestContentPolicyBlockedClassification:
         # Recovery is fallback model, not credential rotation or compression.
         assert result.should_fallback is True
         assert result.should_compress is False
-        assert result.should_rotate_credential is False
 
 
 class TestContentPolicyTriggersClientErrorAbort:

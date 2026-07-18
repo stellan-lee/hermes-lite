@@ -190,7 +190,7 @@ discover_builtin_tools()
 #   - gateway/run.py            -> start_gateway() uses run_in_executor
 #   - cli.py, hermes_cli/*      -> inline on startup (no event loop)
 #   - tui_gateway/server.py     -> inline on startup (no event loop)
-#   - acp_adapter/server.py     -> asyncio.to_thread on session init
+#   - interactive client adapters -> background-thread session init
 
 # Plugin tool discovery (user/project/pip plugins)
 try:

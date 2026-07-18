@@ -45,8 +45,8 @@ class ModelIdentity(NamedTuple):
 
 
 MODEL_ALIASES: dict[str, ModelIdentity] = {
-    "gpt5":      ModelIdentity("openai", "gpt-5"),
-    "codex":     ModelIdentity("openai", "gpt-"),
+    "gpt5":      ModelIdentity("openai-codex", "gpt-5"),
+    "codex":     ModelIdentity("openai-codex", "gpt-"),
 }
 
 

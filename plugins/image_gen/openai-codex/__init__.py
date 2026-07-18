@@ -330,8 +330,7 @@ class OpenAICodexImageGenProvider(ImageGenProvider):
     def capabilities(self) -> Dict[str, Any]:
         # The Codex Responses image_generation tool path is text-to-image
         # only here. Image-to-image / editing via Codex OAuth is not wired —
-        # users who need editing should use the `openai` (API key), `fal`, or
-        # `xai` backends. Declaring text-only keeps the dynamic tool schema
+        # editing is not exposed by this retained backend. Declaring text-only keeps the dynamic tool schema
         # honest so the model doesn't attempt an unsupported edit.
         return {"modalities": ["text"], "max_reference_images": 0}
 

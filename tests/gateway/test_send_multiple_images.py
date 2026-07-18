@@ -6,7 +6,6 @@ Covers:
     - Telegram: ``bot.send_media_group`` with chunking at 10
     - Discord: ``channel.send(files=[...])`` with chunking at 10
     - Slack: ``files_upload_v2(file_uploads=[...])`` with chunking at 10
-    - Mattermost: single post with ``file_ids`` list (chunk at 5)
     - Email: single email with multiple MIME attachments
 
 Signal's native implementation is covered by test_signal.py.

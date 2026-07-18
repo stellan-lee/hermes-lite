@@ -650,7 +650,7 @@ class TestTakeoverMarker:
         self, tmp_path, monkeypatch
     ):
         """Takeover consume must also recognise a self-marker on platforms
-        without ``/proc`` (macOS / native Windows).
+        without ``/proc`` (for example macOS).
 
         ``consume_takeover_marker_for_self`` shares ``_consume_pid_marker_for_self``
         with the planned-stop path, so the same start_time fallback applies:
@@ -874,7 +874,7 @@ class TestPlannedStopMarker:
         """Regression for #34597: a legitimate stop must be recognised on
         platforms without ``/proc``.
 
-        ``_get_process_start_time`` returns None on macOS / native Windows
+        ``_get_process_start_time`` returns None on macOS
         (no ``/proc/<pid>/stat``). The planned-stop watcher only runs there,
         so if the authoritative consume required a non-None start_time match
         it would always return False — and ``hermes gateway stop`` would be

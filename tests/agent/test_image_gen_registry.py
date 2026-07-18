@@ -74,37 +74,34 @@ class TestGetActiveProvider:
         active = image_gen_registry.get_active_provider()
         assert active is not None and active.name == "solo"
 
-    def test_fal_preferred_on_multi_without_config(self, tmp_path, monkeypatch):
+    def test_none_on_multi_without_config(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        image_gen_registry.register_provider(_FakeProvider("fal"))
-        image_gen_registry.register_provider(_FakeProvider("openai"))
-        active = image_gen_registry.get_active_provider()
-        assert active is not None and active.name == "fal"
+        image_gen_registry.register_provider(_FakeProvider("first"))
+        image_gen_registry.register_provider(_FakeProvider("second"))
+        assert image_gen_registry.get_active_provider() is None
 
     def test_explicit_config_wins(self, tmp_path, monkeypatch):
         import yaml
 
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         (tmp_path / "config.yaml").write_text(
-            yaml.safe_dump({"image_gen": {"provider": "openai"}})
+            yaml.safe_dump({"image_gen": {"provider": "second"}})
         )
-        image_gen_registry.register_provider(_FakeProvider("fal"))
-        image_gen_registry.register_provider(_FakeProvider("openai"))
+        image_gen_registry.register_provider(_FakeProvider("first"))
+        image_gen_registry.register_provider(_FakeProvider("second"))
         active = image_gen_registry.get_active_provider()
-        assert active is not None and active.name == "openai"
+        assert active is not None and active.name == "second"
 
     def test_missing_configured_provider_falls_back(self, tmp_path, monkeypatch):
         import yaml
 
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         (tmp_path / "config.yaml").write_text(
-            yaml.safe_dump({"image_gen": {"provider": "replicate"}})
+            yaml.safe_dump({"image_gen": {"provider": "missing"}})
         )
-        # Only FAL is registered — configured provider doesn't exist
-        image_gen_registry.register_provider(_FakeProvider("fal"))
+        image_gen_registry.register_provider(_FakeProvider("only"))
         active = image_gen_registry.get_active_provider()
-        # Falls back to FAL preference (legacy default) rather than None
-        assert active is not None and active.name == "fal"
+        assert active is not None and active.name == "only"
 
     def test_none_when_empty(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))

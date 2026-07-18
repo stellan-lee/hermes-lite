@@ -140,7 +140,6 @@ def test_file_mutation_lint_error_result_is_not_a_tool_failure():
     patch_result = json.dumps({
         "success": True,
         "diff": "--- a/tmp.py\n+++ b/tmp.py\n",
-        "lsp_diagnostics": "<diagnostics>ERROR [1:1] type mismatch</diagnostics>",
     })
 
     assert classify_tool_failure("write_file", write_result) == (False, "")

@@ -860,17 +860,17 @@ async def test_run_agent_interim_commentary_works_with_tool_progress_off(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_bluebubbles_uses_commentary_send_path_for_quick_replies(
+async def test_run_agent_nonediting_adapter_uses_commentary_send_path_for_quick_replies(
     monkeypatch, tmp_path
 ):
     adapter, result = await _run_with_agent(
         monkeypatch,
         tmp_path,
         CommentaryAgent,
-        session_id="sess-bluebubbles-commentary",
+        session_id="sess-nonediting-commentary",
         config_data={"display": {"interim_assistant_messages": True}},
         platform=Platform.DISCORD,
-        chat_id="iMessage;-;user@example.com",
+        chat_id="user@example.com",
         chat_type="dm",
         thread_id=None,
         adapter_cls=NonEditingProgressCaptureAdapter,
@@ -941,7 +941,7 @@ async def test_transformed_response_edits_streamed_message_in_place(
             },
         },
         platform=Platform.SLACK,
-        chat_id="!room:matrix.example.org",
+        chat_id="C0123456789",
         chat_type="group",
         thread_id="$thread",
         adapter_cls=MetadataEditProgressCaptureAdapter,

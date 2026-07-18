@@ -723,64 +723,64 @@ def test_status_callback_accepts_single_message_argument():
 
 def test_resolve_model_uses_inference_model_env(monkeypatch):
     monkeypatch.delenv("HERMES_MODEL", raising=False)
-    monkeypatch.setenv("HERMES_INFERENCE_MODEL", " anthropic/claude-sonnet-4.6\n")
+    monkeypatch.setenv("HERMES_INFERENCE_MODEL", " local/test-model\n")
 
-    assert server._resolve_model() == "anthropic/claude-sonnet-4.6"
+    assert server._resolve_model() == "local/test-model"
 
 
 def test_resolve_model_strips_config_model(monkeypatch):
     monkeypatch.delenv("HERMES_MODEL", raising=False)
     monkeypatch.delenv("HERMES_INFERENCE_MODEL", raising=False)
     monkeypatch.setattr(
-        server, "_load_cfg", lambda: {"model": {"default": " nous/hermes-test "}}
+        server, "_load_cfg", lambda: {"model": {"default": " local/test-model "}}
     )
 
-    assert server._resolve_model() == "nous/hermes-test"
+    assert server._resolve_model() == "local/test-model"
 
 
 def test_startup_runtime_uses_tui_provider_env(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "nous/hermes-test")
-    monkeypatch.setenv("HERMES_TUI_PROVIDER", "nous")
+    monkeypatch.setenv("HERMES_MODEL", "local/test-model")
+    monkeypatch.setenv("HERMES_TUI_PROVIDER", "custom")
     monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
 
-    assert server._resolve_startup_runtime() == ("nous/hermes-test", "nous")
+    assert server._resolve_startup_runtime() == ("local/test-model", "custom")
 
 
 def test_startup_runtime_does_not_treat_inference_provider_as_explicit(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "nous/hermes-test")
+    monkeypatch.setenv("HERMES_MODEL", "local/test-model")
     monkeypatch.delenv("HERMES_TUI_PROVIDER", raising=False)
-    monkeypatch.setenv("HERMES_INFERENCE_PROVIDER", "nous")
+    monkeypatch.setenv("HERMES_INFERENCE_PROVIDER", "custom")
     monkeypatch.setattr(
         "hermes_cli.models.detect_static_provider_for_model",
         lambda model, provider: None,
     )
 
-    assert server._resolve_startup_runtime() == ("nous/hermes-test", None)
+    assert server._resolve_startup_runtime() == ("local/test-model", None)
 
 
 def test_startup_runtime_detects_provider_for_model_env(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "sonnet")
+    monkeypatch.setenv("HERMES_MODEL", "gpt-5.3-codex")
     monkeypatch.delenv("HERMES_TUI_PROVIDER", raising=False)
     monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
     monkeypatch.setattr(server, "_load_cfg", lambda: {"model": {"provider": "auto"}})
 
     def fake_detect(model, current_provider):
-        assert model == "sonnet"
+        assert model == "gpt-5.3-codex"
         assert current_provider == "auto"
-        return "anthropic", "anthropic/claude-sonnet-4.6"
+        return "openai-codex", "gpt-5.3-codex"
 
     monkeypatch.setattr(
         "hermes_cli.models.detect_static_provider_for_model", fake_detect
     )
 
     assert server._resolve_startup_runtime() == (
-        "anthropic/claude-sonnet-4.6",
-        "anthropic",
+        "gpt-5.3-codex",
+        "openai-codex",
     )
 
 
 def test_startup_runtime_does_not_call_network_detector(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "sonnet")
+    monkeypatch.setenv("HERMES_MODEL", "local/test-model")
     monkeypatch.delenv("HERMES_TUI_PROVIDER", raising=False)
     monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
     monkeypatch.setattr(server, "_load_cfg", lambda: {"model": {"provider": "auto"}})
@@ -794,7 +794,7 @@ def test_startup_runtime_does_not_call_network_detector(monkeypatch):
     model, provider = server._resolve_startup_runtime()
 
     assert model
-    assert provider in {None, "anthropic"}
+    assert provider is None
 
 
 def _session(agent=None, **extra):
@@ -3753,16 +3753,15 @@ def test_model_options_does_not_overwrite_curated_models(monkeypatch):
     Regression: earlier versions of this handler unconditionally replaced
     each provider's curated ``models`` field with ``provider_model_ids()``
     (live /models catalog).  That pulled in hundreds of non-agentic models
-    for providers like Nous whose /models endpoint returns image/video
-    generators, rerankers, embeddings, and TTS models alongside chat models.
+    for custom providers whose /models endpoint returns non-chat models too.
     """
     curated_providers = [
         {
-            "slug": "nous",
-            "name": "Nous",
-            "models": ["moonshotai/kimi-k2.5", "anthropic/claude-opus-4.7"],
-            "total_models": 30,
-            "source": "built-in",
+            "slug": "custom",
+            "name": "Custom",
+            "models": ["local/agent-a", "local/agent-b"],
+            "total_models": 2,
+            "source": "user-config",
             "is_current": False,
             "is_user_defined": False,
         },
@@ -3786,13 +3785,13 @@ def test_model_options_does_not_overwrite_curated_models(monkeypatch):
 
     assert "result" in resp, resp
     providers = resp["result"]["providers"]
-    nous = next((p for p in providers if p.get("slug") == "nous"), None)
-    assert nous is not None
-    assert nous["models"] == [
-        "moonshotai/kimi-k2.5",
-        "anthropic/claude-opus-4.7",
+    custom = next((p for p in providers if p.get("slug") == "custom"), None)
+    assert custom is not None
+    assert custom["models"] == [
+        "local/agent-a",
+        "local/agent-b",
     ]
-    assert nous["total_models"] == 30
+    assert custom["total_models"] == 2
     # Handler must not consult the live catalog — curated is the truth.
     live_fetch.assert_not_called()
     # list_authenticated_providers is the single source.
@@ -4678,14 +4677,14 @@ def test_browser_manage_connect_strips_discovery_path(monkeypatch):
 
 
 def test_browser_manage_connect_preserves_devtools_browser_endpoint(monkeypatch):
-    """Concrete devtools websocket endpoints (e.g. Browserbase) must
+    """Concrete DevTools websocket endpoints must
     survive verbatim — we only collapse discovery-style paths."""
     monkeypatch.delenv("BROWSER_CDP_URL", raising=False)
     fake = types.SimpleNamespace(
         cleanup_all_browsers=lambda: None,
         _get_cdp_override=lambda: os.environ.get("BROWSER_CDP_URL", ""),
     )
-    concrete = "ws://browserbase.example/devtools/browser/abc123"
+    concrete = "ws://browser.example/devtools/browser/abc123"
 
     class _OkSocket:
         def __enter__(self):
@@ -5022,7 +5021,6 @@ def _setup_make_agent_mocks(monkeypatch, cfg):
             "api_mode": None,
             "command": None,
             "args": None,
-            "credential_pool": None,
         },
     )
     monkeypatch.setattr(server, "_load_tool_progress_mode", lambda: "off")

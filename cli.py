@@ -3051,7 +3051,7 @@ class HermesCLI:
 
         # Signature of the currently-initialised agent's runtime.  Used to
         # rebuild the agent when provider / model / base_url changes across
-        # turns (e.g. after /model or credential rotation).
+        # turns (for example after /model).
         self._active_agent_route_signature = None
 
         # Agent will be initialized on first use
@@ -7464,8 +7464,7 @@ class HermesCLI:
             except Exception:
                 pass
 
-        # Single inventory context — replaces the inline config-slice the
-        # dashboard / TUI used to duplicate. Overlay live session state
+        # Single inventory context for the TUI. Overlay live session state
         # via with_overrides (truthy-only) so empty self.* attrs don't
         # clobber disk config.
         from hermes_cli.inventory import build_models_payload, load_picker_context
@@ -7751,23 +7750,11 @@ class HermesCLI:
         def _cron_api(**kwargs):
             return json.loads(cronjob_tool(**kwargs))
 
-        def _normalize_skills(values):
-            normalized = []
-            for value in values:
-                text = str(value or "").strip()
-                if text and text not in normalized:
-                    normalized.append(text)
-            return normalized
-
         def _parse_flags(tokens):
             opts = {
                 "name": None,
                 "deliver": None,
                 "repeat": None,
-                "skills": [],
-                "add_skills": [],
-                "remove_skills": [],
-                "clear_skills": False,
                 "all": False,
                 "prompt": None,
                 "schedule": None,
@@ -7789,18 +7776,6 @@ class HermesCLI:
                         print("(._.) --repeat must be an integer")
                         return None
                     i += 2
-                elif token == "--skill" and i + 1 < len(tokens):
-                    opts["skills"].append(tokens[i + 1])
-                    i += 2
-                elif token == "--add-skill" and i + 1 < len(tokens):
-                    opts["add_skills"].append(tokens[i + 1])
-                    i += 2
-                elif token == "--remove-skill" and i + 1 < len(tokens):
-                    opts["remove_skills"].append(tokens[i + 1])
-                    i += 2
-                elif token == "--clear-skills":
-                    opts["clear_skills"] = True
-                    i += 1
                 elif token == "--all":
                     opts["all"] = True
                     i += 1
@@ -7825,11 +7800,8 @@ class HermesCLI:
             print()
             print("  Commands:")
             print("    /cron list")
-            print('    /cron add "every 2h" "Check server status" [--skill blogwatcher]')
+            print('    /cron add "every 2h" "Check server status"')
             print('    /cron edit <job_id> --schedule "every 4h" --prompt "New task"')
-            print("    /cron edit <job_id> --skill blogwatcher --skill maps")
-            print("    /cron edit <job_id> --remove-skill blogwatcher")
-            print("    /cron edit <job_id> --clear-skills")
             print("    /cron pause <job_id>")
             print("    /cron resume <job_id>")
             print("    /cron run <job_id>")
@@ -7843,8 +7815,6 @@ class HermesCLI:
                 for job in jobs:
                     repeat_str = job.get("repeat", "?")
                     print(f"    {job['job_id'][:12]:<12} | {job['schedule']:<15} | {repeat_str:<8}")
-                    if job.get("skills"):
-                        print(f"      Skills: {', '.join(job['skills'])}")
                     print(f"      {job.get('prompt_preview', '')}")
                     if job.get("next_run_at"):
                         print(f"      Next: {job['next_run_at']}")
@@ -7875,8 +7845,6 @@ class HermesCLI:
                 print(f"  State: {job.get('state', '?')}")
                 print(f"  Schedule: {job['schedule']} ({job.get('repeat', '?')})")
                 print(f"  Next run: {job.get('next_run_at', 'N/A')}")
-                if job.get("skills"):
-                    print(f"  Skills: {', '.join(job['skills'])}")
                 print(f"  Prompt: {job.get('prompt_preview', '')}")
                 if job.get("last_run_at"):
                     print(f"  Last run: {job['last_run_at']} ({job.get('last_status', '?')})")
@@ -7890,9 +7858,8 @@ class HermesCLI:
                 return
             schedule = opts["schedule"] or positionals[0]
             prompt = opts["prompt"] or " ".join(positionals[1:])
-            skills = _normalize_skills(opts["skills"])
-            if not prompt and not skills:
-                print("(._.) Please provide a prompt or at least one skill")
+            if not prompt:
+                print("(._.) Please provide a prompt")
                 return
             result = _cron_api(
                 action="create",
@@ -7901,13 +7868,10 @@ class HermesCLI:
                 name=opts["name"],
                 deliver=opts["deliver"],
                 repeat=opts["repeat"],
-                skills=skills or None,
             )
             if result.get("success"):
                 print(f"(^_^)b Created job: {result['job_id']}")
                 print(f"  Schedule: {result['schedule']}")
-                if result.get("skills"):
-                    print(f"  Skills: {', '.join(result['skills'])}")
                 print(f"  Next run: {result['next_run_at']}")
             else:
                 print(f"(x_x) Failed to create job: {result.get('error')}")
@@ -7916,28 +7880,13 @@ class HermesCLI:
         if subcommand == "edit":
             positionals = opts["positionals"]
             if not positionals:
-                print("(._.) Usage: /cron edit <job_id> [--schedule ...] [--prompt ...] [--skill ...]")
+                print("(._.) Usage: /cron edit <job_id> [--schedule ...] [--prompt ...]")
                 return
             job_id = positionals[0]
             existing = get_job(job_id)
             if not existing:
                 print(f"(._.) Job not found: {job_id}")
                 return
-
-            final_skills = None
-            replacement_skills = _normalize_skills(opts["skills"])
-            add_skills = _normalize_skills(opts["add_skills"])
-            remove_skills = set(_normalize_skills(opts["remove_skills"]))
-            existing_skills = list(existing.get("skills") or ([] if not existing.get("skill") else [existing.get("skill")]))
-            if opts["clear_skills"]:
-                final_skills = []
-            elif replacement_skills:
-                final_skills = replacement_skills
-            elif add_skills or remove_skills:
-                final_skills = [skill for skill in existing_skills if skill not in remove_skills]
-                for skill in add_skills:
-                    if skill not in final_skills:
-                        final_skills.append(skill)
 
             result = _cron_api(
                 action="update",
@@ -7947,16 +7896,11 @@ class HermesCLI:
                 name=opts["name"],
                 deliver=opts["deliver"],
                 repeat=opts["repeat"],
-                skills=final_skills,
             )
             if result.get("success"):
                 job = result["job"]
                 print(f"(^_^)b Updated job: {job['job_id']}")
                 print(f"  Schedule: {job['schedule']}")
-                if job.get("skills"):
-                    print(f"  Skills: {', '.join(job['skills'])}")
-                else:
-                    print("  Skills: none")
             else:
                 print(f"(x_x) Failed to update job: {result.get('error')}")
             return
@@ -8050,7 +7994,8 @@ class HermesCLI:
                 Platform.TELEGRAM: ("Telegram", "TELEGRAM_BOT_TOKEN"),
                 Platform.DISCORD: ("Discord", "DISCORD_BOT_TOKEN"),
                 Platform.SLACK: ("Slack", "SLACK_BOT_TOKEN"),
-                Platform.WHATSAPP: ("WhatsApp", "WHATSAPP_ENABLED"),
+                Platform.EMAIL: ("Email", "EMAIL_ADDRESS"),
+                Platform.FEISHU: ("Feishu", "FEISHU_APP_ID"),
             }
             
             for platform, (name, env_var) in platform_status.items():
@@ -9881,7 +9826,7 @@ class HermesCLI:
             # tools/run_agent/etc. in quiet mode. Setting logger.setLevel
             # above the file handler level filters records before they
             # reach handlers, so agent.log / errors.log lose visibility
-            # into stream-retry events, credential rotations, etc.
+            # into stream-retry eventss, etc.
             # Console quietness is enforced by hermes_logging not
             # installing a console StreamHandler in non-verbose mode.
 
@@ -13080,7 +13025,7 @@ class HermesCLI:
         # Config spellings (ctrl/control/alt/option/opt) are normalized to
         # prompt_toolkit's c-x / a-x format via ``normalize_voice_record_key_for_prompt_toolkit``
         # so the same config value binds identically in the TUI and CLI
-        # (Copilot round-9 review on #19835). ``super``/``win``/``windows``
+        # (Copilot round-9 review on #19835). ``super``
         # configs silently fall back to the default here since prompt_toolkit
         # has no super modifier — log a warning so users notice the
         # TUI/CLI split instead of a silent mismatch (round-11).
@@ -13095,11 +13040,11 @@ class HermesCLI:
             _voice_key = normalize_voice_record_key_for_prompt_toolkit(_raw_key)
             if (
                 isinstance(_raw_key, str)
-                and _raw_key.strip().lower().split("+", 1)[0].strip() in {"super", "win", "windows"}
+                and _raw_key.strip().lower().split("+", 1)[0].strip() == "super"
                 and _voice_key == "c-b"
             ):
                 logger.warning(
-                    "voice.record_key %r uses a TUI-only modifier (super/win); "
+                    "voice.record_key %r uses the TUI-only super modifier; "
                     "CLI fell back to Ctrl+B. Use ctrl+<key> or alt+<key> for "
                     "cross-runtime parity.",
                     _raw_key,

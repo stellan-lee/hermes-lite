@@ -133,7 +133,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
 
     Includes a stale-call detector: if no response arrives within the
     configured timeout, the connection is killed and an error raised so
-    the main retry loop can try again with backoff / credential rotation /
+    the main retry loop can try again with backoff /
     provider fallback.
     """
     result = {"response": None, "error": None}
@@ -213,7 +213,7 @@ def interruptible_api_call(agent, api_kwargs: dict):
     # ready.  Without this, a hung provider can block for the full
     # httpx timeout (default 1800s) with zero feedback.  The stale
     # detector kills the connection early so the main retry loop can
-    # apply richer recovery (credential rotation, provider fallback).
+    # apply richer recovery (provider fallback).
     _stale_timeout = agent._compute_non_stream_stale_timeout(api_kwargs)
 
     # ── Codex Responses stream watchdogs ────────────────────────────────
@@ -1764,7 +1764,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
 
                     # Propagate the error to the main retry loop instead of
                     # falling back to non-streaming inline.  The main loop has
-                    # richer recovery: credential rotation, provider fallback,
+                    # richer recovery: provider fallback,
                     # backoff, and — for "stream not supported" — will switch
                     # to non-streaming on the next attempt via _disable_streaming.
                     result["error"] = e

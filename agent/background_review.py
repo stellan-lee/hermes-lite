@@ -481,8 +481,7 @@ def _run_review_in_thread(
             review_messages = list(getattr(review_agent, "_session_messages", []))
 
             # Tear down memory providers while stdout is still
-            # redirected so background thread teardown (Honcho flush,
-            # Hindsight sync, etc.) stays silent.  The finally block
+            # redirected so background provider teardown stays silent. The finally block
             # below is a safety net for the exception path.
             try:
                 review_agent.shutdown_memory_provider()
@@ -525,8 +524,8 @@ def _run_review_in_thread(
     finally:
         # Safety-net cleanup for the exception path.  Normal
         # completion already shut down inside redirect_stdout above.
-        # Re-open devnull here so any teardown output (Honcho flush,
-        # Hindsight sync, background thread joins) stays silent even
+        # Re-open devnull here so any provider flushes and background thread
+        # joins stay silent even
         # on the exception path where redirect_stdout already exited.
         if review_agent is not None:
             try:

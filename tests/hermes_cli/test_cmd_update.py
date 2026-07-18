@@ -237,7 +237,7 @@ class TestCmdUpdateBranchFallback:
         #
         # The root install omits `--silent` and runs without
         # `capture_output` so optional postinstall scripts (e.g.
-        # `@askjo/camofox-browser`'s browser-binary fetch) print progress —
+        # optional dependency installers can print progress —
         # otherwise long downloads look like a hang (#18840).
         root_flags = [
             "/usr/bin/npm",
@@ -280,7 +280,7 @@ class TestCmdUpdateBranchFallback:
             )
 
     def test_update_non_interactive_runs_safe_config_migrations(self, mock_args, capsys):
-        """Dashboard/web updates apply non-interactive migrations before restart."""
+        """Non-interactive updates apply safe migrations before restart."""
         with patch("shutil.which", return_value=None), patch(
             "subprocess.run"
         ) as mock_run, patch("builtins.input") as mock_input, patch(

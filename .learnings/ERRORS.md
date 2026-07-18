@@ -1288,3 +1288,83 @@ after mechanical pruning.
 - **Error:** Three tests of the auxiliary vision handler inherited native-vision routing enabled by earlier retained Codex tests, so their mocked auxiliary client was intentionally bypassed.
 - **Resolution:** Scoped the auxiliary-handler test class to the auxiliary route; native fast-path behavior remains covered in its dedicated test module.
 - **Status:** Resolved
+
+## ERR-058: Platform registry audit used a nonexistent accessor
+
+- **Date:** 2026-07-18
+- **Context:** Requirement-by-requirement completion audit of retained connectors.
+- **Error:** The audit imported `get_platform_registry`, but the module exposes the registry through a different public surface.
+- **Resolution:** Inspected `gateway/platform_registry.py` and reran discovery using its actual API.
+- **Status:** Resolved
+
+## ERR-059: Broad audit command used an unsafe zsh glob and missing interpreter alias
+
+- **Date:** 2026-07-18
+- **Context:** Residual checked-feature audit.
+- **Error:** A `tools/model*` glob expanded unexpectedly and the checkout has no `python` alias.
+- **Resolution:** Replaced the glob with explicit `rg` paths and used `.venv/bin/python` for repository checks.
+- **Status:** Resolved
+
+## ERR-060: Multi-file patches failed atomically on stale context
+
+- **Date:** 2026-07-18
+- **Context:** Removing dashboard, connector, and preload remnants.
+- **Error:** Several large patches contained one stale hunk, so `apply_patch` correctly rejected the entire edit.
+- **Resolution:** Re-read the affected regions and split changes into smaller, independently verifiable patches.
+- **Status:** Resolved
+
+## ERR-061: Dynamic patch helper had an invalid JavaScript replacement expression
+
+- **Date:** 2026-07-18
+- **Context:** Deleting obsolete cron skill-scanner functions through `apply_patch`.
+- **Error:** The first helper expression was parsed incorrectly and raised `ReferenceError: g is not defined` before editing files.
+- **Resolution:** Replaced it with explicit function-boundary pairs and generated each deletion patch separately.
+- **Status:** Resolved
+
+## ERR-062: Focused tests imported a removed preload-only scanner
+
+- **Date:** 2026-07-18
+- **Context:** Validation after removing cron skill preloading.
+- **Error:** Test collection still imported `_scan_cron_skill_assembled`, which was intentionally removed with the preload path.
+- **Resolution:** Removed the scanner-specific tests and updated the retained strict scanner test; the focused suite then passed 262 tests.
+- **Status:** Resolved
+
+## ERR-063: Backend guard tests expected removed remote environments
+
+- **Date:** 2026-07-18
+- **Context:** Focused validation after limiting terminal backends to local, Docker, and SSH.
+- **Error:** Five tests still expected approval bypasses for removed Singularity, Modal, and Daytona environments.
+- **Resolution:** Reduced those test matrices to the retained Docker backend; local and SSH behavior remain covered separately.
+- **Status:** Resolved
+
+## ERR-064: Shared ambient declarations were mistaken for a removed dependency shim
+
+- **Date:** 2026-07-18
+- **Context:** Removing the `bidi-js` dependency from the TUI renderer.
+- **Error:** The first cleanup deleted the entire ambient declaration file, which also defines the forked Ink package's React compiler, reconciler, semver, and intrinsic element types.
+- **Resolution:** Restored the shared declarations, removed only the `bidi-js` module stanza, and restored the declaration reference at the top of the package entrypoint.
+- **Status:** Resolved
+
+## ERR-065: AGENTS.md references unavailable rule files
+
+- **Date:** 2026-07-18
+- **Context:** Reloading repository instructions after an updated `AGENTS.md` was supplied.
+- **Error:** `rules/workflow.md`, `rules/agent-usage.md`, and `rules/task-tracking.md` do not exist in the worktree or the Codex configuration tree.
+- **Resolution:** Continued under the complete workflow and quality requirements stated directly in `AGENTS.md`; no referenced rule content could be loaded.
+- **Status:** Resolved
+
+## ERR-066: Parallel test wrapper does not accept pytest verbosity flags
+
+- **Date:** 2026-07-18
+- **Context:** Starting the full repository validation suite.
+- **Error:** `scripts/run_tests.sh -q` passed `-q` to `run_tests_parallel.py`, whose CLI does not accept pytest verbosity flags.
+- **Resolution:** Restarted `scripts/run_tests.sh` without `-q`.
+- **Status:** Resolved
+
+## ERR-067: Full TUI lint has unrelated baseline violations
+
+- **Date:** 2026-07-18
+- **Context:** Final static validation after the selective cleanup.
+- **Error:** `npm --prefix ui-tui run lint` reports 33 errors and 103 warnings across pre-existing renderer, markdown, config-sync, import-order, and React-compiler code. Most affected files are outside this cleanup, and the same rules flag unchanged lines in touched files.
+- **Resolution:** Kept the cleanup scoped; validated changed TUI behavior with a passing TypeScript type-check and targeted/full Vitest runs, and restored the package declaration entrypoint to its original formatting.
+- **Status:** Resolved

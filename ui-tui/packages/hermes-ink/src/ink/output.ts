@@ -4,7 +4,6 @@ import { logForDebugging } from '../utils/debug.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import sliceAnsi from '../utils/sliceAnsi.js'
 
-import { reorderBidi } from './bidi.js'
 import { type Rectangle, unionRect } from './layout/geometry.js'
 import {
   blitRegion,
@@ -697,7 +696,7 @@ function writeLineToScreen(
   let characters = charCache.get(line)
 
   if (!characters) {
-    characters = reorderBidi(styledCharsWithGraphemeClustering(styledCharsFromTokens(tokenize(line)), stylePool))
+    characters = styledCharsWithGraphemeClustering(styledCharsFromTokens(tokenize(line)), stylePool)
     charCache.set(line, characters)
   }
 

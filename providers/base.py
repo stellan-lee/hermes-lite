@@ -5,7 +5,7 @@ auth, endpoints, client quirks, request-time quirks. The transport reads this
 instead of receiving 20+ boolean flags.
 
 Provider profiles are DECLARATIVE — they describe the provider's behavior.
-They do NOT own client construction, credential rotation, or streaming.
+They do NOT own client construction, or streaming.
 Those stay on AIAgent.
 """
 

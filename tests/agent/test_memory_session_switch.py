@@ -3,7 +3,7 @@
 Covers #6672: memory providers must be notified when AIAgent.session_id
 rotates mid-process (via /resume, /branch, /reset, /new, or context
 compression). Without the notification, providers that cache per-session
-state in initialize() (Hindsight, and any plugin that stores session_id
+state in initialize() (any plugin that stores session_id
 for scoped writes) keep writing into the old session's record.
 """
 
@@ -159,8 +159,3 @@ def test_queue_prefetch_all_propagates_session_id_to_providers():
     mm.add_provider(p)
     mm.queue_prefetch_all("next query", session_id="sess-42")
     assert p.queue_calls == [{"query": "next query", "session_id": "sess-42"}]
-
-
-# ---------------------------------------------------------------------------
-# Hindsight reference implementation — state-flush semantics
-# ---------------------------------------------------------------------------

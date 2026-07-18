@@ -4,7 +4,7 @@ When a user sends a long message, the messaging client splits it at the
 platform's character limit.  Each adapter should buffer rapid successive
 text messages from the same session and aggregate them before dispatching.
 
-Covers: Discord, Matrix, WeCom, and the adaptive delay logic for
+Covers Discord and the adaptive delay logic for
 Telegram and Feishu.
 """
 
@@ -163,42 +163,6 @@ class TestDiscordTextBatching:
         await asyncio.sleep(0.01)
 
 
-def _make_matrix_adapter():
-    """Create a minimal MatrixAdapter for testing text batching."""
-    from gateway.platforms.matrix import MatrixAdapter
-
-    config = PlatformConfig(enabled=True, token="test-token")
-    adapter = object.__new__(MatrixAdapter)
-    adapter._platform = Platform.MATRIX
-    adapter.config = config
-    adapter._pending_text_batches = {}
-    adapter._pending_text_batch_tasks = {}
-    adapter._text_batch_delay_seconds = 0.1
-    adapter._text_batch_split_delay_seconds = 0.3
-    adapter._active_sessions = {}
-    adapter._pending_messages = {}
-    adapter._message_handler = AsyncMock()
-    adapter.handle_message = AsyncMock()
-    return adapter
-
-
-def _make_wecom_adapter():
-    """Create a minimal WeComAdapter for testing text batching."""
-    from gateway.platforms.wecom import WeComAdapter
-
-    config = PlatformConfig(enabled=True, token="test-token")
-    adapter = object.__new__(WeComAdapter)
-    adapter._platform = Platform.WECOM
-    adapter.config = config
-    adapter._pending_text_batches = {}
-    adapter._pending_text_batch_tasks = {}
-    adapter._text_batch_delay_seconds = 0.1
-    adapter._text_batch_split_delay_seconds = 0.3
-    adapter._active_sessions = {}
-    adapter._pending_messages = {}
-    adapter._message_handler = AsyncMock()
-    adapter.handle_message = AsyncMock()
-    return adapter
 
 
 def _make_telegram_adapter():

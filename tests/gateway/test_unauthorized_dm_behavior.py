@@ -14,31 +14,16 @@ def _clear_auth_env(monkeypatch) -> None:
         "DISCORD_ALLOWED_USERS",
         "SLACK_ALLOWED_USERS",
         "DISCORD_ALLOWED_USERS",
-        "SIGNAL_GROUP_ALLOWED_USERS",
         "TELEGRAM_GROUP_ALLOWED_CHATS",
         "EMAIL_ALLOWED_USERS",
-        "SMS_ALLOWED_USERS",
-        "MATTERMOST_ALLOWED_USERS",
-        "MATRIX_ALLOWED_USERS",
-        "DINGTALK_ALLOWED_USERS",
         "FEISHU_ALLOWED_USERS",
-        "WECOM_ALLOWED_USERS",
-        "QQ_ALLOWED_USERS",
-        "QQ_GROUP_ALLOWED_USERS",
         "GATEWAY_ALLOWED_USERS",
         "TELEGRAM_ALLOW_ALL_USERS",
         "DISCORD_ALLOW_ALL_USERS",
         "DISCORD_ALLOW_ALL_USERS",
         "SLACK_ALLOW_ALL_USERS",
-        "SIGNAL_ALLOW_ALL_USERS",
         "EMAIL_ALLOW_ALL_USERS",
-        "SMS_ALLOW_ALL_USERS",
-        "MATTERMOST_ALLOW_ALL_USERS",
-        "MATRIX_ALLOW_ALL_USERS",
-        "DINGTALK_ALLOW_ALL_USERS",
         "FEISHU_ALLOW_ALL_USERS",
-        "WECOM_ALLOW_ALL_USERS",
-        "QQ_ALLOW_ALL_USERS",
         "GATEWAY_ALLOW_ALL_USERS",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -86,8 +71,8 @@ def test_star_wildcard_in_allowlist_authorizes_any_user(monkeypatch):
     )
     source = SessionSource(
         platform=Platform.DISCORD,
-        user_id="99998887776@s.whatsapp.net",
-        chat_id="99998887776@s.whatsapp.net",
+        user_id="99998887776",
+        chat_id="99998887776",
         user_name="stranger",
         chat_type="dm",
     )
@@ -95,7 +80,7 @@ def test_star_wildcard_in_allowlist_authorizes_any_user(monkeypatch):
 
 
 def test_star_wildcard_works_for_any_platform(monkeypatch):
-    """The * wildcard should work generically, not just for WhatsApp."""
+    """The * wildcard should work generically across retained platforms."""
     _clear_auth_env(monkeypatch)
     monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "*")
     runner, _adapter = _make_runner(
@@ -409,12 +394,12 @@ async def test_unauthorized_dm_pairs_by_default(monkeypatch):
     runner.pairing_store.generate_code.return_value = "ABC12DEF"
     result = await runner._handle_message(
         _make_event(
-            Platform.DISCORD, "15551234567@s.whatsapp.net", "15551234567@s.whatsapp.net"
+            Platform.DISCORD, "15551234567", "15551234567"
         )
     )
     assert result is None
     runner.pairing_store.generate_code.assert_called_once_with(
-        "discord", "15551234567@s.whatsapp.net", "tester"
+        "discord", "15551234567", "tester"
     )
     adapter.send.assert_awaited_once()
     assert "ABC12DEF" in adapter.send.await_args.args[1]
@@ -429,7 +414,7 @@ async def test_rate_limited_user_gets_no_response(monkeypatch):
     runner.pairing_store._is_rate_limited.return_value = True
     result = await runner._handle_message(
         _make_event(
-            Platform.DISCORD, "15551234567@s.whatsapp.net", "15551234567@s.whatsapp.net"
+            Platform.DISCORD, "15551234567", "15551234567"
         )
     )
     assert result is None
@@ -447,14 +432,14 @@ async def test_rejection_message_records_rate_limit(monkeypatch):
     runner.pairing_store.generate_code.return_value = None
     result = await runner._handle_message(
         _make_event(
-            Platform.DISCORD, "15551234567@s.whatsapp.net", "15551234567@s.whatsapp.net"
+            Platform.DISCORD, "15551234567", "15551234567"
         )
     )
     assert result is None
     adapter.send.assert_awaited_once()
     assert "Too many" in adapter.send.await_args.args[1]
     runner.pairing_store._record_rate_limit.assert_called_once_with(
-        "discord", "15551234567@s.whatsapp.net"
+        "discord", "15551234567"
     )
 
 

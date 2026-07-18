@@ -154,7 +154,7 @@ class TestBrowserSnapshotRedaction:
         assert "Continue" in captured_prompts[0]
 
 
-class TestCamofoxAnnotationRedaction:
+class TestBrowserAnnotationRedaction:
     """Verify annotation context is redacted before vision LLM call."""
 
     def test_annotation_context_secrets_redacted(self):

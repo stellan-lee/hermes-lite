@@ -1,11 +1,9 @@
-"""Per-platform streaming defaults + dashboard exposure.
+"""Per-platform streaming defaults.
 
 Streaming is smooth on Telegram (native sendMessageDraft) but flickers on
 edit-only platforms like Discord. The shipped defaults encode that:
 display.platforms.telegram.streaming=true, .discord.streaming=false. These are
-gap-fillers (user values win via deep-merge) and, because the dashboard schema
-is generated from DEFAULT_CONFIG, they automatically appear as editable toggles
-in the web UI.
+gap-fillers (user values win via deep-merge).
 """
 
 from __future__ import annotations
@@ -48,18 +46,3 @@ def test_user_override_wins_over_default():
     assert merged["display"]["platforms"]["discord"]["streaming"] is True
     # Partial override must not wipe the sibling telegram default.
     assert merged["display"]["platforms"]["telegram"]["streaming"] is True
-
-
-def test_dashboard_schema_exposes_per_platform_streaming():
-    """Because the web settings schema is built from DEFAULT_CONFIG, the
-    per-platform streaming toggles surface in the dashboard automatically."""
-    import pytest
-    pytest.importorskip("fastapi")  # web_server requires fastapi/uvicorn
-    from hermes_cli.web_server import CONFIG_SCHEMA
-
-    assert "display.platforms.telegram.streaming" in CONFIG_SCHEMA
-    assert "display.platforms.discord.streaming" in CONFIG_SCHEMA
-    assert CONFIG_SCHEMA["display.platforms.discord.streaming"]["type"] == "boolean"
-    # Global streaming controls are exposed too.
-    assert "streaming.enabled" in CONFIG_SCHEMA
-    assert "streaming.transport" in CONFIG_SCHEMA

@@ -697,8 +697,8 @@ def compress_context(
         logger.debug("context engine on_session_start (compression): %s", _ce_err)
 
     # Notify memory providers of the compaction boundary so provider-cached
-    # per-session state (Hindsight's _document_id, accumulated turn buffers,
-    # counters) refreshes. reset=False because the logical conversation
+    # per-session state (document IDs, accumulated turn buffers, counters)
+    # refreshes. reset=False because the logical conversation
     # continues. See #6672. Fires in BOTH modes: in-place uses the same id as
     # parent (the conversation didn't fork, but the buffer must still be told
     # the transcript was compacted so it doesn't double-count dropped turns).

@@ -341,19 +341,19 @@ class TestCliApprovalUi:
 class TestApprovalCallbackThreadLocalWiring:
     """Regression guard for the thread-local callback freeze (#13617 / #13618).
 
-    After 62348cff made _approval_callback / _sudo_password_callback thread-local
-    (ACP GHSA-qg5c-hvr5-hjgr), the CLI agent thread could no longer see callbacks
+    After 62348cff made _approval_callback / _sudo_password_callback thread-local,
+    the CLI agent thread could no longer see callbacks
     registered in the main thread — the dangerous-command prompt silently fell
     back to stdin input() and deadlocked against prompt_toolkit. The fix is to
-    register the callbacks INSIDE the agent worker thread (matching the ACP
-    pattern). These tests lock in that invariant.
+    register the callbacks INSIDE the agent worker thread. These tests lock in
+    that invariant.
     """
 
     def test_main_thread_registration_is_invisible_to_child_thread(self):
         """Confirms the underlying threading.local semantics that drove the bug.
 
         If this ever starts passing as "visible", the thread-local isolation
-        is gone and the ACP race GHSA-qg5c-hvr5-hjgr may be back.
+        is gone and the callback race may be back.
         """
         from tools.terminal_tool import (
             set_approval_callback,

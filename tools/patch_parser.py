@@ -433,15 +433,8 @@ def apply_v4a_operations(operations: List[PatchOperation],
     )
 
 
-def _apply_add(op: PatchOperation, file_ops: Any) -> Tuple[bool, str, Optional[str]]:
-    """Apply an add file operation.
-
-    Returns ``(success, diff_or_error, lsp_diagnostics)``.  The third
-    element carries the formatted ``<diagnostics>`` block from
-    :class:`WriteResult.lsp_diagnostics` so V4A patches can surface
-    semantic diagnostics from the LSP layer — without this, the LSP
-    tier would silently swallow them on the V4A code path.
-    """
+def _apply_add(op: PatchOperation, file_ops: Any) -> Tuple[bool, str]:
+    """Apply an add file operation."""
     # Extract content from hunks (all + lines)
     content_lines = []
     for hunk in op.hunks:
@@ -453,12 +446,12 @@ def _apply_add(op: PatchOperation, file_ops: Any) -> Tuple[bool, str, Optional[s
     
     result = file_ops.write_file(op.file_path, content)
     if result.error:
-        return False, result.error, None
+        return False, result.error
     
     diff = f"--- /dev/null\n+++ b/{op.file_path}\n"
     diff += '\n'.join(f"+{line}" for line in content_lines)
     
-    return True, diff, getattr(result, "lsp_diagnostics", None)
+    return True, diff
 
 
 def _apply_delete(op: PatchOperation, file_ops: Any) -> Tuple[bool, str]:
@@ -492,12 +485,8 @@ def _apply_move(op: PatchOperation, file_ops: Any) -> Tuple[bool, str]:
     return True, diff
 
 
-def _apply_update(op: PatchOperation, file_ops: Any) -> Tuple[bool, str, Optional[str]]:
-    """Apply an update file operation.
-
-    Returns ``(success, diff_or_error, lsp_diagnostics)`` — see
-    :func:`_apply_add` for the rationale on the third element.
-    """
+def _apply_update(op: PatchOperation, file_ops: Any) -> Tuple[bool, str]:
+    """Apply an update file operation."""
     # Deferred import: breaks the patch_parser ↔ fuzzy_match circular dependency
     from tools.fuzzy_match import fuzzy_find_and_replace
 
@@ -505,7 +494,7 @@ def _apply_update(op: PatchOperation, file_ops: Any) -> Tuple[bool, str, Optiona
     read_result = file_ops.read_file_raw(op.file_path)
 
     if read_result.error:
-        return False, f"Cannot read file: {read_result.error}", None
+        return False, f"Cannot read file: {read_result.error}"
 
     current_content = read_result.content
 
@@ -560,7 +549,7 @@ def _apply_update(op: PatchOperation, file_ops: Any) -> Tuple[bool, str, Optiona
                         err_msg += format_no_match_hint(error, 0, search_pattern, new_content)
                     except Exception:
                         pass
-                    return False, err_msg, None
+                    return False, err_msg
         else:
             # Addition-only hunk (no context or removed lines).
             # Insert at the location indicated by the context hint, or at end of file.
@@ -574,7 +563,7 @@ def _apply_update(op: PatchOperation, file_ops: Any) -> Tuple[bool, str, Optiona
                     return False, (
                         f"Addition-only hunk: context hint '{hunk.context_hint}' is ambiguous "
                         f"({occurrences} occurrences) — provide a more unique hint"
-                    ), None
+                    )
                 else:
                     hint_pos = new_content.find(hunk.context_hint)
                     # Insert after the line containing the context hint
@@ -589,7 +578,7 @@ def _apply_update(op: PatchOperation, file_ops: Any) -> Tuple[bool, str, Optiona
     # Write new content
     write_result = file_ops.write_file(op.file_path, new_content)
     if write_result.error:
-        return False, write_result.error, None
+        return False, write_result.error
     
     # Generate diff
     diff_lines = difflib.unified_diff(
@@ -600,4 +589,4 @@ def _apply_update(op: PatchOperation, file_ops: Any) -> Tuple[bool, str, Optiona
     )
     diff = ''.join(diff_lines)
     
-    return True, diff, getattr(write_result, "lsp_diagnostics", None)
+    return True, diff

@@ -12,8 +12,7 @@ import { TerminalWriteContext } from '../useTerminalNotification.js'
  * Pass `null` to opt out — the hook becomes a no-op and leaves the
  * terminal title untouched.
  *
- * On Windows, uses `process.title` (classic conhost doesn't support OSC).
- * Elsewhere, writes OSC 0 (set title+icon) via Ink's stdout.
+ * Writes OSC 0 (set title and icon) via Ink's stdout.
  */
 export function useTerminalTitle(title: string | null): void {
   const writeRaw = useContext(TerminalWriteContext)
@@ -25,10 +24,6 @@ export function useTerminalTitle(title: string | null): void {
 
     const clean = stripAnsi(title)
 
-    if (process.platform === 'win32') {
-      process.title = clean
-    } else {
-      writeRaw(osc(OSC.SET_TITLE_AND_ICON, clean))
-    }
+    writeRaw(osc(OSC.SET_TITLE_AND_ICON, clean))
   }, [title, writeRaw])
 }

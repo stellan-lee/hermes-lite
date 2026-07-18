@@ -1,10 +1,8 @@
-"""Regression tests for issue #22379 — Ctrl+Enter newline over SSH/WSL.
+"""Regression tests for Ctrl+Enter newline handling over SSH.
 
 prompt_toolkit treats c-j (LF) as Enter on POSIX so thin PTYs (docker exec,
-some BSD ssh) that send LF for plain Enter still work. But Windows Terminal
-(native, WSL, and SSH-forwarded sessions) sends Ctrl+Enter as bare LF — same
-byte. Without environment-aware gating, binding c-j to submit means
-Ctrl+Enter submits instead of inserting a newline.
+some BSD ssh) that send LF for plain Enter still work. Environment-aware
+gating prevents Ctrl+Enter from submitting instead of inserting a newline.
 
 These tests pin the gating predicate and the resulting binding behavior.
 """
@@ -46,10 +44,10 @@ def test_ghostty_tmux_session_preserves_ctrl_j_newline():
 
 
 def test_pure_local_linux_does_not_preserve():
-    """A bare local Linux TTY (no SSH/WSL/WT/Ghostty) keeps c-j → submit so docker exec
+    """A bare local Linux TTY keeps c-j → submit so docker exec
     style Enter-as-LF stays usable."""
     import cli as cli_mod
-    # Stub out /proc reads — those are the WSL fallback signal.
+    # Stub out optional /proc reads.
     with patch.object(sys, "platform", "linux"):
         with patch.dict(os.environ, {}, clear=True):
             with patch("builtins.open", side_effect=OSError("no /proc")):

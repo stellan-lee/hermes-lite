@@ -4,7 +4,7 @@ from hermes_cli.auth import has_usable_secret
 
 
 def test_has_usable_secret_rejects_documented_placeholder_key() -> None:
-    """Network-exposed API server key must reject static documentation placeholders."""
+    """Authentication keys must reject static documentation placeholders."""
     assert not has_usable_secret("your_api_key_here", min_length=8)
 
 

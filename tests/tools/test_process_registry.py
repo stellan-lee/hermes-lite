@@ -479,7 +479,7 @@ class TestSpawnEnvSanitization:
                 self.commands = []
 
             def get_temp_dir(self):
-                return "/data/data/com.termux/files/usr/tmp"
+                return "/var/tmp/hermes-custom"
 
             def execute(self, command, **kwargs):
                 self.commands.append((command, kwargs))
@@ -494,7 +494,7 @@ class TestSpawnEnvSanitization:
 
         bg_command = env.commands[0][0]
         assert session.pid == 4321
-        assert "/data/data/com.termux/files/usr/tmp/hermes_bg_" in bg_command
+        assert "/var/tmp/hermes-custom/hermes_bg_" in bg_command
         assert ".exit" in bg_command
         assert "rc=$?;" in bg_command
         assert " > /tmp/hermes_bg_" not in bg_command

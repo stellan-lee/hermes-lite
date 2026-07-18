@@ -178,10 +178,8 @@ class TestSystemdServiceRefresh:
     def test_systemd_restart_timeout_prints_status_guidance(self, monkeypatch, capsys):
         """`hermes gateway restart` must not surface a raw TimeoutExpired traceback.
 
-        The dashboard spawns `hermes gateway restart` in the background; when a
-        wedged adapter websocket pushes drain past the 90s CLI timeout, the
-        dashboard would previously show a Python traceback (issue #19937
-        follow-up: the same failure mode applies to restart, not just stop).
+        When a wedged adapter websocket pushes drain past the 90s CLI timeout,
+        callers should receive useful status guidance instead of a traceback.
         """
         monkeypatch.setattr(gateway_cli, "_select_systemd_scope", lambda system=False: False)
         monkeypatch.setattr(gateway_cli, "_require_service_installed", lambda action, system=False: None)

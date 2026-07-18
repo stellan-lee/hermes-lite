@@ -339,7 +339,7 @@ class TestEdgeCases:
     @pytest.mark.parametrize(
         "content,expected",
         [
-            # Backslash separators (native Windows style)
+            # Backslash separators from external payloads
             ("See C:\\Users\\test\\image.png here", "C:\\Users\\test\\image.png"),
             # Forward slashes with drive letter (common in cross-platform code)
             ("See C:/Users/test/image.png here", "C:/Users/test/image.png"),

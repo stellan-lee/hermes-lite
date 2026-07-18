@@ -192,7 +192,7 @@ class TestPromptToolkitTerminalCompatibility:
         def submit_handler(event):
             return None
 
-        # Bare local POSIX (no SSH/WSL markers): both enter and c-j submit.
+        # Bare local POSIX (no SSH markers): both enter and c-j submit.
         with _patch.object(_sys, "platform", "linux"), \
              _patch.dict(_os.environ, {}, clear=True), \
              _patch("builtins.open", side_effect=OSError("no /proc")):
@@ -202,8 +202,7 @@ class TestPromptToolkitTerminalCompatibility:
             assert bindings[("c-m",)] is submit_handler
             assert bindings[("c-j",)] is submit_handler
 
-        # POSIX over SSH: c-j stays free so Ctrl+Enter (sent as LF by
-        # Windows Terminal / Kitty / mintty over SSH) inserts a newline.
+        # POSIX over SSH: c-j stays free so Ctrl+Enter sent as LF inserts a newline.
         with _patch.object(_sys, "platform", "linux"), \
              _patch.dict(_os.environ, {"SSH_CONNECTION": "1.2.3.4 5 6.7.8.9 22"}, clear=True), \
              _patch("builtins.open", side_effect=OSError("no /proc")):

@@ -471,7 +471,7 @@ class TestStreamingFallback:
 
     Previously, streaming errors triggered an inline fallback to
     non-streaming.  Now they propagate so the main retry loop can apply
-    richer recovery (credential rotation, provider fallback, backoff).
+    richer recovery (provider fallback and backoff).
     The only special case: 'stream not supported' sets _disable_streaming
     so the *next* main-loop retry uses non-streaming automatically.
     """

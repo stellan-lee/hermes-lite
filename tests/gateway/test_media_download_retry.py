@@ -5,7 +5,6 @@ Covers:
 - gateway/platforms/base.py:       cache_image_from_url
 - gateway/platforms/slack.py:      SlackAdapter._download_slack_file
                                     SlackAdapter._download_slack_file_bytes
-- gateway/platforms/mattermost.py: MattermostAdapter._send_url_as_file
 
 All async tests use asyncio.run() directly — pytest-asyncio is not installed
 in this environment.
@@ -799,31 +798,3 @@ class TestSlackDownloadSlackFileBytes:
         with pytest.raises(httpx.TimeoutException):
             asyncio.run(run())
         assert mock_client.get.call_count == 3
-
-
-def _make_mm_adapter():
-    """Build a minimal MattermostAdapter with mocked internals."""
-    from plugins.platforms.mattermost.adapter import MattermostAdapter
-
-    config = PlatformConfig(
-        enabled=True, token="mm-token-fake", extra={"url": "https://mm.example.com"}
-    )
-    adapter = MattermostAdapter(config)
-    adapter._session = MagicMock()
-    adapter._upload_file = AsyncMock(return_value="file-id-123")
-    adapter._api_post = AsyncMock(return_value={"id": "post-id-abc"})
-    adapter.send = AsyncMock(return_value=MagicMock(success=True))
-    return adapter
-
-
-def _make_aiohttp_resp(
-    status: int, content: bytes = b"file bytes", content_type: str = "image/jpeg"
-):
-    """Build a context-manager mock for an aiohttp response."""
-    resp = MagicMock()
-    resp.status = status
-    resp.content_type = content_type
-    resp.read = AsyncMock(return_value=content)
-    resp.__aenter__ = AsyncMock(return_value=resp)
-    resp.__aexit__ = AsyncMock(return_value=False)
-    return resp

@@ -1263,7 +1263,7 @@ class SessionDB:
 
         Unlike ``update_token_counts`` which uses ``COALESCE(model, ?)``
         (only filling in NULL), this unconditionally sets the model column
-        so that the dashboard reflects the user's latest /model choice.
+        so resumed sessions reflect the user's latest /model choice.
         """
         def _do(conn):
             conn.execute(
@@ -2104,10 +2104,9 @@ class SessionDB:
         if role is 'tool' or tool_calls is present).
 
         ``platform_message_id`` is the external messaging platform's own
-        message ID (e.g. Telegram update_id, Yuanbao msg_id).  It is
+        message ID (for example, a Telegram update ID). It is
         independent of the SQLite autoincrement primary key and is used by
-        platform-specific flows like yuanbao's recall guard to redact a
-        message by its platform-side identifier.
+        platform-specific flows that refer to an external message identifier.
         """
         # Serialize structured fields to JSON before entering the write txn
         reasoning_details_json = (
@@ -2218,8 +2217,8 @@ class SessionDB:
                 json.dumps(codex_message_items) if codex_message_items else None
             )
             tool_calls_json = json.dumps(tool_calls) if tool_calls else None
-            # Accept either `platform_message_id` (new explicit name) or
-            # `message_id` (yuanbao's existing convention on message dicts).
+            # Accept either the explicit `platform_message_id` name or the
+            # legacy transcript field `message_id`.
             platform_msg_id = (
                 msg.get("platform_message_id") or msg.get("message_id")
             )
@@ -2627,17 +2626,16 @@ class SessionDB:
                 except (json.JSONDecodeError, TypeError):
                     logger.warning("Failed to deserialize tool_calls in conversation replay, falling back to []")
                     msg["tool_calls"] = []
-            # Surface the platform-side message id (e.g. yuanbao msg_id,
-            # telegram update_id) so platform-specific flows like recall
-            # can match by external identifier instead of having to fall
-            # back to content-match heuristics.  Exposed as ``message_id``
+            # Surface the platform-side message id so platform-specific flows
+            # can match an external identifier instead of falling back to
+            # content-match heuristics. Exposed as ``message_id``
             # for backward compatibility with the JSONL transcript shape.
             if row["platform_message_id"]:
                 msg["message_id"] = row["platform_message_id"]
             if row["observed"]:
                 msg["observed"] = True
             # Restore reasoning fields on assistant messages so providers
-            # that replay reasoning (OpenRouter, OpenAI, Nous) receive
+            # that replay reasoning receive
             # coherent multi-turn reasoning context.
             if row["role"] == "assistant":
                 if row["finish_reason"]:
@@ -3695,178 +3693,6 @@ class SessionDB:
         if deleted:
             self._remove_session_files(sessions_dir, session_id)
         return deleted
-
-    def delete_sessions(
-        self,
-        session_ids: List[str],
-        sessions_dir: Optional[Path] = None,
-    ) -> int:
-        """Delete every session in *session_ids* in a single transaction.
-
-        Backs the dashboard's bulk-select-then-delete flow on the
-        sessions page (``POST /api/sessions/bulk-delete``). Mirrors the
-        single-session :meth:`delete_session` contract per row:
-
-        * Unknown IDs are silently skipped (no 404) — selection state
-          in the UI can race against another tab's delete, and we'd
-          rather succeed-on-the-rest than fail-the-whole-batch.
-        * Children of every deleted ID are orphaned
-          (``parent_session_id → NULL``), never cascade-deleted, so a
-          branch / subagent transcript survives an inadvertent parent
-          delete.
-        * Messages and the session row both go in one
-          ``_execute_write`` call so a partial failure can't leave the
-          DB in a "messages gone but session row still there" state.
-        * On-disk transcript / ``request_dump_*`` files are cleaned up
-          outside the DB transaction when *sessions_dir* is provided,
-          matching :meth:`prune_sessions` and
-          :meth:`delete_empty_sessions`.
-
-        Returns the count of sessions that actually existed and were
-        deleted (may be less than ``len(session_ids)`` if some IDs were
-        already gone).
-        """
-        if not session_ids:
-            return 0
-        # Dedup + drop any non-string entries up-front. Avoids
-        # double-counting in the WHERE-IN list and protects against
-        # callers that pass a list with stray ``None`` values.
-        unique_ids = list({sid for sid in session_ids if isinstance(sid, str) and sid})
-        if not unique_ids:
-            return 0
-
-        removed_ids: list[str] = []
-
-        def _do(conn):
-            placeholders = ",".join("?" * len(unique_ids))
-            # First, filter to IDs that actually exist — we want to
-            # return the real deleted count, not the input length.
-            cursor = conn.execute(
-                f"SELECT id FROM sessions WHERE id IN ({placeholders})",
-                unique_ids,
-            )
-            existing = [row["id"] for row in cursor.fetchall()]
-            if not existing:
-                return 0
-
-            existing_placeholders = ",".join("?" * len(existing))
-            # Orphan children whose parent is in the kill list so the
-            # FK constraint stays satisfied. Pin children whose parent
-            # is itself in the kill list rather than NULL-ing parents
-            # of survivors — the IN list on ``parent_session_id`` does
-            # exactly this.
-            conn.execute(
-                f"UPDATE sessions SET parent_session_id = NULL "
-                f"WHERE parent_session_id IN ({existing_placeholders})",
-                existing,
-            )
-            conn.execute(
-                f"DELETE FROM messages WHERE session_id IN ({existing_placeholders})",
-                existing,
-            )
-            conn.execute(
-                f"DELETE FROM sessions WHERE id IN ({existing_placeholders})",
-                existing,
-            )
-            removed_ids.extend(existing)
-            return len(existing)
-
-        count = self._execute_write(_do)
-        for sid in removed_ids:
-            self._remove_session_files(sessions_dir, sid)
-        return count
-
-    def count_empty_sessions(self) -> int:
-        """Return the count of empty, non-active, non-archived sessions.
-
-        "Empty" = ``message_count = 0`` AND the session has ended
-        (``ended_at IS NOT NULL``) AND is not archived. The ``ended_at``
-        guard matches the safety contract used by :meth:`prune_sessions`:
-        only ended sessions are candidates for bulk deletion, so a freshly
-        spawned session whose first message hasn't landed yet — or one
-        held open by the live agent — is never sniped out from under
-        the runtime.
-
-        Backs the ``GET /api/sessions/empty/count`` endpoint that lets the
-        web dashboard hide its "Delete empty" button when there's nothing
-        to clean up, and pre-populate the confirm dialog with the actual
-        count.
-        """
-        with self._lock:
-            cursor = self._conn.execute(
-                "SELECT COUNT(*) FROM sessions "
-                "WHERE message_count = 0 "
-                "AND ended_at IS NOT NULL "
-                "AND archived = 0"
-            )
-            return cursor.fetchone()[0]
-
-    def delete_empty_sessions(
-        self,
-        sessions_dir: Optional[Path] = None,
-    ) -> int:
-        """Delete every empty, ended, non-archived session.
-
-        Mirrors :meth:`prune_sessions`' transactional shape:
-
-        * Selects candidate IDs first (``message_count = 0`` AND
-          ``ended_at IS NOT NULL`` AND ``archived = 0``) so we never
-          touch a live session or one the user deliberately archived.
-        * Orphans any child whose parent is in the kill list — children
-          of an empty parent are kept and re-parented to ``NULL`` rather
-          than cascade-deleted, matching ``delete_session`` /
-          ``prune_sessions`` semantics so branch/subagent transcripts
-          survive an inadvertent parent cleanup.
-        * Deletes the rows in a single ``_execute_write`` callback so
-          the operation is atomic — a partial failure (e.g. SIGKILL
-          mid-loop) doesn't leave the DB in a "messages-deleted but
-          session-row-still-there" half-state.
-        * Cleans up on-disk transcript files (``.json`` / ``.jsonl`` /
-          ``request_dump_*``) outside the DB transaction when
-          ``sessions_dir`` is provided. Empty sessions don't typically
-          have transcript files, but the gateway can leave a stub
-          ``request_dump_*`` if it crashed before the first reply —
-          so we still sweep, matching ``prune_sessions``.
-
-        Returns the number of sessions deleted.
-        """
-        removed_ids: list[str] = []
-
-        def _do(conn):
-            cursor = conn.execute(
-                "SELECT id FROM sessions "
-                "WHERE message_count = 0 "
-                "AND ended_at IS NOT NULL "
-                "AND archived = 0"
-            )
-            session_ids = {row["id"] for row in cursor.fetchall()}
-
-            if not session_ids:
-                return 0
-
-            placeholders = ",".join("?" * len(session_ids))
-            conn.execute(
-                f"UPDATE sessions SET parent_session_id = NULL "
-                f"WHERE parent_session_id IN ({placeholders})",
-                list(session_ids),
-            )
-
-            for sid in session_ids:
-                # DELETE FROM messages is paranoia — by construction
-                # these rows have ``message_count = 0`` — but if a
-                # bookkeeping bug ever lets the counter drift below the
-                # real row count, we still leave a clean FK state.
-                conn.execute(
-                    "DELETE FROM messages WHERE session_id = ?", (sid,)
-                )
-                conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
-                removed_ids.append(sid)
-            return len(session_ids)
-
-        count = self._execute_write(_do)
-        for sid in removed_ids:
-            self._remove_session_files(sessions_dir, sid)
-        return count
 
     def prune_sessions(
         self,

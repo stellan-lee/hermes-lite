@@ -150,13 +150,6 @@ class TestMemoryManagerUserIdThreading:
 
 
 # ---------------------------------------------------------------------------
-# Mem0 provider user_id tests
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
 # Honcho provider user_id tests
 # ---------------------------------------------------------------------------
 
@@ -288,4 +281,3 @@ class TestAIAgentUserIdPropagation:
             agent = object.__new__(AIAgent)
             agent._user_id = None
             assert agent._user_id is None
-

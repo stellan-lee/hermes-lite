@@ -649,7 +649,7 @@ def cmd_setup(args) -> None:
             ("Telegram UID", "e.g. 86701400"),
             ("Discord snowflake", "e.g. 491827364"),
             ("Slack user ID", "e.g. U04ABCDEF"),
-            ("Matrix MXID", "e.g. @you:matrix.org"),
+            ("Feishu user ID", "e.g. ou_123456"),
         ):
             entered = _prompt(f"  {platform_label} ({alias_hint})", default="").strip()
             if entered:

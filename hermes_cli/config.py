@@ -86,8 +86,8 @@ _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 #   from one of these on every restart.
 # * ``NODE_OPTIONS`` / ``NODE_PATH`` — Node interpreter; affects npm,
 #   ``hermes update``, the TUI build.
-# * ``PATH`` — too broad to allow. The dashboard never needs to rewrite
-#   the operator's PATH; if a tool can't be found, the fix is to add an
+# * ``PATH`` — too broad to allow. Configuration writers never need to
+#   rewrite the operator's PATH; if a tool can't be found, add an
 #   absolute path in the integration config, not to mutate PATH globally.
 # * ``GIT_SSH_COMMAND`` / ``GIT_EXEC_PATH`` — git rewrites that fire
 #   on every plugin install / ``hermes update``.
@@ -99,7 +99,7 @@ _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # * ``HERMES_HOME`` / ``HERMES_PROFILE`` / ``HERMES_CONFIG`` /
 #   ``HERMES_ENV`` — Hermes runtime location flags. Writing these into
 #   ``.env`` would relocate state in ways the user did not request from
-#   the dashboard. ``config.yaml`` is the supported surface for these.
+#   an env writer. ``config.yaml`` is the supported surface for these.
 #
 # IMPORTANT: ``HERMES_*`` overall is NOT blocked. Many legitimate
 # integration credentials follow that prefix (for example,
@@ -109,7 +109,7 @@ _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 #
 # This is enforced on *write* only — values already in ``.env`` (set
 # by the operator out-of-band, or pre-existing) keep working. The
-# point is that the dashboard's writable surface cannot escalate by
+# point is that the writable configuration surface cannot escalate by
 # planting them.
 _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     # Loader / linker
@@ -125,7 +125,7 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     "PATH", "SHELL", "BROWSER", "EDITOR", "VISUAL", "PAGER",
     # Git
     "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_SHELL",
-    # Hermes runtime location — never via dashboard env writer.
+    # Hermes runtime location — never via the env writer.
     # NOT a HERMES_* blanket: integration credentials such as
     # HERMES_LANGFUSE_* are allowed.
     "HERMES_HOME", "HERMES_PROFILE", "HERMES_CONFIG", "HERMES_ENV",
@@ -517,8 +517,8 @@ def _is_container() -> bool:
 
     When Hermes runs in a container with volume-mounted config files, forcing
     0o600 permissions breaks multi-process setups where the gateway and
-    dashboard run as different UIDs or the volume mount requires broader
-    permissions.
+    gateway workers run as different UIDs or the volume mount requires
+    broader permissions.
     """
     # Explicit opt-out
     if os.environ.get("HERMES_CONTAINER") or os.environ.get("HERMES_SKIP_CHMOD"):
@@ -970,8 +970,7 @@ DEFAULT_CONFIG = {
         },
         # Profile describer — auto-generates a 1-2 sentence description
         # of what a profile is good at. Invoked by
-        # ``hermes profile describe <name> --auto`` and the dashboard's
-        # auto-generate button. Short, cheap call.
+        # ``hermes profile describe <name> --auto``. Short, cheap call.
         "profile_describer": {
             "provider": "auto",
             "model": "",
@@ -1021,7 +1020,7 @@ DEFAULT_CONFIG = {
         # When true (default), `hermes --tui` drops a one-time hint
         # ("subagents working · /agents to watch live") the first time a turn
         # starts delegating, nudging the user toward the live spawn-tree
-        # dashboard. Set false to suppress the hint.
+        # agent monitor. Set false to suppress the hint.
         "tui_agents_nudge": True,
         "bell_on_complete": False,
         "show_reasoning": False,
@@ -1696,7 +1695,7 @@ DEFAULT_CONFIG = {
         #             supports it (Telegram DMs via sendMessageDraft,
         #             Bot API 9.5+) and fall back to edit-based elsewhere.
         #             Safe global default: platforms without draft support
-        #             (Discord, Slack, Matrix, Telegram groups) transparently
+        #             (Discord, Slack, Telegram groups) transparently
         #             use the edit path, so "auto" only upgrades chats that
         #             can render the smoother native preview.
         #   "draft" — explicitly request native drafts; falls back to edit
@@ -2007,10 +2006,6 @@ OPTIONAL_ENV_VARS = {'LM_API_KEY': {'description': 'LM Studio bearer token for a
                                     'url': None,
                                     'password': False,
                                     'category': 'setting'}}
-
-# Tool Gateway env vars are always visible — they're useful for
-# self-hosted / custom gateway setups regardless of subscription state.
-
 
 def get_missing_env_vars(required_only: bool = False) -> List[Dict[str, Any]]:
     """

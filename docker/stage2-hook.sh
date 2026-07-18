@@ -326,7 +326,7 @@ if [ -z "${AGENT_BROWSER_EXECUTABLE_PATH:-}" ] && \
     if [ -n "$browser_bin" ]; then
         echo "[stage2] Found agent-browser Chromium binary: $browser_bin"
         # Write to s6's container_environment so with-contenv picks it
-        # up for all supervised services (main-hermes, dashboard, etc.).
+        # up for all supervised services (main-hermes and gateways).
         # Idempotent: each boot overwrites with the current path.
         # Some container runtimes / s6-overlay versions do not create the
         # envdir before cont-init hooks run, so create it defensively.

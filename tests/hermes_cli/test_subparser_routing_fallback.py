@@ -29,7 +29,6 @@ def _build_parser():
         metavar="SESSION_NAME",
     )
     parser.add_argument("--worktree", "-w", action="store_true", default=False)
-    parser.add_argument("--skills", "-s", action="append", default=None)
     parser.add_argument("--yolo", action="store_true", default=False)
     parser.add_argument("--pass-session-id", action="store_true", default=False)
 
@@ -62,4 +61,3 @@ def _safe_parse(parser, subparsers, argv):
     else:
         subparsers.required = False
         return parser.parse_args(argv)
-

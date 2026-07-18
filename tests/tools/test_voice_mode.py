@@ -11,18 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-def _non_wsl_proc_version(real_open):
-    """Return an open() shim that makes host WSL detection deterministic."""
-    def _fake_open(file, *args, **kwargs):
-        if file == "/proc/version":
-            from io import StringIO
-
-            return StringIO("Linux test-kernel")
-        return real_open(file, *args, **kwargs)
-
-    return _fake_open
-
-
 # ============================================================================
 # Fixtures
 # ============================================================================
@@ -77,7 +65,7 @@ def short_socket_dir():
 
 
 # ============================================================================
-# detect_audio_environment — WSL / SSH / Docker detection
+# detect_audio_environment — SSH / Docker detection
 # ============================================================================
 
 class TestPulseSocketReachable:
@@ -138,13 +126,12 @@ class TestPulseSocketReachable:
 
 class TestDetectAudioEnvironment:
     def test_clean_environment_is_available(self, monkeypatch):
-        """No SSH, Docker, or WSL — should be available."""
+        """No SSH or Docker should be available."""
         monkeypatch.delenv("SSH_CLIENT", raising=False)
         monkeypatch.delenv("SSH_TTY", raising=False)
         monkeypatch.delenv("SSH_CONNECTION", raising=False)
         monkeypatch.setattr("tools.voice_mode._import_audio",
                             lambda: (MagicMock(), MagicMock()))
-        monkeypatch.setattr("builtins.open", _non_wsl_proc_version(open))
 
         from tools.voice_mode import detect_audio_environment
         result = detect_audio_environment()
@@ -172,7 +159,6 @@ class TestDetectAudioEnvironment:
         monkeypatch.delenv("PIPEWIRE_REMOTE", raising=False)
         monkeypatch.setattr("tools.voice_mode._import_audio",
                             lambda: (MagicMock(), MagicMock()))
-        monkeypatch.setattr("builtins.open", _non_wsl_proc_version(open))
 
         from tools.voice_mode import detect_audio_environment
         result = detect_audio_environment()
@@ -190,7 +176,6 @@ class TestDetectAudioEnvironment:
         monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: True)
         monkeypatch.setattr("tools.voice_mode._import_audio",
                             lambda: (MagicMock(), MagicMock()))
-        monkeypatch.setattr("builtins.open", _non_wsl_proc_version(open))
 
         from tools.voice_mode import detect_audio_environment
         result = detect_audio_environment()

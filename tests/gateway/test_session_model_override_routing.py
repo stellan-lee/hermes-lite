@@ -3,7 +3,7 @@
 These cover the bug where `/model ...` stored a session override, but fresh
 agent constructions still resolved model/provider from global config/runtime.
 That let helper agents (and cache-miss main agents) route GPT-5.4 to the wrong
-provider, e.g. Nous instead of OpenAI Codex.
+provider, e.g. a custom endpoint instead of OpenAI Codex.
 """
 
 import asyncio
@@ -198,7 +198,6 @@ fallback_providers:
             "api_mode": "chat_completions",
             "command": None,
             "args": [],
-            "credential_pool": None,
         }
 
     import hermes_cli.runtime_provider as runtime_provider
@@ -250,7 +249,6 @@ fallback_providers:
             "api_mode": "chat_completions",
             "command": None,
             "args": [],
-            "credential_pool": None,
         }
 
     import hermes_cli.runtime_provider as runtime_provider

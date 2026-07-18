@@ -3558,29 +3558,16 @@ class DiscordAdapter(BasePlatformAdapter):
 
         _parent_channel = self._thread_parent_channel(getattr(interaction, "channel", None))
         _parent_id = str(getattr(_parent_channel, "id", "") or "")
-        _skills = self._resolve_channel_skills(thread_id, _parent_id or None)
         _channel_prompt = self._resolve_channel_prompt(thread_id, _parent_id or None)
         event = MessageEvent(
             text=text,
             message_type=MessageType.TEXT,
             source=source,
             raw_message=interaction,
-            auto_skill=_skills,
             channel_prompt=_channel_prompt,
         )
         await self.handle_message(event)
 
-    def _resolve_channel_skills(self, channel_id: str, parent_id: str | None = None) -> list[str] | None:
-        """Look up auto-skill bindings for a Discord channel/forum thread.
-
-        Config format (in platform extra):
-            channel_skill_bindings:
-              - id: "123456"
-                skills: ["skill-a", "skill-b"]
-        Also checks parent_id so forum threads inherit the forum's bindings.
-        """
-        from gateway.platforms.base import resolve_channel_skills
-        return resolve_channel_skills(self.config.extra, channel_id, parent_id)
 
     def _resolve_channel_prompt(self, channel_id: str, parent_id: str | None = None) -> str | None:
         """Resolve a Discord per-channel prompt, preferring the exact channel over its parent."""
@@ -4757,7 +4744,7 @@ class DiscordAdapter(BasePlatformAdapter):
                             # ``application/octet-stream`` MIME and emits a context
                             # note with the sandbox-translated cache path via
                             # ``to_agent_visible_cache_path()`` (important for
-                            # Docker/Modal terminal backends).
+                            # Docker terminal backends).
                         except Exception as e:
                             logger.warning(
                                 "[Discord] Failed to cache document %s: %s",
@@ -4824,7 +4811,6 @@ class DiscordAdapter(BasePlatformAdapter):
         _chan = message.channel
         _parent_id = str(getattr(_chan, "parent_id", "") or "")
         _chan_id = str(getattr(_chan, "id", ""))
-        _skills = self._resolve_channel_skills(_chan_id, _parent_id or None)
         _channel_prompt = self._resolve_channel_prompt(_chan_id, _parent_id or None)
 
         reply_to_id = None
@@ -4845,7 +4831,6 @@ class DiscordAdapter(BasePlatformAdapter):
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,
             timestamp=message.created_at,
-            auto_skill=_skills,
             channel_prompt=_channel_prompt,
             channel_context=_channel_context,
         )

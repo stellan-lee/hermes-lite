@@ -1,4 +1,4 @@
-"""Shared file safety rules used by both tools and ACP shims."""
+"""Shared file safety rules used by tools and client adapters."""
 
 from __future__ import annotations
 
@@ -520,7 +520,7 @@ def get_sandbox_mirror_warning(path: str) -> Optional[str]:
     return (
         f"Sandbox-mirror write blocked by soft guard: {info['target_path']} "
         f"sits under {info['mirror_root']!r}, which is a per-task mirror "
-        f"created by a non-local terminal backend (docker/daytona/etc.). "
+        f"created by a non-local terminal backend (Docker or SSH). "
         f"Writes here land on a copy that the host Hermes process never "
         f"reads — the authoritative file is likely {info['inner_path']!r} "
         f"under the real HERMES_HOME. Use the host-side tool for "

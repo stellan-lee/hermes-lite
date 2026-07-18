@@ -3,7 +3,7 @@
 The `/sethome` command writes to a platform's home-target env var. Email does
 not follow the `{PLATFORM}_HOME_CHANNEL` convention and uses
 `EMAIL_HOME_ADDRESS`. Before PR #12698
-`/sethome` hardcoded the `_HOME_CHANNEL` suffix, so Matrix and Email saves went
+`/sethome` hardcoded the `_HOME_CHANNEL` suffix, so Email saves went
 to env vars nothing read on startup — the home channel appeared to set
 successfully but was lost on every new gateway session.
 """

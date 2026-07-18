@@ -3,7 +3,7 @@
 File Operations Module
 
 Provides file manipulation capabilities (read, write, patch, search) that work
-across all terminal backends (local, docker, ssh, singularity, modal, daytona).
+across all retained terminal backends (local, Docker, and SSH).
 
 The key insight is that all file operations can be expressed as shell commands,
 so we wrap the terminal backend's execute() interface to provide a unified file API.
@@ -383,45 +383,6 @@ LINTERS = {
     '.rs': 'rustfmt --check {file} 2>&1',
 }
 
-# Extensions where the per-file shell linter is structurally weaker than
-# a real LSP server AND produces phantom errors on real-world projects:
-#
-# - ``.ts``: ``tsc --noEmit FILE.ts`` ignores ``tsconfig.json`` and
-#   defaults to no-lib / ES5, so every ES2015+ stdlib reference
-#   (``Promise``, ``Map``, ``Set``, ``ReadonlySet``, ``Iterable``,
-#   ``Math.imul``, ``Number.isFinite``, etc.) reports as missing.  This
-#   floods the agent's lint field with 20K+ tokens of false positives on
-#   every edit.  No supported tsc flag fixes the single-file invocation;
-#   the canonical replacement is ``tsserver`` via LSP, which respects
-#   tsconfig and gives true diagnostics.
-#
-#   ``.tsx`` is intentionally NOT in ``LINTERS`` (and therefore not
-#   here): it has no shell linter entry, so it falls through to the
-#   ``ext not in LINTERS`` skip case unchanged.  Pre-PR behavior:
-#   ``.tsx`` was implicitly ``skipped``.  Keeping it that way means
-#   ``.tsx`` edits with LSP disabled get no per-file syntax check
-#   (same as before this PR) instead of the broken ``tsc`` invocation
-#   that ``.ts`` used to get.  When LSP is enabled, ``.tsx`` is covered
-#   by the LSP tier via ``_maybe_lsp_diagnostics`` exactly as ``.ts``.
-#
-# - ``.go``: ``go vet FILE.go`` fails outside a module / GOPATH with
-#   "cannot find package" — already partially handled by
-#   ``_LINTER_UNUSABLE_PATTERNS`` but only when the package error is the
-#   ONLY output; mixed real+phantom output still leaks through.
-#   ``gopls`` is the canonical replacement.
-#
-# - ``.rs``: ``rustfmt --check FILE.rs`` is style, not type-checking, and
-#   rejects non-Cargo project files.  ``rust-analyzer`` is the canonical
-#   replacement.
-#
-# When the LSP service is configured AND ``enabled_for(path)`` for this
-# extension's file, ``_check_lint`` skips the shell linter for these
-# extensions — the ``lsp_diagnostics`` channel carries the real signal.
-# Everything else in ``LINTERS`` (Python ``py_compile``, ``node --check``)
-# is fast, file-local, and correct, so it runs unconditionally.
-_SHELL_LINTER_LSP_REDUNDANT = frozenset({'.ts', '.go', '.rs'})
-
-
 # Patterns that indicate the linter base command exists on PATH but
 # couldn't actually run — e.g. ``npx tsc`` when tsc isn't installed in
 # node_modules, or rustfmt complaining there's no Cargo project.  When
@@ -429,7 +390,7 @@ _SHELL_LINTER_LSP_REDUNDANT = frozenset({'.ts', '.go', '.rs'})
 # returns ``skipped`` instead of ``error`` so:
 #
 # 1. The write isn't flagged for a tooling problem the agent can't fix.
-# 2. The LSP semantic tier still runs (it gates on success/skipped).
+# 2. Tooling availability is not mistaken for a source-code error.
 #
 # Patterns are matched case-insensitively against linter stdout.
 _LINTER_UNUSABLE_PATTERNS = {
@@ -600,7 +561,7 @@ class ShellFileOperations(FileOperations):
     File operations implemented via shell commands.
     
     Works with ANY terminal backend that has execute(command, cwd) method.
-    This includes local, docker, singularity, ssh, modal, and daytona environments.
+    This includes local, Docker, and SSH environments.
     """
     
     def __init__(self, terminal_env, cwd: str = None):
@@ -630,7 +591,7 @@ class ShellFileOperations(FileOperations):
         self.env = terminal_env
         # Determine cwd from various possible sources.
         # IMPORTANT: do NOT fall back to os.getcwd() -- that's the HOST's local
-        # path which doesn't exist inside container/cloud backends (modal, docker).
+        # path which doesn't exist inside container backends such as Docker.
         # If nothing provides a cwd, use "/" as a safe universal default.
         self.cwd = cwd or getattr(terminal_env, 'cwd', None) or \
                    getattr(getattr(terminal_env, 'config', None), 'cwd', None) or "/"
@@ -826,7 +787,7 @@ class ShellFileOperations(FileOperations):
         """Detect the dominant line ending of a file on disk.
 
         If ``pre_content`` is already available (we just read the file
-        for lint/LSP purposes), inspect that — zero extra exec calls.
+        for lint purposes), inspect that — zero extra exec calls.
         Otherwise issue a tiny ``head -c 4096`` to sample the first 4KB.
 
         Returns ``"\\r\\n"`` for CRLF (Windows), ``"\\n"`` for LF (Unix),
@@ -1178,8 +1139,7 @@ class ShellFileOperations(FileOperations):
         if want_pre:
             # Best-effort read; failure (file missing, permission) leaves
             # pre_content as None which makes both downstream consumers
-            # degrade gracefully (lint reports all errors; LSP skips the
-            # shift map).
+            # degrade gracefully by reporting all lint errors.
             read_cmd = f"cat {self._escape_shell_arg(path)} 2>/dev/null"
             read_result = self._exec(read_cmd)
             if read_result.exit_code == 0 and read_result.stdout:
@@ -1463,7 +1423,7 @@ class ShellFileOperations(FileOperations):
             # (e.g. ``npx tsc`` when tsc isn't in node_modules; ``rustfmt
             # --check`` without a Cargo project).  This is a tooling gap,
             # not a real lint failure — surface it as ``skipped`` so the
-            # write doesn't get flagged AND so the LSP tier still runs.
+            # write doesn't get flagged for a missing toolchain.
             from tools.ansi_strip import strip_ansi
             cleaned = strip_ansi(result.stdout).strip()
             # Collapse to a single line — the npx banner is multi-line ASCII.
@@ -1486,7 +1446,7 @@ class ShellFileOperations(FileOperations):
         """
         Run post-write syntax lint with pre-write baseline comparison.
 
-        Two-tier strategy:
+        Strategy:
 
         1. **Syntax check** (in-process or shell-based, microseconds).
            Catches the bug class that motivated this layer: corrupt
@@ -1496,13 +1456,6 @@ class ShellFileOperations(FileOperations):
            syntax tier reports errors.  Filter out errors that already
            existed pre-edit so the agent isn't distracted by inherited
            state.
-
-        Semantic diagnostics from the LSP layer are fetched separately
-        via :meth:`_maybe_lsp_diagnostics` and surfaced in the
-        ``lsp_diagnostics`` field on :class:`WriteResult` /
-        :class:`PatchResult`.  Keeping the two channels separate lets
-        the agent (and any downstream parsers) read syntax errors and
-        semantic errors as independent signals.
 
         Args:
             path: File path (for linter selection).

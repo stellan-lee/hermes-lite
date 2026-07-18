@@ -28,8 +28,7 @@ logger = logging.getLogger(__name__)
 
 CDP_DOCS_URL = "https://chromedevtools.github.io/devtools-protocol/"
 
-# ``websockets`` is a transitive dependency of hermes-agent (via fal_client
-# and firecrawl-py) and is already imported by gateway/platforms/feishu.py.
+# ``websockets`` is a runtime dependency already used by the gateway.
 # Wrap the import so a clean error surfaces if the package is ever absent.
 try:
     import websockets
@@ -43,7 +42,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Async-from-sync bridge (matches the pattern in homeassistant_tool.py)
+# Async-from-sync bridge shared by synchronous tool handlers.
 # ---------------------------------------------------------------------------
 
 

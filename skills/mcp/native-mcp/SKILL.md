@@ -4,7 +4,7 @@ description: "MCP client: connect servers, register tools (stdio/HTTP)."
 version: 1.0.0
 author: Hermes Agent
 license: MIT
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 metadata:
   hermes:
     tags: [MCP, Tools, Integrations]

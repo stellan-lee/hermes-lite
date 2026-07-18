@@ -592,7 +592,7 @@ class AIAgent:
 
         In headless/stdio-protocol environments, a raw spinner with no custom
         ``_print_fn`` falls back to ``sys.stdout`` and can corrupt protocol
-        streams such as ACP JSON-RPC. Allow quiet spinners only when either:
+        streams such as JSON-RPC. Allow quiet spinners only when either:
         - output is explicitly rerouted via ``_print_fn``; or
         - stdout is a real TTY.
         """

@@ -107,22 +107,20 @@ class TestDoctorToolAvailabilityOverrides:
 
 class TestHonchoDoctorConfigDetection:
     def test_reports_configured_when_enabled_with_api_key(self, monkeypatch):
+        from plugins.memory.honcho.client import HonchoClientConfig
+
         fake_config = SimpleNamespace(enabled=True, api_key="***")
 
-        monkeypatch.setattr(
-            "plugins.memory.honcho.client.HonchoClientConfig.from_global_config",
-            lambda: fake_config,
-        )
+        monkeypatch.setattr(HonchoClientConfig, "from_global_config", lambda: fake_config)
 
         assert doctor._honcho_is_configured_for_doctor()
 
     def test_reports_not_configured_without_api_key(self, monkeypatch):
+        from plugins.memory.honcho.client import HonchoClientConfig
+
         fake_config = SimpleNamespace(enabled=True, api_key="")
 
-        monkeypatch.setattr(
-            "plugins.memory.honcho.client.HonchoClientConfig.from_global_config",
-            lambda: fake_config,
-        )
+        monkeypatch.setattr(HonchoClientConfig, "from_global_config", lambda: fake_config)
 
         assert not doctor._honcho_is_configured_for_doctor()
 
@@ -237,9 +235,8 @@ class TestDoctorMemoryProviderSection:
         out = self._run_doctor_and_capture(monkeypatch, tmp_path, provider="")
         assert "Memory Provider" in out
         assert "Built-in memory active" in out
-        # Should NOT mention Honcho or Mem0 errors
+        # Should not mention external-provider errors.
         assert "Honcho API key" not in out
-        assert "Mem0" not in out
 
     def test_honcho_provider_not_installed_shows_fail(self, monkeypatch, tmp_path):
         # Make honcho import fail
@@ -251,10 +248,11 @@ class TestDoctorMemoryProviderSection:
         # Should show failure since honcho is set but not importable
         assert "Built-in memory active" not in out
 
-    def test_mem0_provider_not_installed_shows_fail(self, monkeypatch, tmp_path):
-        # Make mem0 import fail
-        monkeypatch.setitem(sys.modules, "plugins.memory.mem0", None)
-        out = self._run_doctor_and_capture(monkeypatch, tmp_path, provider="mem0")
+    def test_unknown_provider_not_installed_shows_fail(self, monkeypatch, tmp_path):
+        monkeypatch.setitem(sys.modules, "plugins.memory.external_missing", None)
+        out = self._run_doctor_and_capture(
+            monkeypatch, tmp_path, provider="external_missing"
+        )
         assert "Memory Provider" in out
         assert "Built-in memory active" not in out
 

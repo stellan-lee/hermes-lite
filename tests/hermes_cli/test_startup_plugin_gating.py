@@ -88,7 +88,7 @@ def _live_subcommand_names() -> set[str]:
         # Top-level value-taking flags: the value should be skipped.
         (["hermes", "-m", "gpt5", "chat"], "chat"),
         (["hermes", "--model", "gpt5", "chat", "hi"], "chat"),
-        (["hermes", "-m", "gpt5", "--provider", "openai", "chat"], "chat"),
+        (["hermes", "-m", "gpt5", "--provider", "custom", "chat"], "chat"),
         (["hermes", "-z", "hello world"], None),
         (["hermes", "-z", "hello", "chat"], "chat"),
         (["hermes", "--model=gpt5", "chat"], "chat"),     # inline form

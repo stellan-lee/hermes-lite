@@ -1185,7 +1185,7 @@ class TestDiscordSkillCommands:
     """Tests for discord_skill_commands() — centralized skill registration."""
 
     def test_returns_skill_entries(self, tmp_path, monkeypatch):
-        """Skills under SKILLS_DIR (not .hub) should be returned."""
+        """Skills under SKILLS_DIR should be returned."""
         from unittest.mock import patch
 
         fake_skills_dir = str(tmp_path / "skills")

@@ -108,10 +108,6 @@ class TestSkipsRemoteBackends:
         monkeypatch.setattr(env_probe, "_has_pip_module", lambda b: False)
         assert env_probe.get_environment_probe_line() == ""
 
-    def test_modal_returns_empty(self, monkeypatch):
-        monkeypatch.setenv("TERMINAL_ENV", "modal")
-        assert env_probe.get_environment_probe_line() == ""
-
     def test_ssh_returns_empty(self, monkeypatch):
         monkeypatch.setenv("TERMINAL_ENV", "ssh")
         assert env_probe.get_environment_probe_line() == ""

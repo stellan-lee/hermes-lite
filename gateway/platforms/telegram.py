@@ -1441,7 +1441,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 "chat_id": 123456789,
                 "topics": [
                     {"name": "General", "icon_color": 7322096, "thread_id": 100},
-                    {"name": "Accessibility Auditor", "icon_color": 9367192, "skill": "accessibility-auditor"}
+                    {"name": "Accessibility Review", "icon_color": 9367192}
                 ]
             }
         ]
@@ -4651,7 +4651,7 @@ class TelegramAdapter(BasePlatformAdapter):
     def _telegram_observe_unmentioned_group_messages(self) -> bool:
         """Return whether skipped unmentioned group messages are stored as context.
 
-        When enabled with ``require_mention``, Telegram matches the Yuanbao /
+        When enabled with ``require_mention``, Telegram matches the shared
         OpenClaw-style group UX: observe ordinary group chatter in the session
         transcript, but only dispatch the agent when the bot is explicitly
         addressed.
@@ -5946,7 +5946,7 @@ class TelegramAdapter(BasePlatformAdapter):
     def _get_dm_topic_info(self, chat_id: str, thread_id: Optional[str]) -> Optional[Dict[str, Any]]:
         """Look up DM topic config by chat_id and thread_id.
 
-        Returns the topic config dict (name, skill, etc.) if this thread_id
+        Returns the topic config dict (name, icon color, etc.) if this thread_id
         matches a known DM topic, or None.
         """
         if not thread_id:
@@ -6018,7 +6018,7 @@ class TelegramAdapter(BasePlatformAdapter):
         elif telegram_chat_type == "channel":
             chat_type = "channel"
 
-        # Resolve Telegram topic name and skill binding.
+        # Resolve the Telegram topic name.
         # Only preserve message_thread_id when Telegram marks the message as
         # a real topic/forum message. Telegram can also populate
         # message_thread_id for ordinary reply UI anchors; treating those as
@@ -6042,13 +6042,11 @@ class TelegramAdapter(BasePlatformAdapter):
         if chat_type == "group" and thread_id_str is None and is_forum_group:
             thread_id_str = self._GENERAL_TOPIC_THREAD_ID
         chat_topic = None
-        topic_skill = None
 
         if chat_type == "dm" and thread_id_str:
             topic_info = self._get_dm_topic_info(str(chat.id), thread_id_str)
             if topic_info:
                 chat_topic = topic_info.get("name")
-                topic_skill = topic_info.get("skill")
 
             # Also check forum_topic_created service message for topic discovery
             if hasattr(message, "forum_topic_created") and message.forum_topic_created:
@@ -6059,7 +6057,7 @@ class TelegramAdapter(BasePlatformAdapter):
                         chat_topic = created_name
 
         elif chat_type == "group" and thread_id_str:
-            # Group/supergroup forum topic skill binding via config.extra['group_topics']
+            # Group/supergroup forum topic name via config.extra['group_topics']
             group_topics_config: list = self.config.extra.get("group_topics", [])
             for chat_entry in group_topics_config:
                 if str(chat_entry.get("chat_id", "")) == str(chat.id):
@@ -6067,7 +6065,6 @@ class TelegramAdapter(BasePlatformAdapter):
                         tid = topic.get("thread_id")
                         if tid is not None and str(tid) == thread_id_str:
                             chat_topic = topic.get("name")
-                            topic_skill = topic.get("skill")
                             break
                     break
 
@@ -6136,7 +6133,6 @@ class TelegramAdapter(BasePlatformAdapter):
             platform_update_id=update_id,
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,
-            auto_skill=topic_skill,
             channel_prompt=_channel_prompt,
             timestamp=message.date,
         )

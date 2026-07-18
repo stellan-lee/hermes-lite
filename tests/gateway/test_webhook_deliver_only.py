@@ -452,20 +452,3 @@ class TestDirectDeliverUnit:
         mock_target.send.assert_awaited_once_with(
             "c-1", "hello", metadata=None
         )
-
-    @pytest.mark.asyncio
-    async def test_dispatches_to_github_comment(self):
-        adapter = _make_adapter({})
-        with patch.object(
-            adapter, "_deliver_github_comment",
-            new=AsyncMock(return_value=SendResult(success=True)),
-        ) as mock_gh:
-            result = await adapter._direct_deliver(
-                "review body",
-                {
-                    "deliver": "github_comment",
-                    "deliver_extra": {"repo": "org/r", "pr_number": "1"},
-                },
-            )
-            assert result.success is True
-            mock_gh.assert_awaited_once()

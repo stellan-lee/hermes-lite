@@ -3161,7 +3161,7 @@ def _guard_official_docker_root_gateway() -> None:
     )
     print(
         "  Running the gateway as root can leave root-owned files in "
-        "$HERMES_HOME and break later non-root dashboard/gateway runs."
+        "$HERMES_HOME and break later non-root gateway runs."
     )
     print(
         "  Set HERMES_ALLOW_ROOT_GATEWAY=1 only if you intentionally accept this risk."
@@ -4126,8 +4126,7 @@ def gateway_setup():
     # ── Post-setup: offer to install/restart gateway ──
     # Consider any platform (built-in or plugin) where the user has made
     # meaningful progress.  ``_platform_status`` already handles plugin
-    # entries via their check_fn and per-platform dual-states like
-    # WhatsApp's "enabled, not paired".
+    # entries via their check_fn and platform-specific setup states.
     def _is_progress(status: str) -> bool:
         s = status.lower()
         return not (
@@ -4382,8 +4381,8 @@ def _maybe_redirect_run_to_s6_supervision(args) -> bool:
     gateway was the container's main process, tini reaped zombies, and
     container exit code == gateway exit code. With s6-overlay as PID 1,
     we'd much rather have the gateway run as a supervised s6 longrun
-    (auto-restart on crash, dashboard supervised alongside, multiple
-    profile gateways under the same /init). This redirect upgrades the
+    (auto-restart on crash and multiple profile gateways under the same
+    /init). This redirect upgrades the
     old invocation transparently — the user gets the new behavior
     without changing their docker run command.
 
@@ -4423,8 +4422,7 @@ def _maybe_redirect_run_to_s6_supervision(args) -> bool:
     # so the user sees a clear sequence: this banner first, then the
     # gateway's own stdout/stderr from the supervisor.
     print(
-        "→ gateway is now running under s6 supervision (auto-restart on crash,\n"
-        "  dashboard supervised alongside if HERMES_DASHBOARD is set).\n"
+        "→ gateway is now running under s6 supervision (auto-restart on crash).\n"
         "  This is the recommended setup for the s6 container image — the\n"
         "  gateway will keep running even if it crashes.\n"
         "  Use `--no-supervise` (or HERMES_GATEWAY_NO_SUPERVISE=1) to opt out\n"

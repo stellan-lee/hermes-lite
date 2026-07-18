@@ -84,8 +84,8 @@ async def test_runner_queues_retryable_runtime_fatal_for_reconnection(
     runner = GatewayRunner(config)
     adapter = _RuntimeRetryableAdapter()
     adapter._set_fatal_error(
-        "whatsapp_bridge_exited",
-        "WhatsApp bridge process exited unexpectedly (code 1).",
+        "adapter_runtime_exited",
+        "Adapter runtime exited unexpectedly (code 1).",
         retryable=True,
     )
 

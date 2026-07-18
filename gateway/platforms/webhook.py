@@ -10,9 +10,8 @@ Each route defines:
   - events: which event types to accept (header-based filtering)
   - secret: HMAC secret for signature validation (REQUIRED)
   - prompt: template string formatted with the webhook payload
-  - skills: optional list of skills to load for the agent
-  - deliver: where to send the response (github_comment, telegram, etc.)
-  - deliver_extra: additional delivery config (repo, pr_number, chat_id)
+  - deliver: retained messaging platform for the response
+  - deliver_extra: additional delivery config such as chat_id
   - deliver_only: if true, skip the agent — the rendered prompt IS the
     message that gets delivered.  Use for external push notifications
     (Supabase, monitoring alerts, inter-agent pings) where zero LLM cost
@@ -34,7 +33,6 @@ import hmac
 import json
 import logging
 import re
-import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
@@ -176,7 +174,7 @@ class WebhookAdapter(BasePlatformAdapter):
                     raise ValueError(
                         f"[webhook] Route '{name}' has deliver_only=true but "
                         f"deliver is '{deliver}'. Direct delivery requires a "
-                        f"real target (telegram, discord, slack, github_comment, etc.)."
+                        f"real target (telegram, discord, slack, etc.)."
                     )
 
         app = web.Application()
@@ -238,9 +236,6 @@ class WebhookAdapter(BasePlatformAdapter):
         if deliver_type == "log":
             logger.info("[webhook] Response for %s: %s", chat_id, content[:200])
             return SendResult(success=True)
-
-        if deliver_type == "github_comment":
-            return await self._deliver_github_comment(content, delivery)
 
         # Cross-platform delivery — any platform with a gateway adapter.
         # Check both built-in names and plugin-registered platforms.
@@ -361,8 +356,8 @@ class WebhookAdapter(BasePlatformAdapter):
                 {"error": f"Unknown route: {route_name}"}, status=404
             )
 
-        # Disabled routes are kept in the subscriptions file (so the dashboard
-        # can re-enable them) but reject incoming events.  Default-enabled:
+        # Disabled routes stay in the subscriptions file so the CLI can
+        # re-enable them, but reject incoming events. Default-enabled:
         # only an explicit ``enabled: false`` turns a route off, matching the
         # mcp_servers ``enabled`` semantics.
         if route_config.get("enabled", True) is False:
@@ -460,34 +455,6 @@ class WebhookAdapter(BasePlatformAdapter):
             prompt_template, payload, event_type, route_name
         )
 
-        # Inject skill content if configured.
-        # We call build_skill_invocation_message() directly rather than
-        # using /skill-name slash commands — the gateway's command parser
-        # would intercept those and break the flow.
-        skills = route_config.get("skills", [])
-        if skills:
-            try:
-                from agent.skill_commands import (
-                    build_skill_invocation_message,
-                    get_skill_commands,
-                )
-
-                skill_cmds = get_skill_commands()
-                for skill_name in skills:
-                    cmd_key = f"/{skill_name}"
-                    if cmd_key in skill_cmds:
-                        skill_content = build_skill_invocation_message(
-                            cmd_key, user_instruction=prompt
-                        )
-                        if skill_content:
-                            prompt = skill_content
-                            break  # Load the first matching skill
-                    else:
-                        logger.warning(
-                            "[webhook] Skill '%s' not found", skill_name
-                        )
-            except Exception as e:
-                logger.warning("[webhook] Skill loading failed: %s", e)
 
         # Build a unique delivery ID
         delivery_id = request.headers.get(
@@ -811,8 +778,7 @@ class WebhookAdapter(BasePlatformAdapter):
         Used by ``deliver_only`` routes: the rendered template becomes the
         literal message body, and we dispatch to the same delivery helpers
         that the agent-mode ``send()`` flow uses.  All target types that
-        work in agent mode work here — Telegram, Discord, Slack, GitHub
-        PR comments, etc.
+        work in agent mode work here — Telegram, Discord, Slack, etc.
         """
         deliver_type = delivery.get("deliver", "log")
 
@@ -822,68 +788,11 @@ class WebhookAdapter(BasePlatformAdapter):
             logger.info("[webhook] direct-deliver log-only: %s", content[:200])
             return SendResult(success=True)
 
-        if deliver_type == "github_comment":
-            return await self._deliver_github_comment(content, delivery)
-
         # Fall through to the cross-platform dispatcher, which validates the
         # target name and routes via the gateway runner.
         return await self._deliver_cross_platform(
             deliver_type, content, delivery
         )
-
-    async def _deliver_github_comment(
-        self, content: str, delivery: dict
-    ) -> SendResult:
-        """Post agent response as a GitHub PR/issue comment via ``gh`` CLI."""
-        extra = delivery.get("deliver_extra", {})
-        repo = extra.get("repo", "")
-        pr_number = extra.get("pr_number", "")
-
-        if not repo or not pr_number:
-            logger.error(
-                "[webhook] github_comment delivery missing repo or pr_number"
-            )
-            return SendResult(
-                success=False, error="Missing repo or pr_number"
-            )
-
-        try:
-            result = subprocess.run(
-                [
-                    "gh",
-                    "pr",
-                    "comment",
-                    str(pr_number),
-                    "--repo",
-                    repo,
-                    "--body",
-                    content,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                logger.info(
-                    "[webhook] Posted comment on %s#%s", repo, pr_number
-                )
-                return SendResult(success=True)
-            else:
-                logger.error(
-                    "[webhook] gh pr comment failed: %s", result.stderr
-                )
-                return SendResult(success=False, error=result.stderr)
-        except FileNotFoundError:
-            logger.error(
-                "[webhook] 'gh' CLI not found — install GitHub CLI for "
-                "github_comment delivery"
-            )
-            return SendResult(
-                success=False, error="gh CLI not installed"
-            )
-        except Exception as e:
-            logger.error("[webhook] github_comment delivery error: %s", e)
-            return SendResult(success=False, error=str(e))
 
     async def _deliver_cross_platform(
         self, platform_name: str, content: str, delivery: dict

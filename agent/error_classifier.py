@@ -76,7 +76,6 @@ class ClassifiedError:
     # re-classifying the error itself.
     retryable: bool = True
     should_compress: bool = False
-    should_rotate_credential: bool = False
     should_fallback: bool = False
 
     @property
@@ -634,7 +633,6 @@ def _classify_by_status(
         return result_fn(
             FailoverReason.auth,
             retryable=False,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 
@@ -648,7 +646,6 @@ def _classify_by_status(
             return result_fn(
                 FailoverReason.billing,
                 retryable=False,
-                should_rotate_credential=True,
                 should_fallback=True,
             )
         return result_fn(
@@ -661,17 +658,6 @@ def _classify_by_status(
         return _classify_402(error_msg, result_fn)
 
     if status_code == 404:
-        # Nous API currently surfaces HA/NAS credit depletion as a paid model
-        # becoming unavailable on the Free Tier, returned as 404 rather than
-        # 402. Treat that as entitlement/billing exhaustion, not a missing
-        # model, so the retry loop can show credit/top-up guidance.
-        if any(p in error_msg for p in _BILLING_PATTERNS):
-            return result_fn(
-                FailoverReason.billing,
-                retryable=False,
-                should_rotate_credential=True,
-                should_fallback=True,
-            )
         if any(p in error_msg for p in _MODEL_NOT_FOUND_PATTERNS):
             return result_fn(
                 FailoverReason.model_not_found,
@@ -702,7 +688,6 @@ def _classify_by_status(
         return result_fn(
             FailoverReason.rate_limit,
             retryable=True,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 
@@ -770,7 +755,6 @@ def _classify_402(error_msg: str, result_fn) -> ClassifiedError:
         return result_fn(
             FailoverReason.rate_limit,
             retryable=True,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 
@@ -778,7 +762,6 @@ def _classify_402(error_msg: str, result_fn) -> ClassifiedError:
     return result_fn(
         FailoverReason.billing,
         retryable=False,
-        should_rotate_credential=True,
         should_fallback=True,
     )
 
@@ -861,14 +844,12 @@ def _classify_400(
         return result_fn(
             FailoverReason.rate_limit,
             retryable=True,
-            should_rotate_credential=True,
             should_fallback=True,
         )
     if any(p in error_msg for p in _BILLING_PATTERNS):
         return result_fn(
             FailoverReason.billing,
             retryable=False,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 
@@ -917,7 +898,6 @@ def _classify_by_error_code(
         return result_fn(
             FailoverReason.rate_limit,
             retryable=True,
-            should_rotate_credential=True,
         )
 
     if code_lower in {
@@ -932,7 +912,6 @@ def _classify_by_error_code(
         return result_fn(
             FailoverReason.billing,
             retryable=False,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 
@@ -969,13 +948,11 @@ def _classify_by_error_code(
         # Auth failures can arrive as a structured SSE ``type=error`` frame
         # (e.g. the OAuth-backed Codex backend) with NO HTTP status, so the
         # status-code path never sees a 401/403. Classify by the code field so
-        # credential refresh/rotation engages instead of falling through to
-        # message-text heuristics. should_rotate_credential lets the pool auth
-        # branch fire and keeps the singleton refresh path reachable.
+        # Codex credential refresh engages instead of falling through to
+        # message-text heuristics.
         return result_fn(
             FailoverReason.auth,
             retryable=False,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 
@@ -1027,13 +1004,11 @@ def _classify_by_message(
             return result_fn(
                 FailoverReason.rate_limit,
                 retryable=True,
-                should_rotate_credential=True,
                 should_fallback=True,
             )
         return result_fn(
             FailoverReason.billing,
             retryable=False,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 
@@ -1042,7 +1017,6 @@ def _classify_by_message(
         return result_fn(
             FailoverReason.billing,
             retryable=False,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 
@@ -1051,7 +1025,6 @@ def _classify_by_message(
         return result_fn(
             FailoverReason.rate_limit,
             retryable=True,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 
@@ -1066,13 +1039,11 @@ def _classify_by_message(
     # Auth patterns
     # Auth errors should NOT be retried directly — the credential is invalid and
     # retrying with the same key will always fail.  Set retryable=False so the
-    # caller triggers credential rotation (should_rotate_credential=True) or
-    # provider fallback rather than an immediate retry loop.
+    # caller triggers provider fallback rather than an immediate retry loop.
     if any(p in error_msg for p in _AUTH_PATTERNS):
         return result_fn(
             FailoverReason.auth,
             retryable=False,
-            should_rotate_credential=True,
             should_fallback=True,
         )
 

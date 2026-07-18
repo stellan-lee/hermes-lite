@@ -12,10 +12,14 @@ def test_retained_platforms_only():
     assert set(PLATFORMS) == {"cli", "telegram", "discord", "slack", "email", "feishu", "webhook", "cron"}
 
 
-def test_removed_toolsets_not_configurable():
+def test_configurable_toolsets_match_retained_surface():
     keys = {key for key, _label, _description in CONFIGURABLE_TOOLSETS}
-    assert not keys & {"video", "video_gen", "x_search", "homeassistant", "discord", "discord_admin", "yuanbao"}
-    assert {"web", "browser", "image_gen", "messaging", "admin_approval", "computer_use"} <= keys
+    assert keys == {
+        "admin_approval", "browser", "clarify", "code_execution",
+        "computer_use", "context_engine", "cronjob", "delegation", "file",
+        "image_gen", "memory", "messaging", "moa", "session_search",
+        "skills", "terminal", "todo", "tts", "vision", "web",
+    }
 
 
 def test_default_platform_tools_are_nonempty_and_exclude_opt_in():

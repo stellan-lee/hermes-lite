@@ -19,8 +19,8 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _disable_camofox(monkeypatch):
-    """Force the non-camofox path so our supervisor branch is reached."""
+def _reset_browser_session_key(monkeypatch):
+    """Use a stable session key so the supervisor branch is deterministic."""
     import tools.browser_tool as bt
 
     monkeypatch.setattr(bt, "_last_session_key", lambda task_id: "test-task")

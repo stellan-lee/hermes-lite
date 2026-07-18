@@ -1,5 +1,5 @@
 """Regression guard for #31273: HTTP 402 (billing exhaustion) must abort
-after credential-pool rotation and provider fallback have failed.
+after provider fallback has failed.
 
 Before the fix, ``FailoverReason.billing`` was in the exclusion set that
 prevents the loop's ``is_client_error`` branch from firing.  When a user
@@ -11,9 +11,7 @@ Real-world impact: ~$40 burned in 48h on a 24/7 gateway routing Telegram
 
 The fix removes ``FailoverReason.billing`` from the exclusion set.  By
 the time control reaches the ``is_client_error`` check:
-  * credential-pool rotation has already run (and either ``continue``d
-    on rotation, or returned False because the pool is exhausted/absent).
-  * the eager-fallback branch for billing has also run (and either
+  * the eager-fallback branch for billing has already run (and either
     ``continue``d on fallback activation, or fell through because no
     fallback is configured).
 Falling through to the retry-backoff path from here just burns paid
@@ -72,7 +70,7 @@ class TestBillingTriggersClientErrorAbort:
             classified_reason=FailoverReason.billing,
         ), (
             "FailoverReason.billing must trigger is_client_error abort after "
-            "credential-pool rotation and provider fallback have failed — see #31273."
+            "provider fallback has failed — see #31273."
         )
 
     def test_rate_limit_still_retries(self):
@@ -80,7 +78,7 @@ class TestBillingTriggersClientErrorAbort:
         from agent.error_classifier import FailoverReason
 
         # 429 / transient 402 / rate-limited usage: must NOT abort,
-        # because Retry-After backoff and pool rotation are the right
+        # because Retry-After backoff is the right
         # recovery paths.
         assert not self._mirror_is_client_error(
             classified_retryable=True,
@@ -138,8 +136,8 @@ class TestSourceStillHasBillingExclusionRemoved:
         assert "FailoverReason.billing" not in window, (
             "FailoverReason.billing must NOT appear in the is_client_error "
             "exclusion set — see #31273.  Billing (HTTP 402) is non-retryable "
-            "by the time control reaches this block: credential-pool rotation "
-            "and provider fallback have both already had their chance to "
+            "by the time control reaches this block, provider fallback has "
+            "already had its chance to "
             "continue the loop.  Re-adding it causes runaway token spend on "
             "depleted balances."
         )

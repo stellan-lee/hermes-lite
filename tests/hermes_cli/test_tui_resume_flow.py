@@ -191,7 +191,6 @@ def test_cmd_chat_tui_forwards_chat_flags(monkeypatch, main_mod):
     with pytest.raises(SystemExit):
         main_mod.cmd_chat(
             _args(
-                skills=["foo,bar"],
                 verbose=True,
                 quiet=True,
                 query="hello",
@@ -204,7 +203,6 @@ def test_cmd_chat_tui_forwards_chat_flags(monkeypatch, main_mod):
             )
         )
 
-    assert captured["skills"] == ["foo,bar"]
     assert captured["verbose"] is True
     assert captured["quiet"] is True
     assert captured["query"] == "hello"
@@ -522,7 +520,6 @@ def test_oneshot_wires_session_db_for_recall(monkeypatch):
                 "base_url": "u",
                 "provider": "p",
                 "api_mode": "chat_completions",
-                "credential_pool": None,
             },
         ),
     )
@@ -559,14 +556,14 @@ def test_launch_tui_exports_model_provider_and_toolsets(monkeypatch, main_mod):
 
     with pytest.raises(SystemExit):
         main_mod._launch_tui(
-            model="nous/hermes-test", provider="nous", toolsets="web, terminal"
+            model="local/test-model", provider="custom", toolsets="web, terminal"
         )
 
     env = captured["env"]
-    assert env["HERMES_MODEL"] == "nous/hermes-test"
-    assert env["HERMES_INFERENCE_MODEL"] == "nous/hermes-test"
-    assert env["HERMES_TUI_PROVIDER"] == "nous"
-    assert env["HERMES_INFERENCE_PROVIDER"] == "nous"
+    assert env["HERMES_MODEL"] == "local/test-model"
+    assert env["HERMES_INFERENCE_MODEL"] == "local/test-model"
+    assert env["HERMES_TUI_PROVIDER"] == "custom"
+    assert env["HERMES_INFERENCE_PROVIDER"] == "custom"
     assert env["HERMES_TUI_TOOLSETS"] == "web,terminal"
     active_path = Path(env["HERMES_TUI_ACTIVE_SESSION_FILE"])
     assert active_path.name.startswith("hermes-tui-active-session-")

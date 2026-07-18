@@ -64,7 +64,7 @@ def _safe_parse_import_env(
 ):
     """Parse module-level numeric env vars without breaking import.
 
-    Terminal tool is imported by CLI, ACP, tests, and tool discovery. A single
+    Terminal tool is imported by CLI, gateway, tests, and tool discovery. A single
     malformed env var must not make the whole module unloadable at import time.
     """
     raw = os.getenv(name)
@@ -103,7 +103,7 @@ DISK_USAGE_WARNING_THRESHOLD_GB = _safe_parse_import_env(
 # Interactive sudo password cache.
 #
 # Scope the cache to the active session when a session key is available, then
-# fall back to callback identity (ACP / CLI interactive callbacks), then the
+# fall back to callback identity (interactive client callbacks), then the
 # current thread. This prevents one interactive session from reusing another
 # session's cached sudo password inside the same long-lived process.
 _sudo_password_cache: dict[str, str] = {}
@@ -113,7 +113,7 @@ _sudo_password_cache_lock = threading.Lock()
 # instead of the default /dev/tty or input() readers. The CLI registers these
 # so prompts route through prompt_toolkit's event loop.
 # Callback slots used by the approval prompt and sudo password prompt
-# routines. Stored in thread-local state so overlapping ACP sessions —
+# routines. Stored in thread-local state so overlapping client sessions —
 # each running in its own ThreadPoolExecutor thread — don't stomp on
 # each other's callbacks. See GHSA-qg5c-hvr5-hjgr.
 #
@@ -135,7 +135,7 @@ def _get_approval_callback():
 def set_sudo_password_callback(cb):
     """Register a callback for sudo password prompts (used by CLI).
 
-    Per-thread scope — ACP sessions that run concurrently in a
+    Per-thread scope — client sessions that run concurrently in a
     ThreadPoolExecutor each have their own callback slot.
     """
     _callback_tls.sudo_password = cb
@@ -144,7 +144,7 @@ def set_sudo_password_callback(cb):
 def set_approval_callback(cb):
     """Register a callback for dangerous command approval prompts.
 
-    Per-thread scope — ACP sessions that run concurrently in a
+    Per-thread scope — client sessions that run concurrently in a
     ThreadPoolExecutor each have their own callback slot. See
     GHSA-qg5c-hvr5-hjgr.
     """
@@ -708,13 +708,9 @@ def _transform_sudo_command(command: str | None) -> tuple[str | None, str | None
           returned unchanged so it fails gracefully with
           "sudo: a password is required".
 
-    Callers that drive a subprocess directly (local, ssh, docker, singularity)
+    Callers that drive a subprocess directly (local, SSH, and Docker)
     should prepend sudo_stdin to their stdin_data and pass the merged bytes to
     Popen's stdin pipe.
-
-    Callers that cannot pipe subprocess stdin (modal, daytona) must embed
-    the password in the command string themselves; see their execute()
-    methods for how they handle the non-None sudo_stdin case.
 
     If SUDO_PASSWORD is not set and in interactive mode (HERMES_INTERACTIVE=1):
       Prompts user for password with 45s timeout, caches for session.
@@ -896,14 +892,14 @@ def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
     _task_env_overrides[task_id] = overrides
 
     # If a live environment already exists for this task, a freshly registered
-    # ``cwd`` override (e.g. the ACP client switching the editor's project root
-    # mid-session via ``session/load`` / ``session/resume``) must take effect on
+    # ``cwd`` override (for example, a client switching its project root
+    # mid-session) must take effect on
     # the cached env too. ``terminal_tool`` resolves the per-command cwd as
     # ``workdir > env.cwd > config/override cwd`` so that ordinary in-session
     # ``cd`` state is preserved; without syncing here the override would sit
     # below the (already-set) ``env.cwd`` and be silently ignored once any
     # command has run. Pushing it onto the live env keeps ``cd`` tracking intact
-    # while letting an explicit ACP cwd change win, as the client expects.
+    # while letting an explicit client cwd change win.
     new_cwd = overrides.get("cwd")
     if isinstance(new_cwd, str) and new_cwd.strip():
         container_id = _resolve_container_task_id(task_id)

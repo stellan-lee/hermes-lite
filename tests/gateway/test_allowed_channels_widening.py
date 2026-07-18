@@ -1,7 +1,7 @@
 """Tests for the allowed_{channels,chats,rooms} whitelist extension
 added alongside PR #7401 (Slack).
 
-Covers: Telegram, Matrix, Mattermost, DingTalk.
+Covers retained Telegram channel filtering.
 
 For each platform:
 - Empty = no restriction (fully backward compatible).

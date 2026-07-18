@@ -78,7 +78,7 @@ class TestPromptTextInputThreadSafety:
         assert result == "cancel"
 
     def test_run_in_terminal_exception_falls_back(self):
-        """If run_in_terminal raises (WSL / Warp edge cases), fall back to input()."""
+        """If run_in_terminal raises, fall back to input()."""
         cli = _make_cli()
 
         with patch(

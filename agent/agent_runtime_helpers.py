@@ -936,7 +936,7 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # never back into ``agent._client_kwargs``.  Each ``_create_openai_client``
     # invocation therefore gets its OWN fresh ``httpx.Client`` whose
     # lifetime is tied to the OpenAI client it is passed to.  When the
-    # OpenAI client is closed (rebuild, teardown, credential rotation),
+    # OpenAI client is closed (rebuild, teardown),
     # the paired ``httpx.Client`` closes with it, and the next call
     # constructs a fresh one — no stale closed transport can be reused.
     # Tests in ``tests/run_agent/test_create_openai_client_reuse.py`` and

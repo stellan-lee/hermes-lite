@@ -100,6 +100,3 @@ def test_iter_skill_index_files_prunes_dependency_dirs(tmp_path):
     found = list(iter_skill_index_files(tmp_path, "SKILL.md"))
 
     assert found == [real / "SKILL.md"]
-
-
-# ── skill_matches_platform on Termux ──────────────────────────────────────

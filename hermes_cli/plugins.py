@@ -152,7 +152,7 @@ VALID_HOOKS: Set[str] = {
     "pre_gateway_dispatch",
     # Approval lifecycle hooks. Fired by tools/approval.py when a dangerous
     # command needs user approval -- fires BOTH for CLI-interactive prompts
-    # and for gateway/ACP approvals (Telegram, Discord, Slack, TUI, etc.).
+    # and for gateway/client approvals (Telegram, Discord, Slack, TUI, etc.).
     # Observers only: return values are ignored. Plugins cannot veto or
     # pre-answer an approval from these hooks (use pre_tool_call to block
     # a tool before it reaches approval).
@@ -772,7 +772,7 @@ class PluginContext:
             ctx.register_auxiliary_task(
                 key="memory_retain_filter",
                 display_name="Memory retain filter",
-                description="hindsight pre-retain dedup/extract",
+                description="memory pre-retain dedup/extract",
                 defaults={"provider": "auto", "timeout": 30},
             )
         """

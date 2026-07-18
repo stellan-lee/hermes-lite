@@ -518,8 +518,7 @@ explicitly (it's idempotent).
 ### Memory-provider plugins (`plugins/memory/<name>/`)
 
 Separate discovery system for pluggable memory backends. Current built-in
-providers include **honcho, mem0, supermemory, byterover, hindsight,
-holographic, openviking, retaindb**.
+providers are **honcho** and **holographic**.
 
 Each provider implements the `MemoryProvider` ABC (see `agent/memory_provider.py`)
 and is orchestrated by `agent/memory_manager.py`. Lifecycle hooks include
@@ -553,8 +552,8 @@ to them are welcome.
 
 ### Model-provider plugins (`plugins/model-providers/<name>/`)
 
-Every inference backend (openrouter, anthropic, gmi, deepseek, nvidia, …)
-ships as a plugin here. Each plugin's `__init__.py` calls
+The retained Codex and custom/local inference backends ship as plugins here.
+Each plugin's `__init__.py` calls
 `providers.register_provider(ProviderProfile(...))` at module load.
 `providers/__init__.py._discover_providers()` is a **lazy, separate
 discovery system** — scanned on first `get_provider_profile()` or
@@ -563,7 +562,6 @@ discovery system** — scanned on first `get_provider_profile()` or
 Scan order:
 1. Bundled: `<repo>/plugins/model-providers/<name>/`
 2. User: `$HERMES_HOME/plugins/model-providers/<name>/`
-3. Legacy: `<repo>/providers/<name>.py` (back-compat)
 
 User plugins of the same name override bundled ones — `register_provider()`
 is last-writer-wins. This lets third parties swap out any built-in
@@ -706,11 +704,11 @@ Each platform's adapter picks a base toolset (e.g. Telegram uses
 `"messaging"`); `_HERMES_CORE_TOOLS` is the default bundle most
 platforms inherit from.
 
-Current toolset keys: `browser`, `clarify`, `code_execution`, `cronjob`,
-`debugging`, `delegation`, `discord`, `discord_admin`, `feishu_doc`,
-`feishu_drive`, `file`, `homeassistant`, `image_gen`, `memory`,
-`messaging`, `moa`, `rl`, `safe`, `search`, `session_search`, `skills`,
-`terminal`, `todo`, `tts`, `video`, `vision`, `web`, `yuanbao`.
+Current toolset keys: `admin_approval`, `browser`, `clarify`,
+`code_execution`, `computer_use`, `context_engine`, `cronjob`, `debugging`,
+`delegation`, `file`, `image_gen`, `memory`, `messaging`, `moa`, `safe`,
+`search`, `session_search`, `skills`, `terminal`, `todo`, `tts`, `vision`,
+and `web`.
 
 Enable/disable per platform via `hermes tools` (the curses UI) or the
 `tools.<platform>.enabled` / `tools.<platform>.disabled` lists in
@@ -996,8 +994,8 @@ ContextVars from one test cannot leak into the next — the historic
 
 Implementation notes:
 
-- The plugin uses `multiprocessing.get_context("spawn")`, which works on
-  Linux, macOS, and Windows alike (POSIX `fork` is not used).
+- The plugin uses `multiprocessing.get_context("spawn")` on supported Linux
+  and macOS hosts (POSIX `fork` is not used).
 - Per-test overhead is ~0.5–1.0s (Python startup + pytest collection). xdist
   parallelism amortizes this across cores; on a 20-core box the full suite
   finishes in roughly the same wall time as before, but flake-free.

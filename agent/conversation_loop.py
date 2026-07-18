@@ -650,7 +650,7 @@ def run_conversation(
         _preflight_deferred = _defer_preflight(_preflight_tokens)
 
         if not _preflight_deferred:
-            # Keep the CLI/ACP context display in sync with what preflight
+            # Keep interactive context displays in sync with what preflight
             # actually measured.  The status bar reads
             # ``compressor.last_prompt_tokens``, which otherwise only updates
             # from a *successful* API response.  When the conversation has grown
@@ -2253,10 +2253,10 @@ def run_conversation(
                     num_messages=len(api_messages) if api_messages else 0,
                 )
                 logger.debug(
-                    "Error classified: reason=%s status=%s retryable=%s compress=%s rotate=%s fallback=%s",
+                    "Error classified: reason=%s status=%s retryable=%s compress=%s fallback=%s",
                     classified.reason.value, classified.status_code,
                     classified.retryable, classified.should_compress,
-                    classified.should_rotate_credential, classified.should_fallback,
+                    classified.should_fallback,
                 )
 
                 # Image-too-large recovery: shrink oversized native image

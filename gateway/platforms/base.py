@@ -1,7 +1,7 @@
 """
 Base platform adapter interface.
 
-All platform adapters (Telegram, Discord, WhatsApp, Weixin, and more) inherit from this
+All platform adapters (Telegram, Discord, Slack, Feishu, and more) inherit from this
 and implement the required methods.
 """
 
@@ -1423,10 +1423,6 @@ class MessageEvent:
     reply_to_message_id: Optional[str] = None
     reply_to_text: Optional[str] = None  # Text of the replied-to message (for context injection)
     
-    # Auto-loaded skill(s) for topic/channel bindings (e.g., Telegram DM Topics,
-    # Discord channel_skill_bindings).  A single name or ordered list.
-    auto_skill: Optional[str | list[str]] = None
-
     # Per-channel ephemeral system prompt (e.g. Discord channel_prompts).
     # Applied at API call time and never persisted to transcript history.
     channel_prompt: Optional[str] = None
@@ -1690,59 +1686,6 @@ def resolve_channel_prompt(
     return None
 
 
-def resolve_channel_skills(
-    config_extra: dict,
-    channel_id: str,
-    parent_id: str | None = None,
-) -> list[str] | None:
-    """Resolve auto-loaded skill(s) for a channel/thread from platform config.
-
-    Looks up ``channel_skill_bindings`` in the adapter's ``config.extra`` dict.
-
-    Config format::
-
-        channel_skill_bindings:
-          - id: "C0123"          # Slack channel ID or Discord channel/forum ID
-            skills: ["skill-a", "skill-b"]
-          - id: "D0ABCDE"
-            skill: "solo-skill"  # single string also accepted
-
-    Prefers an exact match on *channel_id*; falls back to *parent_id*
-    (useful for forum threads / Slack threads inheriting the parent channel's
-    binding).
-
-    Returns a deduplicated list of skill names (order preserved), or None if
-    no match is found.
-    """
-    bindings = config_extra.get("channel_skill_bindings") or []
-    if not isinstance(bindings, list) or not bindings:
-        return None
-    ids_to_check: set[str] = set()
-    if channel_id:
-        ids_to_check.add(str(channel_id))
-    if parent_id:
-        ids_to_check.add(str(parent_id))
-    if not ids_to_check:
-        return None
-    for entry in bindings:
-        if not isinstance(entry, dict):
-            continue
-        entry_id = str(entry.get("id", ""))
-        if entry_id in ids_to_check:
-            skills = entry.get("skills") or entry.get("skill")
-            if isinstance(skills, str):
-                s = skills.strip()
-                return [s] if s else None
-            if isinstance(skills, list) and skills:
-                seen: list[str] = []
-                for name in skills:
-                    if not isinstance(name, str):
-                        continue
-                    nm = name.strip()
-                    if nm and nm not in seen:
-                        seen.append(nm)
-                return seen or None
-    return None
 
 
 def _strip_media_directives(text: str) -> str:
@@ -1851,7 +1794,7 @@ class BasePlatformAdapter(ABC):
     def enforces_own_access_policy(self) -> bool:
         """Whether this adapter gates inbound access before dispatch.
 
-        Some adapters (WeCom, Weixin, Yuanbao, QQBot, WhatsApp) implement a
+        Some adapters implement a
         documented config-driven access surface — ``dm_policy`` / ``group_policy`` /
         ``allow_from`` / ``group_allow_from`` in ``PlatformConfig.extra`` — and
         enforce it at intake: a message is dropped inside the adapter and never
@@ -2224,7 +2167,7 @@ class BasePlatformAdapter(ABC):
     # no-op and is happy to have the stream consumer skip redundant final
     # edits.  Subclasses that *require* an explicit finalize call to close
     # out the message lifecycle (e.g. rich card / AI assistant surfaces
-    # such as DingTalk AI Cards) override this to True (class attribute or
+    # with explicit finalization requirements override this to True (class attribute or
     # property) so the stream consumer knows not to short-circuit.
     REQUIRES_EDIT_FINALIZE: bool = False
 
@@ -2269,12 +2212,12 @@ class BasePlatformAdapter(ABC):
         sending a new message.
 
         ``finalize`` signals that this is the last edit in a streaming
-        sequence.  Most platforms (Telegram, Slack, Discord, Matrix,
+        sequence.  Most platforms (Telegram, Slack, Discord,
         etc.) treat it as a no-op because their edit APIs have no notion
         of message lifecycle state — an edit is an edit.  Platforms that
         render streaming updates with a distinct "in progress" state and
         require explicit closure (e.g. rich card / AI assistant surfaces
-        such as DingTalk AI Cards) use it to finalize the message and
+        with explicit finalization requirements use it to finalize the message and
         transition the UI out of the streaming indicator — those should
         also set ``REQUIRES_EDIT_FINALIZE = True`` so callers route a
         final edit through even when content is unchanged.  Callers
@@ -2381,7 +2324,7 @@ class BasePlatformAdapter(ABC):
         invalidates the provider prompt cache.
 
         Platforms with inline-button support (Telegram, Discord, Slack,
-        Matrix, Feishu) should override this to render three buttons:
+        Feishu and plugin adapters should override this to render three buttons:
         Approve Once / Always Approve / Cancel.  Button callbacks MUST be
         routed back through the gateway by calling
         ``GatewayRunner._resolve_slash_confirm(confirm_id, choice)`` where
@@ -2508,8 +2451,7 @@ class BasePlatformAdapter(ABC):
         routing animated GIFs through ``send_animation`` and local
         files through ``send_image_file``.
 
-        Override in subclasses to bundle into a single native API call
-        (e.g. Signal's multi-attachment RPC)
+        Override in subclasses to bundle into a single native API call.
         """
         from urllib.parse import unquote as _unquote
 
@@ -2616,8 +2558,8 @@ class BasePlatformAdapter(ABC):
             alt_text = match.group(1)
             url = match.group(2)
             # Only extract URLs that look like actual images
-            if any(url.lower().endswith(ext) or ext in url.lower() for ext in
-                   ['.png', '.jpg', '.jpeg', '.gif', '.webp', 'fal.media', 'fal-cdn', 'replicate.delivery']):
+            if any(url.lower().endswith(ext) for ext in
+                   ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
                 images.append((url, alt_text))
         
         # Match HTML img tags: <img src="url"> or <img src="url"></img> or <img src="url"/>
@@ -4236,7 +4178,7 @@ class BasePlatformAdapter(ABC):
                 _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
 
                 # Partition images out of media_files + local_files so they
-                # can be sent as a single batch (Signal RPC). When
+                # can be sent as a single native batch. When
                 # ``[[as_document]]`` was set on the original response, image
                 # files skip the photo path and route to send_document below
                 # so they're delivered with original bytes (no Telegram

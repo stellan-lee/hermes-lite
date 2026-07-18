@@ -45,14 +45,6 @@ class TestKnownPrefixes:
         result = redact_sensitive_text("AIzaSyB-abc123def456ghi789jklmno012345")
         assert "abc123def456" not in result
 
-    def test_perplexity_key(self):
-        result = redact_sensitive_text("pplx-abcdef123456789012345")
-        assert "abcdef12345" not in result
-
-    def test_fal_key(self):
-        result = redact_sensitive_text("fal_abc123def456ghi789jkl")
-        assert "abc123def456" not in result
-
     def test_short_token_fully_masked(self):
         result = redact_sensitive_text("key=sk-short1234567")
         assert "***" in result
@@ -209,7 +201,7 @@ class TestPrintenvSimulation:
 PATH=/usr/local/bin:/usr/bin
 OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012mno345
 OPENROUTER_API_KEY=sk-or-v1-reallyLongSecretKeyValue12345678
-FIRECRAWL_API_KEY=fc-shortkey123456789012
+CUSTOM_SERVICE_API_KEY=opaque-secret-value-123456789012
 TELEGRAM_BOT_TOKEN=bot987654321:ABCDEfghij-KLMNopqrst_UVWXyz12345
 SHELL=/bin/bash
 USER=teknium"""
@@ -236,8 +228,8 @@ class TestSecretCapturePayloadRedaction:
         assert "abc123def456" not in result
 
 
-class TestElevenLabsTavilyExaKeys:
-    """Regression tests for ElevenLabs (sk_), Tavily (tvly-), and Exa (exa_) keys."""
+class TestElevenLabsKeys:
+    """Regression tests for retained ElevenLabs ``sk_`` keys."""
 
     def test_elevenlabs_key_redacted(self):
         text = "ELEVENLABS_API_KEY=sk_abc123def456ghi789jklmnopqrstu"
@@ -249,38 +241,14 @@ class TestElevenLabsTavilyExaKeys:
         result = redact_sensitive_text(text)
         assert "abc123def456ghi" not in result
 
-    def test_tavily_key_redacted(self):
-        text = "TAVILY_API_KEY=tvly-ABCdef123456789GHIJKL0000"
-        result = redact_sensitive_text(text)
-        assert "ABCdef123456789" not in result
-
-    def test_tavily_key_in_log_line(self):
-        text = "Initialising Tavily client with tvly-ABCdef123456789GHIJKL0000"
-        result = redact_sensitive_text(text)
-        assert "ABCdef123456789" not in result
-
-    def test_exa_key_redacted(self):
-        text = "EXA_API_KEY=exa_XYZ789abcdef000000000000000"
-        result = redact_sensitive_text(text)
-        assert "XYZ789abcdef" not in result
-
-    def test_exa_key_in_log_line(self):
-        text = "Using Exa client with key exa_XYZ789abcdef000000000000000"
-        result = redact_sensitive_text(text)
-        assert "XYZ789abcdef" not in result
-
-    def test_all_three_in_env_dump(self):
+    def test_key_in_env_dump(self):
         env_dump = (
             "HOME=/home/user\n"
             "ELEVENLABS_API_KEY=sk_abc123def456ghi789jklmnopqrstu\n"
-            "TAVILY_API_KEY=tvly-ABCdef123456789GHIJKL0000\n"
-            "EXA_API_KEY=exa_XYZ789abcdef000000000000000\n"
             "SHELL=/bin/bash\n"
         )
         result = redact_sensitive_text(env_dump)
         assert "abc123def456ghi" not in result
-        assert "ABCdef123456789" not in result
-        assert "XYZ789abcdef" not in result
         assert "HOME=/home/user" in result
         assert "SHELL=/bin/bash" in result
 
@@ -406,7 +374,7 @@ class TestWebUrlsNotRedacted:
     def test_http_access_log_request_target_passes_through(self):
         text = (
             'INFO aiohttp.access: 127.0.0.1 "POST '
-            '/bluebubbles-webhook?password=webhookSecret123&event=new-message '
+            '/signed-webhook?password=webhookSecret123&event=new-message '
             'HTTP/1.1" 200 173 "-" "test-client"'
         )
         assert redact_sensitive_text(text) == text
@@ -456,29 +424,3 @@ class TestFormBodyRedaction:
         text = "first=1\nsecond=2"
         # Should pass through (still subject to other redactors)
         assert "first=1" in redact_sensitive_text(text)
-
-
-class TestXaiToken:
-    KEY = "xai-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstu"
-
-    def test_bare_token_masked(self):
-        result = redact_sensitive_text(f"using key {self.KEY}", force=True)
-        assert self.KEY not in result
-        assert "xai-AB" in result
-
-    def test_env_assignment_masked(self):
-        result = redact_sensitive_text(f"XAI_API_KEY={self.KEY}", force=True)
-        assert self.KEY not in result
-
-    def test_too_short_not_masked(self):
-        short = "xai-tooshort"
-        result = redact_sensitive_text(f"text {short} here", force=True)
-        assert short in result
-
-    def test_company_name_not_masked(self):
-        result = redact_sensitive_text("xai is a company", force=True)
-        assert result == "xai is a company"
-
-    def test_prefix_visible_in_masked_output(self):
-        result = redact_sensitive_text(self.KEY, force=True)
-        assert result.startswith("xai-AB")

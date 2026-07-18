@@ -190,7 +190,7 @@ class TestRecordFileMutationResult:
 
         assert agent._turn_failed_file_mutations == {}
 
-    def test_patch_with_lsp_diagnostics_counts_as_landed(self):
+    def test_successful_patch_with_diff_counts_as_landed(self):
         agent = _bare_agent()
         agent._record_file_mutation_result(
             "patch",
@@ -204,7 +204,6 @@ class TestRecordFileMutationResult:
             "success": True,
             "diff": "--- a/tmp.py\n+++ b/tmp.py\n",
             "files_modified": ["/tmp/a.py"],
-            "lsp_diagnostics": "<diagnostics>ERROR [1:1] type mismatch</diagnostics>",
         })
 
         agent._record_file_mutation_result(

@@ -20,7 +20,6 @@ def test_make_agent_passes_resolved_provider():
         "api_mode": "anthropic_messages",
         "command": None,
         "args": None,
-        "credential_pool": None,
     }
 
     fake_cfg = {
@@ -70,7 +69,6 @@ def test_make_agent_ignores_display_personality_without_system_prompt():
         "api_mode": "chat_completions",
         "command": None,
         "args": None,
-        "credential_pool": None,
     }
     fake_cfg = {
         "agent": {
@@ -105,7 +103,6 @@ def test_make_agent_honors_tui_launch_env_flags():
         "api_mode": "chat_completions",
         "command": None,
         "args": None,
-        "credential_pool": None,
     }
     fake_cfg = {"agent": {"system_prompt": ""}, "model": {"default": "glm-5"}}
 
@@ -179,7 +176,6 @@ def test_make_agent_tolerates_null_config_sections():
         "api_mode": "chat_completions",
         "command": None,
         "args": None,
-        "credential_pool": None,
     }
     null_cfg = {"agent": None, "display": None, "model": {"default": "glm-5"}}
 
@@ -208,7 +204,6 @@ def test_make_agent_tolerates_null_personalities_with_active_personality():
         "api_mode": "chat_completions",
         "command": None,
         "args": None,
-        "credential_pool": None,
     }
     cfg = {
         "agent": {"personalities": None},

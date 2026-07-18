@@ -102,7 +102,7 @@ _PLATFORM_MAP = {
 }
 _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _REMOTE_ENV_BACKENDS = frozenset(
-    {"docker", "singularity", "modal", "ssh", "daytona"}
+    {"docker", "ssh"}
 )
 _secret_capture_callback = None
 
@@ -1300,7 +1300,7 @@ def skill_view(
                 )
 
         # Register credential files for mounting into remote sandboxes
-        # (Modal, Docker).  Files that exist on the host are registered;
+        # (Docker). Files that exist on the host are registered;
         # missing ones are added to the setup_needed indicators.
         required_cred_files_raw = frontmatter.get("required_credential_files", [])
         if not isinstance(required_cred_files_raw, list):

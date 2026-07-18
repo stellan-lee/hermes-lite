@@ -4,8 +4,7 @@ Verifies that _get_cached_client() returns different AsyncOpenAI clients
 when called from different event loops, preventing the httpx deadlock
 that occurs when a cached async client bound to loop A is reused on loop B.
 
-This test file is self-contained and does not import the full tool chain,
-so it can run without optional dependencies like firecrawl.
+This test file is self-contained and does not import the full tool chain.
 """
 
 import asyncio

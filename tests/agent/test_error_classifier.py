@@ -83,7 +83,6 @@ class TestClassifiedError:
         e = ClassifiedError(reason=FailoverReason.unknown)
         assert e.retryable is True
         assert e.should_compress is False
-        assert e.should_rotate_credential is False
         assert e.should_fallback is False
         assert e.status_code is None
         assert e.message == ""
@@ -173,7 +172,6 @@ class TestClassify402:
             lambda reason, **kw: ClassifiedError(reason=reason, **kw),
         )
         assert result.reason == FailoverReason.billing
-        assert result.should_rotate_credential is True
 
     def test_transient_usage_limit(self):
         """402 with 'usage limit' + 'try again' = rate limit, not billing."""
@@ -182,7 +180,6 @@ class TestClassify402:
             lambda reason, **kw: ClassifiedError(reason=reason, **kw),
         )
         assert result.reason == FailoverReason.rate_limit
-        assert result.should_rotate_credential is True
 
     def test_quota_with_retry(self):
         """402 with 'quota' + 'retry' = rate limit."""
@@ -219,7 +216,6 @@ class TestClassifyApiError:
         e = MockAPIError("Unauthorized", status_code=401)
         result = classify_api_error(e, provider="openrouter")
         assert result.reason == FailoverReason.auth
-        assert result.should_rotate_credential is True
         # 401 is non-retryable on its own — credential rotation runs
         # before the retryability check in the agent loop.
         assert result.retryable is False
@@ -236,7 +232,6 @@ class TestClassifyApiError:
         e = MockAPIError("Key limit exceeded for this key", status_code=403)
         result = classify_api_error(e, provider="openrouter")
         assert result.reason == FailoverReason.billing
-        assert result.should_rotate_credential is True
         assert result.should_fallback is True
 
     def test_403_spending_limit_classified_as_billing(self):
@@ -260,7 +255,7 @@ class TestClassifyApiError:
                 "status": 402,
                 "message": (
                     "Your API key has run out of funds. Please go visit the "
-                    "portal to sort that out: https://portal.nousresearch.com"
+                    "portal to sort that out: the provider billing page"
                 ),
             },
         )
@@ -279,23 +274,6 @@ class TestClassifyApiError:
         result = classify_api_error(e)
         assert result.reason == FailoverReason.billing
         assert result.retryable is False
-
-    def test_404_free_tier_model_block_is_billing(self):
-        e = MockAPIError(
-            "Not Found",
-            status_code=404,
-            body={
-                "status": 404,
-                "message": (
-                    "Model 'gpt-5' is not available on the Free Tier. "
-                    "Upgrade at https://portal.nousresearch.com or pick a free model."
-                ),
-            },
-        )
-        result = classify_api_error(e, provider="nous", model="gpt-5")
-        assert result.reason == FailoverReason.billing
-        assert result.retryable is False
-        assert result.should_fallback is True
 
     # ── Rate limit ──
 
@@ -319,7 +297,6 @@ class TestClassifyApiError:
         result = classify_api_error(e)
         assert result.reason == FailoverReason.rate_limit
         assert result.retryable is True
-        assert result.should_rotate_credential is True
 
     # ── Server errors ──
 
@@ -757,7 +734,7 @@ class TestClassifyApiError:
                 }
             },
         )
-        result = classify_api_error(e, provider="nous", model="gpt-5")
+        result = classify_api_error(e, provider="custom", model="gpt-5")
         assert result.reason == FailoverReason.billing
 
     # ── Message-only patterns (no status code) ──
@@ -769,7 +746,7 @@ class TestClassifyApiError:
 
     def test_message_free_tier_model_block_is_billing(self):
         e = Exception("Model 'gpt-5' is not available on the Free Tier.")
-        result = classify_api_error(e, provider="nous", model="gpt-5")
+        result = classify_api_error(e, provider="custom", model="gpt-5")
         assert result.reason == FailoverReason.billing
 
     def test_message_rate_limit_pattern(self):
@@ -800,7 +777,6 @@ class TestClassifyApiError:
         result = classify_api_error(e)
         assert result.reason == FailoverReason.rate_limit
         assert result.retryable is True
-        assert result.should_rotate_credential is True
         assert result.should_fallback is True
 
     def test_message_usage_limit_no_retry_signal_is_billing(self):
@@ -809,7 +785,6 @@ class TestClassifyApiError:
         result = classify_api_error(e)
         assert result.reason == FailoverReason.billing
         assert result.retryable is False
-        assert result.should_rotate_credential is True
 
     def test_message_quota_with_reset_window_is_rate_limit(self):
         """'quota' + 'resets at' with no status code → rate_limit."""

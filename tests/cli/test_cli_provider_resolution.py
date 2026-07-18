@@ -113,9 +113,6 @@ def _import_cli():
         if name == "cli" or name == "run_agent" or name == "tools" or name.startswith("tools."):
             sys.modules.pop(name, None)
 
-    if "firecrawl" not in sys.modules:
-        sys.modules["firecrawl"] = types.SimpleNamespace(Firecrawl=object)
-
     try:
         importlib.import_module("prompt_toolkit")
     except ModuleNotFoundError:

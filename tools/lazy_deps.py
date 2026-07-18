@@ -2,7 +2,7 @@
 Lazy dependency installer for opt-in Hermes Agent backends.
 
 Many Hermes features (Mistral TTS, ElevenLabs TTS, Honcho memory, Bedrock,
-Slack, Matrix, etc.) require Python packages that not every user needs. The
+Slack and other optional integrations) require Python packages that not every user needs. The
 historical approach was to bundle them all under ``pyproject.toml`` extras
 (``hermes-agent[all]``) and install them eagerly at setup time. That has
 two problems:
@@ -120,16 +120,11 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
         "lark-oapi==1.5.3",
         "qrcode==7.4.2",
     ),
-    # WeCom callback-mode adapter — parses untrusted XML POST bodies. Pulls
-    # defusedxml only; aiohttp/httpx are core dependencies of every messaging
-    # adapter and ship via `platform.discord` / `platform.slack` / etc.
-
     # ─── Terminal backends ─────────────────────────────────────────────────
 
     # ─── Skills ────────────────────────────────────────────────────────────
 
     # ─── Tools ─────────────────────────────────────────────────────────────
-    # Dashboard (`hermes dashboard`)
 }
 
 

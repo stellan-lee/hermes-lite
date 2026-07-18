@@ -8,8 +8,6 @@ from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 
 from cron.scheduler import _resolve_origin, _resolve_delivery_target, _deliver_result, _send_media_via_adapter, run_job, SILENT_MARKER, _build_job_prompt
-from tools.env_passthrough import clear_env_passthrough
-from tools.credential_files import clear_credential_files
 
 
 class TestResolveOrigin:
@@ -98,21 +96,11 @@ class TestResolveDeliveryTarget:
         self, monkeypatch, platform, env_var, chat_id
     ):
         for fallback_env in (
-            "MATRIX_HOME_ROOM",
-            "MATRIX_HOME_CHANNEL",
             "TELEGRAM_HOME_CHANNEL",
             "DISCORD_HOME_CHANNEL",
             "SLACK_HOME_CHANNEL",
-            "SIGNAL_HOME_CHANNEL",
-            "MATTERMOST_HOME_CHANNEL",
-            "SMS_HOME_CHANNEL",
             "EMAIL_HOME_ADDRESS",
-            "DINGTALK_HOME_CHANNEL",
-            "BLUEBUBBLES_HOME_CHANNEL",
             "FEISHU_HOME_CHANNEL",
-            "WECOM_HOME_CHANNEL",
-            "WEIXIN_HOME_CHANNEL",
-            "QQ_HOME_CHANNEL",
         ):
             monkeypatch.delenv(fallback_env, raising=False)
         monkeypatch.setenv(env_var, chat_id)
@@ -219,17 +207,17 @@ class TestResolveDeliveryTarget:
         }
 
     def test_human_friendly_label_resolved_via_channel_directory(self):
-        """deliver: 'whatsapp:Alice (dm)' resolves to the real JID."""
-        job = {"deliver": "whatsapp:Alice (dm)"}
+        """A retained platform label resolves to its channel ID."""
+        job = {"deliver": "discord:Engineering"}
         with patch(
             "gateway.channel_directory.resolve_channel_name",
-            return_value="12345678901234@lid",
+            return_value="12345678901234",
         ) as resolve_mock:
             result = _resolve_delivery_target(job)
-        resolve_mock.assert_called_once_with("whatsapp", "Alice (dm)")
+        resolve_mock.assert_called_once_with("discord", "Engineering")
         assert result == {
-            "platform": "whatsapp",
-            "chat_id": "12345678901234@lid",
+            "platform": "discord",
+            "chat_id": "12345678901234",
             "thread_id": None,
         }
 
@@ -262,16 +250,16 @@ class TestResolveDeliveryTarget:
         }
 
     def test_raw_id_not_mangled_when_directory_returns_none(self):
-        """deliver: 'whatsapp:12345@lid' passes through when directory has no match."""
-        job = {"deliver": "whatsapp:12345@lid"}
+        """A raw retained-platform ID passes through when no label matches."""
+        job = {"deliver": "discord:12345"}
         with patch(
             "gateway.channel_directory.resolve_channel_name",
             return_value=None,
         ):
             result = _resolve_delivery_target(job)
         assert result == {
-            "platform": "whatsapp",
-            "chat_id": "12345@lid",
+            "platform": "discord",
+            "chat_id": "12345",
             "thread_id": None,
         }
 
@@ -391,8 +379,6 @@ class TestRoutingIntents:
         monkeypatch.setenv("DISCORD_HOME_CHANNEL", "-222")
         monkeypatch.setenv("SLACK_HOME_CHANNEL", "C333")
         # Sanity: platforms without the env var must NOT appear in the expansion.
-        monkeypatch.delenv("SIGNAL_HOME_CHANNEL", raising=False)
-        monkeypatch.delenv("MATRIX_HOME_ROOM", raising=False)
 
         targets = _resolve_delivery_targets({"deliver": "all", "origin": None})
         platforms = sorted(t["platform"] for t in targets)
@@ -400,8 +386,6 @@ class TestRoutingIntents:
         assert "telegram" in platforms
         assert "discord" in platforms
         assert "slack" in platforms
-        assert "signal" not in platforms
-        assert "matrix" not in platforms
 
     def test_all_combines_with_explicit_target_and_dedups(self, monkeypatch):
         """'telegram:-999,all' yields every home channel + the explicit target without dupes."""
@@ -427,10 +411,7 @@ class TestRoutingIntents:
         from cron.scheduler import _resolve_delivery_targets
 
         for var in ("TELEGRAM_HOME_CHANNEL", "DISCORD_HOME_CHANNEL", "SLACK_HOME_CHANNEL",
-                    "SIGNAL_HOME_CHANNEL", "MATRIX_HOME_ROOM", "MATTERMOST_HOME_CHANNEL",
-                    "SMS_HOME_CHANNEL", "EMAIL_HOME_ADDRESS", "DINGTALK_HOME_CHANNEL",
-                    "FEISHU_HOME_CHANNEL", "WECOM_HOME_CHANNEL", "WEIXIN_HOME_CHANNEL",
-                    "BLUEBUBBLES_HOME_CHANNEL", "QQBOT_HOME_CHANNEL", "QQ_HOME_CHANNEL"):
+                    "EMAIL_HOME_ADDRESS", "FEISHU_HOME_CHANNEL"):
             monkeypatch.delenv(var, raising=False)
 
         assert _resolve_delivery_targets({"deliver": "all", "origin": None}) == []
@@ -1065,7 +1046,7 @@ class TestRunJobSessionPersistence:
         # Resolution happened — not None, is a list.
         assert isinstance(kwargs["enabled_toolsets"], list)
         # The cron default is _HERMES_CORE_TOOLS with _DEFAULT_OFF_TOOLSETS
-        # (``moa``, ``homeassistant``, ``rl``) removed. The most important
+        # (``moa``, ``rl``) removed. The most important
         # invariant: ``moa`` is NOT in the default cron toolset, so a cron
         # run cannot accidentally spin up frontier models.
         assert "moa" not in kwargs["enabled_toolsets"]
@@ -1587,206 +1568,6 @@ class TestRunJobConfigEnvVarExpansion:
         assert kwargs["model"] == "${_HERMES_TEST_CRON_UNSET_VAR}"
 
 
-class TestRunJobSkillBacked:
-    def test_run_job_preserves_skill_env_passthrough_into_worker_thread(self, tmp_path):
-        job = {
-            "id": "skill-env-job",
-            "name": "skill env test",
-            "prompt": "Use the skill.",
-            "skill": "notion",
-        }
-
-        fake_db = MagicMock()
-
-        def _skill_view(name):
-            assert name == "notion"
-            from tools.env_passthrough import register_env_passthrough
-
-            register_env_passthrough(["NOTION_API_KEY"])
-            return json.dumps({"success": True, "content": "# notion\nUse Notion."})
-
-        def _run_conversation(prompt):
-            from tools.env_passthrough import get_all_passthrough
-
-            assert "NOTION_API_KEY" in get_all_passthrough()
-            return {"final_response": "ok"}
-
-        with patch("cron.scheduler._hermes_home", tmp_path), \
-             patch("cron.scheduler._resolve_origin", return_value=None), \
-             patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
-             patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
-                 return_value={
-                     "api_key": "***",
-                     "base_url": "https://example.invalid/v1",
-                     "provider": "openrouter",
-                     "api_mode": "chat_completions",
-                 },
-             ), \
-             patch("tools.skills_tool.skill_view", side_effect=_skill_view), \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.side_effect = _run_conversation
-            mock_agent_cls.return_value = mock_agent
-
-            try:
-                success, output, final_response, error = run_job(job)
-            finally:
-                clear_env_passthrough()
-
-        assert success is True
-        assert error is None
-        assert final_response == "ok"
-
-    def test_run_job_preserves_credential_file_passthrough_into_worker_thread(self, tmp_path):
-        """copy_context() also propagates credential_files ContextVar."""
-        job = {
-            "id": "cred-env-job",
-            "name": "cred file test",
-            "prompt": "Use the skill.",
-            "skill": "google-workspace",
-        }
-
-        fake_db = MagicMock()
-
-        # Create a credential file so register_credential_file succeeds
-        cred_dir = tmp_path / "credentials"
-        cred_dir.mkdir()
-        (cred_dir / "google_token.json").write_text('{"token": "t"}')
-
-        def _skill_view(name):
-            assert name == "google-workspace"
-            from tools.credential_files import register_credential_file
-
-            register_credential_file("credentials/google_token.json")
-            return json.dumps({"success": True, "content": "# google-workspace\nUse Google."})
-
-        def _run_conversation(prompt):
-            from tools.credential_files import _get_registered
-
-            registered = _get_registered()
-            assert registered, "credential files must be visible in worker thread"
-            assert any("google_token.json" in v for v in registered.values())
-            return {"final_response": "ok"}
-
-        with patch("cron.scheduler._hermes_home", tmp_path), \
-             patch("cron.scheduler._resolve_origin", return_value=None), \
-             patch("tools.credential_files._resolve_hermes_home", return_value=tmp_path), \
-             patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
-             patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
-                 return_value={
-                     "api_key": "***",
-                     "base_url": "https://example.invalid/v1",
-                     "provider": "openrouter",
-                     "api_mode": "chat_completions",
-                 },
-             ), \
-             patch("tools.skills_tool.skill_view", side_effect=_skill_view), \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.side_effect = _run_conversation
-            mock_agent_cls.return_value = mock_agent
-
-            try:
-                success, output, final_response, error = run_job(job)
-            finally:
-                clear_credential_files()
-
-        assert success is True
-        assert error is None
-        assert final_response == "ok"
-
-    def test_run_job_loads_skill_and_disables_recursive_cron_tools(self, tmp_path):
-        job = {
-            "id": "skill-job",
-            "name": "skill test",
-            "prompt": "Check the feeds and summarize anything new.",
-            "skill": "blogwatcher",
-        }
-
-        fake_db = MagicMock()
-
-        with patch("cron.scheduler._hermes_home", tmp_path), \
-             patch("cron.scheduler._resolve_origin", return_value=None), \
-             patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
-             patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
-                 return_value={
-                     "api_key": "***",
-                     "base_url": "https://example.invalid/v1",
-                     "provider": "openrouter",
-                     "api_mode": "chat_completions",
-                 },
-             ), \
-             patch("tools.skills_tool.skill_view", return_value=json.dumps({"success": True, "content": "# Blogwatcher\nFollow this skill."})), \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.return_value = {"final_response": "ok"}
-            mock_agent_cls.return_value = mock_agent
-
-            success, output, final_response, error = run_job(job)
-
-        assert success is True
-        assert error is None
-        assert final_response == "ok"
-
-        kwargs = mock_agent_cls.call_args.kwargs
-        assert "cronjob" in (kwargs["disabled_toolsets"] or [])
-
-        prompt_arg = mock_agent.run_conversation.call_args.args[0]
-        assert "blogwatcher" in prompt_arg
-        assert "Follow this skill" in prompt_arg
-        assert "Check the feeds and summarize anything new." in prompt_arg
-
-    def test_run_job_loads_multiple_skills_in_order(self, tmp_path):
-        job = {
-            "id": "multi-skill-job",
-            "name": "multi skill test",
-            "prompt": "Combine the results.",
-            "skills": ["blogwatcher", "maps"],
-        }
-
-        fake_db = MagicMock()
-
-        def _skill_view(name):
-            return json.dumps({"success": True, "content": f"# {name}\nInstructions for {name}."})
-
-        with patch("cron.scheduler._hermes_home", tmp_path), \
-             patch("cron.scheduler._resolve_origin", return_value=None), \
-             patch("dotenv.load_dotenv"), \
-             patch("hermes_state.SessionDB", return_value=fake_db), \
-             patch(
-                 "hermes_cli.runtime_provider.resolve_runtime_provider",
-                 return_value={
-                     "api_key": "***",
-                     "base_url": "https://example.invalid/v1",
-                     "provider": "openrouter",
-                     "api_mode": "chat_completions",
-                 },
-             ), \
-             patch("tools.skills_tool.skill_view", side_effect=_skill_view) as skill_view_mock, \
-             patch("run_agent.AIAgent") as mock_agent_cls:
-            mock_agent = MagicMock()
-            mock_agent.run_conversation.return_value = {"final_response": "ok"}
-            mock_agent_cls.return_value = mock_agent
-
-            success, output, final_response, error = run_job(job)
-
-        assert success is True
-        assert error is None
-        assert final_response == "ok"
-        assert skill_view_mock.call_count == 2
-        assert [call.args[0] for call in skill_view_mock.call_args_list] == ["blogwatcher", "maps"]
-
-        prompt_arg = mock_agent.run_conversation.call_args.args[0]
-        assert prompt_arg.index("blogwatcher") < prompt_arg.index("maps")
-        assert "Instructions for blogwatcher." in prompt_arg
-        assert "Instructions for maps." in prompt_arg
-        assert "Combine the results." in prompt_arg
 
 
 class TestSilentDelivery:
@@ -2130,93 +1911,6 @@ class TestRunJobWakeGate:
         agent_cls.assert_called_once()
 
 
-class TestBuildJobPromptMissingSkill:
-    """Verify that a missing skill logs a warning and does not crash the job."""
-
-    def _missing_skill_view(self, name: str) -> str:
-        return json.dumps({"success": False, "error": f"Skill '{name}' not found."})
-
-    def test_missing_skill_does_not_raise(self):
-        """Job should run even when a referenced skill is not installed."""
-        with patch("tools.skills_tool.skill_view", side_effect=self._missing_skill_view):
-            result = _build_job_prompt({"skills": ["ghost-skill"], "prompt": "do something"})
-        # prompt is preserved even though skill was skipped
-        assert "do something" in result
-
-    def test_missing_skill_injects_user_notice_into_prompt(self):
-        """A system notice about the missing skill is injected into the prompt."""
-        with patch("tools.skills_tool.skill_view", side_effect=self._missing_skill_view):
-            result = _build_job_prompt({"skills": ["ghost-skill"], "prompt": "do something"})
-        assert "ghost-skill" in result
-        assert "not found" in result.lower() or "skipped" in result.lower()
-
-    def test_missing_skill_logs_warning(self, caplog):
-        """A warning is logged when a skill cannot be found."""
-        with caplog.at_level(logging.WARNING, logger="cron.scheduler"):
-            with patch("tools.skills_tool.skill_view", side_effect=self._missing_skill_view):
-                _build_job_prompt({"name": "My Job", "skills": ["ghost-skill"], "prompt": "do something"})
-        assert any("ghost-skill" in record.message for record in caplog.records)
-
-    def test_valid_skill_loaded_alongside_missing(self):
-        """A valid skill is still loaded when another skill in the list is missing."""
-
-        def _mixed_skill_view(name: str) -> str:
-            if name == "real-skill":
-                return json.dumps({"success": True, "content": "Real skill content."})
-            return json.dumps({"success": False, "error": f"Skill '{name}' not found."})
-
-        with patch("tools.skills_tool.skill_view", side_effect=_mixed_skill_view):
-            result = _build_job_prompt({"skills": ["ghost-skill", "real-skill"], "prompt": "go"})
-        assert "Real skill content." in result
-        assert "go" in result
-
-
-class TestBuildJobPromptBumpUse:
-    """Verify that cron jobs bump skill usage counters so the curator sees them as active."""
-
-    def test_bump_use_called_for_loaded_skill(self):
-        """bump_use is called for each successfully loaded skill."""
-
-        def _skill_view(name: str) -> str:
-            return json.dumps({"success": True, "content": f"Content for {name}."})
-
-        with patch("tools.skills_tool.skill_view", side_effect=_skill_view), \
-             patch("tools.skill_usage.bump_use") as mock_bump:
-            _build_job_prompt({"skills": ["alpha", "beta"], "prompt": "go"})
-
-        assert mock_bump.call_count == 2
-        calls = [c[0][0] for c in mock_bump.call_args_list]
-        assert "alpha" in calls
-        assert "beta" in calls
-
-    def test_bump_use_not_called_for_missing_skill(self):
-        """bump_use is NOT called when a skill fails to load."""
-
-        def _missing_view(name: str) -> str:
-            return json.dumps({"success": False, "error": "not found"})
-
-        with patch("tools.skills_tool.skill_view", side_effect=_missing_view), \
-             patch("tools.skill_usage.bump_use") as mock_bump:
-            _build_job_prompt({"skills": ["ghost"], "prompt": "go"})
-
-        assert mock_bump.call_count == 0
-
-    def test_bump_failure_does_not_break_prompt(self, caplog):
-        """If bump_use raises, the prompt still builds — error is logged at DEBUG."""
-
-        def _skill_view(name: str) -> str:
-            return json.dumps({"success": True, "content": "Works."})
-
-        with patch("tools.skills_tool.skill_view", side_effect=_skill_view), \
-             patch("tools.skill_usage.bump_use", side_effect=RuntimeError("boom")), \
-             caplog.at_level(logging.DEBUG, logger="cron.scheduler"):
-            result = _build_job_prompt({"skills": ["good-skill"], "prompt": "go"})
-
-        # Prompt should still contain the skill content and original instruction
-        assert "Works." in result
-        assert "go" in result
-        # The error should be logged at DEBUG level, not crash
-        assert any("failed to bump" in r.message for r in caplog.records)
 
 
 class TestSendMediaViaAdapter:

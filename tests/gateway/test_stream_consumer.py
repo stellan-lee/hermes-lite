@@ -91,10 +91,9 @@ class TestCleanForDisplay:
 class TestFinalizeCapabilityGate:
     """Verify REQUIRES_EDIT_FINALIZE gates the redundant final edit.
 
-    Platforms that don't need an explicit finalize signal (Telegram,
-    Slack, Matrix, …) should skip the redundant final edit when the
-    mid-stream edit already delivered the final content.  Platforms that
-    *do* need it (DingTalk AI Cards) must always receive a finalize=True
+    Platforms that don't need an explicit finalize signal should skip the
+    redundant final edit when the mid-stream edit already delivered the
+    final content. Platforms that do need it must receive a finalize=True
     edit at the end of the stream.
     """
 
@@ -151,11 +150,7 @@ class TestEditMessageFinalizeSignature:
             ("gateway.platforms.telegram", "TelegramAdapter"),
             ("plugins.platforms.discord.adapter", "DiscordAdapter"),
             ("gateway.platforms.slack", "SlackAdapter"),
-            ("gateway.platforms.matrix", "MatrixAdapter"),
-            ("plugins.platforms.mattermost.adapter", "MattermostAdapter"),
             ("gateway.platforms.feishu", "FeishuAdapter"),
-            ("gateway.platforms.whatsapp", "WhatsAppAdapter"),
-            ("gateway.platforms.dingtalk", "DingTalkAdapter"),
         ],
     )
     def test_edit_message_accepts_finalize(self, module_path, class_name):
@@ -676,8 +671,8 @@ class TestSegmentBreakOnToolBoundary:
 
     @pytest.mark.asyncio
     async def test_no_message_id_segment_breaks_do_not_resend(self):
-        """On a platform that never returns a message_id (e.g. webhook with
-        github_comment delivery), tool-call segment breaks must NOT trigger
+        """On an adapter that never returns a message_id, tool-call segment
+        breaks must NOT trigger
         a new adapter.send() per boundary.  The fix: _message_id == '__no_edit__'
         suppresses the reset so all text accumulates and is sent once."""
         adapter = MagicMock()
@@ -1907,4 +1902,3 @@ class TestUtf16OverflowDetection:
         # auto-attr mock. Verified indirectly by all the other tests in
         # this file passing — they all use MagicMock adapters.
         assert consumer is not None
-

@@ -40,7 +40,6 @@ class TestResolveRuntimeAgentKwargsAuthFallback:
                 "api_mode": "chat_completions",
                 "command": None,
                 "args": None,
-                "credential_pool": None,
             }
 
         with patch(
@@ -100,7 +99,6 @@ class TestResolveRuntimeAgentKwargsAuthFallback:
                 "api_mode": "codex_responses",
                 "command": None,
                 "args": None,
-                "credential_pool": None,
             }
 
         with patch(

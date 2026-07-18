@@ -157,7 +157,7 @@ class DialogRecord:
     """A historical record of a dialog that was opened and then handled.
 
     Retained in ``recent_dialogs`` for a short window so agents on backends
-    that auto-dismiss dialogs server-side (Browserbase) can still observe
+    that auto-dismiss dialogs server-side can still observe
     that a dialog fired, even though they couldn't respond to it.
     """
 

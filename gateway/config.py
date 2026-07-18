@@ -416,7 +416,7 @@ class StreamingConfig:
     # Default is "auto": prefer native draft streaming on platforms that
     # support it (Telegram DMs via sendMessageDraft, Bot API 9.5+) and fall
     # back to edit-based streaming everywhere else.  This is safe as a global
-    # default because adapters without draft support (Discord, Slack, Matrix,
+    # default because adapters without draft support (Discord, Slack,
     # …) report supports_draft_streaming() == False and transparently use the
     # edit path — so "auto" never regresses non-Telegram platforms, it only
     # upgrades the chats that can render the smoother native preview.
@@ -469,7 +469,7 @@ class StreamingConfig:
 # Each callable receives a ``PlatformConfig`` and returns ``True`` when the
 # platform is sufficiently configured to be considered "connected".  Platforms
 # that rely on the generic ``token or api_key`` check (Telegram, Discord,
-# Slack, Matrix, Mattermost, HomeAssistant) do not need an entry here.
+# Slack and plugin-provided adapters do not need an entry here.
 _PLATFORM_CONNECTED_CHECKERS: dict[Platform, Callable[[PlatformConfig], bool]] = {
     Platform.EMAIL: lambda cfg: bool(cfg.extra.get("address")),
     Platform.WEBHOOK: lambda cfg: True,
@@ -920,8 +920,6 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["group_allow_admin_from"] = platform_cfg["group_allow_admin_from"]
                 if "group_user_allowed_commands" in platform_cfg:
                     bridged["group_user_allowed_commands"] = platform_cfg["group_user_allowed_commands"]
-                if plat in {Platform.DISCORD, Platform.SLACK} and "channel_skill_bindings" in platform_cfg:
-                    bridged["channel_skill_bindings"] = platform_cfg["channel_skill_bindings"]
                 if "channel_prompts" in platform_cfg:
                     channel_prompts = platform_cfg["channel_prompts"]
                     if isinstance(channel_prompts, dict):
@@ -1348,7 +1346,7 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
     # blocks above; plugins expose check_fn() which is the single source of
     # truth for "are my env vars set?".  When it returns True, ensure the
     # platform is enabled so start() will create its adapter.  Plugins that
-    # need to seed ``PlatformConfig.extra`` from env vars (e.g. Google Chat's
+    # need to seed ``PlatformConfig.extra`` from env vars
     # project_id / subscription_name) can supply ``env_enablement_fn`` on
     # their PlatformEntry — called here BEFORE adapter construction.
     #
@@ -1358,7 +1356,7 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
     # ``check_fn`` alone — which for adapter plugins typically just
     # verifies the SDK is importable / lazy-installs it — silently enables
     # platforms the user never opted into, and the gateway then tries to
-    # connect to Discord / Teams / Google Chat with no token and emits
+    # connect to a plugin platform with no token and emits
     # noisy retry-forever errors.  ``_platform_status`` was already fixed
     # for the same bug class in commit 7849a3d73; this is the runtime
     # counterpart.
@@ -1376,14 +1374,9 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
             platform = Platform(entry.name)
             existing_cfg = config.platforms.get(platform)
             # Seed candidate extras from ``env_enablement_fn`` so plugins
-            # whose ``is_connected`` reads ``config.extra`` (e.g. Google
-            # Chat's ``_is_connected`` checks ``config.extra["project_id"]``)
-            # see the same state they will after enablement. Without this,
-            # Google-Chat-on-env-vars-only setups silently fail the gate
-            # below even though the user is configured.  Plugins whose
-            # ``is_connected`` reads env vars directly (Discord, IRC,
-            # Teams, LINE, ntfy, Simplex) are unaffected; this only
-            # restores Google Chat.
+            # whose ``is_connected`` reads ``config.extra``
+            # see the same state they will after enablement. Plugins whose
+            # ``is_connected`` reads env vars directly are unaffected.
             seed_for_probe = None
             if entry.env_enablement_fn is not None:
                 try:
