@@ -177,13 +177,10 @@ authorization model, but the rules below apply uniformly.
 **Surfaces in Hermes Agent:**
 
 - **Gateway platform adapters.** Messaging integrations in
-  `gateway/platforms/` (Telegram, Discord, Slack, email, SMS, etc.)
-  and analogous adapters shipped as plugins.
-- **Network-exposed HTTP surfaces.** The API server adapter, the
-  dashboard plugin, and any plugin that binds a listening socket.
-- **Editor / IDE adapters.** The ACP adapter (`acp_adapter/`) and
-  equivalent integrations that accept requests from a local client
-  process.
+  `gateway/platforms/` (Telegram, Slack, email, and webhook) and
+  analogous adapters shipped as plugins.
+- **Plugin network surfaces.** Any installed plugin that binds a
+  listening socket or calls an external service.
 - **The TUI gateway (`tui_gateway/`).** JSON-RPC backend for the
   Ink terminal UI, reached over local IPC.
 
@@ -193,9 +190,9 @@ authorization model, but the rules below apply uniformly.
    trust boundary.** For messaging and network HTTP surfaces, the
    boundary is the network: authorization means an operator-
    configured caller allowlist. For editor and local-IPC surfaces
-   (ACP, TUI gateway), the boundary is the host's user account:
+   (such as the TUI gateway), the boundary is the host's user account:
    authorization means relying on OS-level access control (file
-   permissions, loopback-only binds) and not exposing the surface
+   permissions) and not exposing the surface
    beyond the local user without an explicit network auth layer.
 2. **An allowlist is required for every enabled network-exposed
    adapter.** Adapters must refuse to dispatch agent work, resolve

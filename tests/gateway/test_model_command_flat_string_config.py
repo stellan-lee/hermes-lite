@@ -43,13 +43,13 @@ def _fake_switch_result():
 
     return ModelSwitchResult(
         success=True,
-        new_model="gpt-5.5",
-        target_provider="openrouter",
+        new_model="local-model",
+        target_provider="custom",
         provider_changed=True,
-        api_key="sk-test",
-        base_url="https://openrouter.ai/api/v1",
+        api_key="no-key-required",
+        base_url="http://127.0.0.1:8080/v1",
         api_mode="chat_completions",
-        provider_label="OpenRouter",
+        provider_label="Custom",
         is_global=True,
     )
 
@@ -67,7 +67,6 @@ def _setup_isolated_home(tmp_path, monkeypatch, model_yaml_value):
     )
 
     monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
     monkeypatch.setattr(
         "hermes_cli.model_switch.switch_model",
         lambda **kw: _fake_switch_result(),
@@ -88,21 +87,21 @@ async def test_model_global_persists_when_config_has_flat_string_model(tmp_path,
     cfg_path = _setup_isolated_home(tmp_path, monkeypatch, "deepseek-v4-flash")
 
     result = await _make_runner()._handle_model_command(
-        _make_event("/model gpt-5.5 --global")
+        _make_event("/model local-model --global")
     )
 
     # Sanity: the handler returned a success-looking message (not a crash log).
     assert result is not None
-    assert "gpt-5.5" in result
+    assert "local-model" in result
 
     # The persist block must have rewritten config.yaml as a nested dict.
     written = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     assert isinstance(written["model"], dict), (
         "model: should be coerced to a dict, got %r" % (written["model"],)
     )
-    assert written["model"]["default"] == "gpt-5.5"
-    assert written["model"]["provider"] == "openrouter"
-    assert written["model"]["base_url"] == "https://openrouter.ai/api/v1"
+    assert written["model"]["default"] == "local-model"
+    assert written["model"]["provider"] == "custom"
+    assert written["model"]["base_url"] == "http://127.0.0.1:8080/v1"
 
 
 @pytest.mark.asyncio
@@ -118,7 +117,6 @@ async def test_model_global_persists_when_config_has_missing_model(tmp_path, mon
     cfg_path.write_text(yaml.safe_dump({"providers": {}}), encoding="utf-8")
 
     monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
     monkeypatch.setattr(
         "hermes_cli.model_switch.switch_model",
         lambda **kw: _fake_switch_result(),
@@ -127,14 +125,14 @@ async def test_model_global_persists_when_config_has_missing_model(tmp_path, mon
     monkeypatch.setattr("hermes_cli.config.get_hermes_home", lambda: hermes_home)
 
     result = await _make_runner()._handle_model_command(
-        _make_event("/model gpt-5.5 --global")
+        _make_event("/model local-model --global")
     )
 
     assert result is not None
     written = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     assert isinstance(written["model"], dict)
-    assert written["model"]["default"] == "gpt-5.5"
-    assert written["model"]["provider"] == "openrouter"
+    assert written["model"]["default"] == "local-model"
+    assert written["model"]["provider"] == "custom"
 
 
 @pytest.mark.asyncio
@@ -149,10 +147,10 @@ async def test_model_global_persists_when_config_has_proper_dict_model(tmp_path,
     )
 
     result = await _make_runner()._handle_model_command(
-        _make_event("/model gpt-5.5 --global")
+        _make_event("/model local-model --global")
     )
 
     assert result is not None
     written = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    assert written["model"]["default"] == "gpt-5.5"
-    assert written["model"]["provider"] == "openrouter"
+    assert written["model"]["default"] == "local-model"
+    assert written["model"]["provider"] == "custom"

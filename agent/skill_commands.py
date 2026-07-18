@@ -283,7 +283,7 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
 
         for scan_dir in dirs_to_scan:
             for skill_md in iter_skill_index_files(scan_dir, "SKILL.md"):
-                if any(part in {'.git', '.github', '.hub', '.archive'} for part in skill_md.parts):
+                if any(part in {'.git', '.github', '.archive'} for part in skill_md.parts):
                     continue
                 try:
                     content = skill_md.read_text(encoding='utf-8')
@@ -470,54 +470,3 @@ def build_skill_invocation_message(
         runtime_note=runtime_note,
         session_id=task_id,
     )
-
-
-def build_preloaded_skills_prompt(
-    skill_identifiers: list[str],
-    task_id: str | None = None,
-) -> tuple[str, list[str], list[str]]:
-    """Load one or more skills for session-wide CLI preloading.
-
-    Returns (prompt_text, loaded_skill_names, missing_identifiers).
-    """
-    prompt_parts: list[str] = []
-    loaded_names: list[str] = []
-    missing: list[str] = []
-
-    seen: set[str] = set()
-    for raw_identifier in skill_identifiers:
-        identifier = (raw_identifier or "").strip()
-        if not identifier or identifier in seen:
-            continue
-        seen.add(identifier)
-
-        loaded = _load_skill_payload(identifier, task_id=task_id)
-        if not loaded:
-            missing.append(identifier)
-            continue
-
-        loaded_skill, skill_dir, skill_name = loaded
-
-        # Track active usage for Curator lifecycle management (#17782)
-        try:
-            from tools.skill_usage import bump_use
-            bump_use(skill_name)
-        except Exception:
-            pass  # Non-critical
-
-        activation_note = (
-            f'[IMPORTANT: The user launched this CLI session with the "{skill_name}" skill '
-            "preloaded. Treat its instructions as active guidance for the duration of this "
-            "session unless the user overrides them.]"
-        )
-        prompt_parts.append(
-            _build_skill_message(
-                loaded_skill,
-                skill_dir,
-                activation_note,
-                session_id=task_id,
-            )
-        )
-        loaded_names.append(skill_name)
-
-    return "\n\n".join(prompt_parts), loaded_names, missing

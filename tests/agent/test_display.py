@@ -159,11 +159,10 @@ class TestCuteToolMessagePreviewLength:
 
         assert "[error]" not in line
 
-    def test_patch_lsp_diagnostics_result_is_not_marked_failed(self):
+    def test_successful_patch_result_is_not_marked_failed(self):
         result = json.dumps({
             "success": True,
             "diff": "--- a/tmp.py\n+++ b/tmp.py\n",
-            "lsp_diagnostics": "<diagnostics>ERROR [1:1] type mismatch</diagnostics>",
         })
 
         line = get_cute_tool_message("patch", {"path": "/tmp/a.py"}, 0.1, result=result)

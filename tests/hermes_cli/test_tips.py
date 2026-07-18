@@ -6,8 +6,8 @@ from hermes_cli.tips import TIPS, get_random_tip
 class TestTipsCorpus:
     """Validate the tip corpus itself."""
 
-    def test_has_at_least_200_tips(self):
-        assert len(TIPS) >= 200, f"Expected 200+ tips, got {len(TIPS)}"
+    def test_has_at_least_50_tips(self):
+        assert len(TIPS) >= 50, f"Expected 50+ retained tips, got {len(TIPS)}"
 
     def test_no_duplicates(self):
         assert len(TIPS) == len(set(TIPS)), "Duplicate tips found"

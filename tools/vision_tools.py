@@ -3,8 +3,8 @@
 Vision Tools Module
 
 This module provides vision analysis tools that work with image URLs.
-Uses the centralized auxiliary vision router, which can select OpenRouter,
-Nous, Codex, native Anthropic, or a custom OpenAI-compatible endpoint.
+Uses the centralized auxiliary vision router for Codex or a custom/local
+OpenAI-compatible endpoint.
 
 Available tools:
 - vision_analyze_tool: Analyze images from URLs with custom prompts
@@ -463,20 +463,9 @@ def _supports_media_in_tool_results(provider: str, model: str) -> bool:
     """Whether the given provider+model combination accepts image content
     inside a tool-result message.
 
-    Providers covered today (per spec docs verified Apr-2026):
-
-      * Anthropic Messages API (``anthropic`` provider, plus aggregators that
-        proxy Claude — ``openrouter``, ``nous``, ``vertex``, ``bedrock``):
-        ``tool_result`` blocks accept ``image`` content blocks.
-      * OpenAI Chat Completions: tool messages accept array content with
-        ``image_url`` parts.
-      * OpenAI Responses (``openai-codex``): ``function_call_output.output``
-        accepts an array of ``input_text``/``input_image`` items.
-      * Gemini 3 (and proxied via aggregators): supports multimodal tool
-        results. Older Gemini does NOT.
-
-    For unknown / legacy providers we conservatively return False — the
-    caller falls back to the legacy aux-LLM text path.
+    Codex Responses and retained OpenAI-compatible local endpoints both accept
+    the normalized multimodal result shape. Unknown plugin providers fall back
+    to the auxiliary vision text path.
     """
     if not isinstance(provider, str):
         return False
@@ -484,39 +473,7 @@ def _supports_media_in_tool_results(provider: str, model: str) -> bool:
     if not p:
         return False
 
-    # Aggregators that route to multiple vendors — assume support since
-    # users on these aggregators are typically using vision-capable
-    # frontier models. Falling back to text would be a regression for
-    # them.
-    _AGGREGATORS = {
-        "openrouter", "nous", "vertex", "bedrock", "anthropic-vertex",
-        "google-vertex",
-    }
-    if p in _AGGREGATORS:
-        return True
-
-    # Native Anthropic
-    if p in {"anthropic", "claude", "anthropic-direct"}:
-        return True
-
-    # OpenAI Chat Completions and Responses
-    if p in {"openai", "openai-chat", "openai-codex", "azure-openai"}:
-        return True
-
-    # Gemini — gate on model name; older Gemini variants did not support
-    # multimodal functionResponse. Gemini 3.x does.
-    if p in {"google", "gemini", "google-gemini", "google-vertex-gemini"}:
-        if not isinstance(model, str):
-            return False
-        m = model.strip().lower()
-        if "gemini-3" in m or "gemini-pro-3" in m or "gemini-flash-3" in m:
-            return True
-        return False
-
-    # Other vision-capable provider stacks. Conservative default: False.
-    # Add explicit entries here as we verify each provider's tool-result
-    # multimodal support empirically.
-    return False
+    return p in {"openai-codex", "custom", "local", "lmstudio", "ollama"}
 
 
 def _should_use_native_vision_fast_path() -> bool:
@@ -723,7 +680,7 @@ async def vision_analyze_tool(
     
     This tool accepts either an HTTP/HTTPS URL or a local file path. For URLs,
     it downloads the image first. In both cases, the image is converted to base64
-    and processed using Gemini 3 Flash Preview via OpenRouter API.
+    and processed through the configured retained vision runtime.
     
     The user_prompt parameter is expected to be pre-formatted by the calling
     function (typically model_tools.py) to include both full description
@@ -733,7 +690,7 @@ async def vision_analyze_tool(
         image_url (str): The URL or local file path of the image to analyze.
                          Accepts http://, https:// URLs or absolute/relative file paths.
         user_prompt (str): The pre-formatted prompt for the vision model
-        model (str): The vision model to use (default: google/gemini-3-flash-preview)
+        model (str): Optional model override for a compatible endpoint
     
     Returns:
         str: JSON string containing the analysis results with the following structure:
@@ -999,12 +956,8 @@ async def vision_analyze_tool(
 def check_vision_requirements() -> bool:
     """Check if the configured runtime vision path can resolve a client.
 
-    Mirrors the fallback chain that ``call_llm(task="vision")`` actually uses
-    at runtime: first the explicit ``auxiliary.vision.provider`` (if any),
-    and if that fails, the auto chain (main provider → openrouter → nous).
-    Without the auto-fallback step the tool would disappear from the model's
-    tool list whenever the explicit provider name was unresolvable, even
-    when the auto chain would have served the request (issue #31179).
+    Mirrors ``call_llm(task="vision")``: an explicit retained vision runtime,
+    then the active Codex/custom runtime.
     """
     try:
         from agent.auxiliary_client import resolve_vision_provider_client
@@ -1035,7 +988,7 @@ if __name__ == "__main__":
     
     if not api_available:
         print("❌ No auxiliary vision model available")
-        print("Configure a supported multimodal backend (OpenRouter, Nous, Codex, Anthropic, or a custom OpenAI-compatible endpoint).")
+        print("Configure Codex or a multimodal custom/local OpenAI-compatible endpoint.")
         sys.exit(1)
     else:
         print("✅ Vision model available")
@@ -1140,367 +1093,4 @@ registry.register(
     check_fn=check_vision_requirements,
     is_async=True,
     emoji="👁️",
-)
-
-
-# ---------------------------------------------------------------------------
-# Video Analysis Tool
-# ---------------------------------------------------------------------------
-
-# Extension → MIME. avi/mkv fall back to mp4.
-_VIDEO_MIME_TYPES = {
-    ".mp4": "video/mp4",
-    ".webm": "video/webm",
-    ".mov": "video/mov",
-    ".avi": "video/mp4",
-    ".mkv": "video/mp4",
-    ".mpeg": "video/mpeg",
-    ".mpg": "video/mpeg",
-}
-
-_MAX_VIDEO_BASE64_BYTES = 50 * 1024 * 1024  # 50 MB hard cap
-_VIDEO_SIZE_WARN_BYTES = 20 * 1024 * 1024
-
-
-def _detect_video_mime_type(video_path: Path) -> Optional[str]:
-    """Return a video MIME type based on file extension, or None if unsupported."""
-    ext = video_path.suffix.lower()
-    return _VIDEO_MIME_TYPES.get(ext)
-
-
-def _video_to_base64_data_url(video_path: Path, mime_type: Optional[str] = None) -> str:
-    """Convert a video file to a base64-encoded data URL."""
-    data = video_path.read_bytes()
-    encoded = base64.b64encode(data).decode("ascii")
-    mime = mime_type or _VIDEO_MIME_TYPES.get(video_path.suffix.lower(), "video/mp4")
-    return f"data:{mime};base64,{encoded}"
-
-
-async def _download_video(video_url: str, destination: Path, max_retries: int = 3) -> Path:
-    """Download video from URL with SSRF protection and retry."""
-    import asyncio
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
-    async def _ssrf_redirect_guard(response):
-        if response.is_redirect and response.next_request:
-            redirect_url = str(response.next_request.url)
-            from tools.url_safety import is_safe_url
-            if not is_safe_url(redirect_url):
-                raise ValueError(
-                    f"Blocked redirect to private/internal address: {redirect_url}"
-                )
-
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            blocked = check_website_access(video_url)
-            if blocked:
-                raise PermissionError(blocked["message"])
-
-            async with httpx.AsyncClient(
-                timeout=60.0,
-                follow_redirects=True,
-                event_hooks={"response": [_ssrf_redirect_guard]},
-            ) as client:
-                response = await client.get(
-                    video_url,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "Accept": "video/*,*/*;q=0.8",
-                    },
-                )
-                response.raise_for_status()
-
-                cl = response.headers.get("content-length")
-                if cl and int(cl) > _MAX_VIDEO_BASE64_BYTES:
-                    raise ValueError(
-                        f"Video too large ({int(cl)} bytes, max {_MAX_VIDEO_BASE64_BYTES})"
-                    )
-
-                final_url = str(response.url)
-                blocked = check_website_access(final_url)
-                if blocked:
-                    raise PermissionError(blocked["message"])
-
-                body = response.content
-                if len(body) > _MAX_VIDEO_BASE64_BYTES:
-                    raise ValueError(
-                        f"Video too large ({len(body)} bytes, max {_MAX_VIDEO_BASE64_BYTES})"
-                    )
-                destination.write_bytes(body)
-
-            return destination
-        except Exception as e:
-            last_error = e
-            if attempt < max_retries - 1:
-                wait_time = 2 ** (attempt + 1)
-                logger.warning("Video download failed (attempt %s/%s): %s", attempt + 1, max_retries, str(e)[:50])
-                await asyncio.sleep(wait_time)
-            else:
-                logger.error(
-                    "Video download failed after %s attempts: %s",
-                    max_retries, str(e)[:100], exc_info=True,
-                )
-
-    if last_error is None:
-        raise RuntimeError(
-            f"_download_video exited retry loop without attempting (max_retries={max_retries})"
-        )
-    raise last_error
-
-
-async def video_analyze_tool(
-    video_url: str,
-    user_prompt: str,
-    model: str = None,
-) -> str:
-    """Analyze a video via multimodal LLM. Returns JSON {success, analysis}."""
-    if not isinstance(user_prompt, str):
-        user_prompt = str(user_prompt) if user_prompt is not None else ""
-    debug_call_data = {
-        "parameters": {
-            "video_url": video_url,
-            "user_prompt": user_prompt[:200] + "..." if len(user_prompt) > 200 else user_prompt,
-            "model": model,
-        },
-        "error": None,
-        "success": False,
-        "analysis_length": 0,
-        "model_used": model,
-        "video_size_bytes": 0,
-    }
-
-    temp_video_path = None
-    should_cleanup = True
-
-    try:
-        from tools.interrupt import is_interrupted
-        if is_interrupted():
-            return tool_error("Interrupted", success=False)
-
-        logger.info("Analyzing video: %s", video_url[:60])
-        logger.info("User prompt: %s", user_prompt[:100])
-
-        # Resolve local path vs remote URL
-        resolved_url = video_url
-        if resolved_url.startswith("file://"):
-            resolved_url = resolved_url[len("file://"):]
-        local_path = Path(os.path.expanduser(resolved_url))
-
-        if local_path.is_file():
-            logger.info("Using local video file: %s", video_url)
-            temp_video_path = local_path
-            should_cleanup = False
-        elif _validate_image_url(video_url):
-            blocked = check_website_access(video_url)
-            if blocked:
-                raise PermissionError(blocked["message"])
-            temp_dir = get_hermes_dir("cache/video", "temp_video_files")
-            temp_video_path = temp_dir / f"temp_video_{uuid.uuid4()}.mp4"
-            await _download_video(video_url, temp_video_path)
-            should_cleanup = True
-        else:
-            raise ValueError(
-                "Invalid video source. Provide an HTTP/HTTPS URL or a valid local file path."
-            )
-
-        video_size_bytes = temp_video_path.stat().st_size
-        video_size_mb = video_size_bytes / (1024 * 1024)
-        logger.info("Video ready (%.1f MB)", video_size_mb)
-
-        detected_mime = _detect_video_mime_type(temp_video_path)
-        if not detected_mime:
-            raise ValueError(
-                f"Unsupported video format: '{temp_video_path.suffix}'. "
-                f"Supported: {', '.join(sorted(_VIDEO_MIME_TYPES.keys()))}"
-            )
-
-        if video_size_bytes > _VIDEO_SIZE_WARN_BYTES:
-            logger.warning("Video is %.1f MB — may be slow or rejected", video_size_mb)
-
-        video_data_url = _video_to_base64_data_url(temp_video_path, mime_type=detected_mime)
-        data_size_mb = len(video_data_url) / (1024 * 1024)
-
-        if len(video_data_url) > _MAX_VIDEO_BASE64_BYTES:
-            raise ValueError(
-                f"Video too large for API: base64 payload is {data_size_mb:.1f} MB "
-                f"(limit {_MAX_VIDEO_BASE64_BYTES / (1024 * 1024):.0f} MB). "
-                f"Compress or trim the video and retry."
-            )
-
-        debug_call_data["video_size_bytes"] = video_size_bytes
-
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": user_prompt,
-                    },
-                    {
-                        "type": "video_url",
-                        "video_url": {
-                            "url": video_data_url,
-                        },
-                    },
-                ],
-            }
-        ]
-
-        vision_timeout = 180.0
-        vision_temperature = 0.1
-        try:
-            from hermes_cli.config import cfg_get, load_config
-            _cfg = load_config()
-            _vision_cfg = cfg_get(_cfg, "auxiliary", "vision", default={})
-            _vt = _vision_cfg.get("timeout")
-            if _vt is not None:
-                vision_timeout = max(float(_vt), 180.0)
-            _vtemp = _vision_cfg.get("temperature")
-            if _vtemp is not None:
-                vision_temperature = float(_vtemp)
-        except Exception:
-            pass
-
-        call_kwargs = {
-            "task": "vision",
-            "messages": messages,
-            "temperature": vision_temperature,
-            "max_tokens": 4000,
-            "timeout": vision_timeout,
-        }
-        if model:
-            call_kwargs["model"] = model
-
-        response = await async_call_llm(**call_kwargs)
-        analysis = extract_content_or_reasoning(response)
-
-        if not analysis:
-            logger.warning("Empty video response, retrying once")
-            response = await async_call_llm(**call_kwargs)
-            analysis = extract_content_or_reasoning(response)
-
-        analysis_length = len(analysis) if analysis else 0
-        logger.info("Video analysis completed (%s characters)", analysis_length)
-
-        result = {
-            "success": True,
-            "analysis": analysis or "There was a problem with the request and the video could not be analyzed.",
-        }
-
-        debug_call_data["success"] = True
-        debug_call_data["analysis_length"] = analysis_length
-        _debug.log_call("video_analyze_tool", debug_call_data)
-        _debug.save()
-
-        return json.dumps(result, indent=2, ensure_ascii=False)
-
-    except Exception as e:
-        error_msg = f"Error analyzing video: {str(e)}"
-        logger.error("%s", error_msg, exc_info=True)
-
-        err_str = str(e).lower()
-        if any(hint in err_str for hint in (
-            "402", "insufficient", "payment required", "credits", "billing",
-        )):
-            analysis = (
-                "Insufficient credits or payment required. Please top up your "
-                f"API provider account and try again. Error: {e}"
-            )
-        elif any(hint in err_str for hint in (
-            "does not support", "not support video",
-            "content_policy", "multimodal",
-            "unrecognized request argument", "video input",
-            "video_url",
-        )):
-            analysis = (
-                f"The model does not support video analysis or the request was "
-                f"rejected. Ensure you're using a video-capable model "
-                f"(e.g. google/gemini-2.5-flash). Error: {e}"
-            )
-        elif any(hint in err_str for hint in (
-            "too large", "payload", "413", "content_too_large",
-            "request_too_large", "exceeds", "size limit",
-        )):
-            analysis = (
-                "The video is too large for the API. Try compressing or trimming "
-                f"the video (max ~50 MB). Error: {e}"
-            )
-        else:
-            analysis = (
-                "There was a problem with the request and the video could not "
-                f"be analyzed. Error: {e}"
-            )
-
-        result = {
-            "success": False,
-            "error": error_msg,
-            "analysis": analysis,
-        }
-
-        debug_call_data["error"] = error_msg
-        _debug.log_call("video_analyze_tool", debug_call_data)
-        _debug.save()
-
-        return json.dumps(result, indent=2, ensure_ascii=False)
-
-    finally:
-        if should_cleanup and temp_video_path and temp_video_path.exists():
-            try:
-                temp_video_path.unlink()
-                logger.debug("Cleaned up temporary video file")
-            except Exception as cleanup_error:
-                logger.warning(
-                    "Could not delete temporary file: %s", cleanup_error, exc_info=True
-                )
-
-
-VIDEO_ANALYZE_SCHEMA = {
-    "name": "video_analyze",
-    "description": (
-        "Analyze a video from a URL or local file path using a multimodal AI model. "
-        "Sends the video to a video-capable model (e.g. Gemini) for understanding. "
-        "Use this for video files — for images, use vision_analyze instead. "
-        "Supports mp4, webm, mov, avi, mkv, mpeg formats. "
-        "Note: large videos (>20 MB) may be slow; max ~50 MB."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "video_url": {
-                "type": "string",
-                "description": "Video URL (http/https) or local file path to analyze.",
-            },
-            "question": {
-                "type": "string",
-                "description": "Your specific question about the video. The AI will describe what happens in the video and answer your question.",
-            },
-        },
-        "required": ["video_url", "question"],
-    },
-}
-
-
-def _handle_video_analyze(args: Dict[str, Any], **kw: Any) -> Awaitable[str]:
-    video_url = args.get("video_url", "")
-    question = args.get("question", "")
-    full_prompt = (
-        "Fully describe and explain everything happening in this video, "
-        "including visual content, motion, audio cues, text overlays, and scene "
-        f"transitions. Then answer the following question:\n\n{question}"
-    )
-    model = os.getenv("AUXILIARY_VIDEO_MODEL", "").strip() or os.getenv("AUXILIARY_VISION_MODEL", "").strip() or None
-    return video_analyze_tool(video_url, full_prompt, model)
-
-
-registry.register(
-    name="video_analyze",
-    toolset="video",
-    schema=VIDEO_ANALYZE_SCHEMA,
-    handler=_handle_video_analyze,
-    check_fn=check_vision_requirements,
-    is_async=True,
-    emoji="🎬",
 )

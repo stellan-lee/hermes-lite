@@ -10,8 +10,8 @@
 # Distribution: browser 97%, web 20%, vision 12%, terminal 15%
 #
 # Prerequisites:
-#   - OPENROUTER_API_KEY in ~/.hermes/.env
-#   - BROWSERBASE_API_KEY in ~/.hermes/.env (for browser tools)
+#   - A configured Codex or custom/local compatible runtime
+#   - A locally available browser or configured CDP endpoint
 #   - A dataset JSONL file with one {"prompt": "..."} per line
 #
 # Usage:
@@ -34,8 +34,6 @@ python batch_runner.py \
   --batch_size=5 \
   --run_name="browser_tasks_example" \
   --distribution="browser_tasks" \
-  --model="anthropic/claude-sonnet-4" \
-  --base_url="https://openrouter.ai/api/v1" \
   --num_workers=3 \
   --max_turns=30 \
   --ephemeral_system_prompt="You are an AI assistant with browser automation capabilities. Your primary task is to navigate and interact with web pages to accomplish user goals.
@@ -60,6 +58,5 @@ echo "✅ Done. Log: $LOG_FILE"
 #   --verbose                 Enable detailed logging
 #   --max_tokens=63000        Set max response tokens
 #   --reasoning_disabled      Disable model thinking/reasoning tokens
-#   --providers_allowed="anthropic,google"  Restrict to specific providers
 #   --prefill_messages_file="configs/prefill.json"  Few-shot priming
 # =============================================================================

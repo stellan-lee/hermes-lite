@@ -22,7 +22,6 @@ def _make_runner():
     runner = object.__new__(gateway_run.GatewayRunner)
     runner._session_model_overrides = {}
     runner._last_resolved_model = {}
-    runner._service_tier = None
     runner._agent_cache = {}
     runner._agent_cache_lock = threading.Lock()
     return runner
@@ -103,7 +102,6 @@ def test_bare_runner_without_cache_attr_does_not_crash(monkeypatch):
     _patch_resolution(monkeypatch, model_from_config="deepseek/deepseek-v4-flash")
     runner = object.__new__(gateway_run.GatewayRunner)
     runner._session_model_overrides = {}
-    runner._service_tier = None
     # Deliberately omit _last_resolved_model.
 
     model, _ = runner._resolve_session_agent_runtime(session_key="x", user_config={"model": {}})

@@ -23,22 +23,14 @@ from hermes_constants import get_hermes_home
 from typing import Any, Optional
 from utils import atomic_json_write
 
-if sys.platform == "win32":
-    import msvcrt
-else:
-    import fcntl
+import fcntl
 
 _GATEWAY_KIND = "hermes-gateway"
 _RUNTIME_STATUS_FILE = "gateway_state.json"
 _LOCKS_DIRNAME = "gateway-locks"
-_IS_WINDOWS = sys.platform == "win32"
 _UNSET = object()
 _GATEWAY_LOCK_FILENAME = "gateway.lock"
 _gateway_lock_handle = None
-# Windows byte-range locks are mandatory for other readers. Lock a byte well
-# past the JSON payload so runtime status / PID readers can still read the file
-# while another process holds the mutual-exclusion lock.
-_WINDOWS_LOCK_OFFSET = 1024 * 1024
 
 
 def _get_pid_path() -> Path:
@@ -74,28 +66,7 @@ def _utc_now_iso() -> str:
 
 
 def terminate_pid(pid: int, *, force: bool = False) -> None:
-    """Terminate a PID with platform-appropriate force semantics.
-
-    POSIX uses SIGTERM/SIGKILL. Windows uses taskkill /T /F for true force-kill
-    because os.kill(..., SIGTERM) is not equivalent to a tree-killing hard stop.
-    """
-    if force and _IS_WINDOWS:
-        try:
-            result = subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except FileNotFoundError:
-            os.kill(pid, signal.SIGTERM)
-            return
-
-        if result.returncode != 0:
-            details = (result.stderr or result.stdout or "").strip()
-            raise OSError(details or f"taskkill failed for PID {pid}")
-        return
-
+    """Terminate a PID with SIGTERM or SIGKILL."""
     sig = signal.SIGTERM if not force else getattr(signal, "SIGKILL", signal.SIGTERM)
     os.kill(pid, sig)
 
@@ -128,7 +99,6 @@ def _read_process_cmdline(pid: int) -> Optional[str]:
 
     On Linux, reads /proc/<pid>/cmdline directly.  On macOS and other
     platforms without /proc, falls back to ``ps -p <pid> -o command=``.
-    On Windows (no /proc, no ps), uses psutil.
     """
     cmdline_path = Path(f"/proc/{pid}/cmdline")
     try:
@@ -151,7 +121,7 @@ def _read_process_cmdline(pid: int) -> Optional[str]:
     except (OSError, subprocess.TimeoutExpired):
         pass
 
-    # Windows fallback: psutil (already used by _pid_exists)
+    # Final fallback when ``ps`` is unavailable.
     try:
         import psutil  # type: ignore
         proc = psutil.Process(pid)
@@ -189,8 +159,7 @@ def _record_looks_like_gateway(record: dict[str, Any]) -> bool:
     if not isinstance(argv, list) or not argv:
         return False
 
-    # Normalize Windows backslashes so patterns match cross-platform.
-    cmdline = " ".join(str(part) for part in argv).replace("\\", "/")
+    cmdline = " ".join(str(part) for part in argv)
     patterns = (
         "hermes_cli.main gateway",
         "hermes_cli/main.py gateway",
@@ -318,102 +287,33 @@ def _write_gateway_lock_record(handle) -> None:
 
 def _try_acquire_file_lock(handle) -> bool:
     try:
-        if _IS_WINDOWS:
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write("\n")
-                handle.flush()
-            handle.seek(_WINDOWS_LOCK_OFFSET)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         return True
     except (BlockingIOError, OSError):
         return False
 
 
 def _pid_exists(pid: int) -> bool:
-    """Cross-platform "is this PID alive" check that does NOT kill the target.
-
-    CRITICAL on Windows: Python's ``os.kill(pid, 0)`` is NOT a no-op like it
-    is on POSIX. CPython's Windows implementation
-    (``Modules/posixmodule.c::os_kill_impl``) treats ``sig=0`` as
-    ``CTRL_C_EVENT`` because the two values collide at the C level, and
-    routes it through ``GenerateConsoleCtrlEvent(0, pid)`` — which sends
-    a Ctrl+C to the entire console process group containing the target
-    PID, not just the PID itself. Any caller that wanted to "check if
-    this PID is alive" via ``os.kill(pid, 0)`` on Windows was silently
-    killing that process (and often unrelated processes in the same
-    console group). Long-standing Python quirk; see bpo-14484.
-
-    Implementation: prefer :mod:`psutil` (hard dependency — the canonical
-    cross-platform answer, maintained by Giampaolo Rodolà, uses
-    ``OpenProcess + GetExitCodeProcess`` on Windows internally). Fall back
-    to a hand-rolled ctypes ``OpenProcess`` / ``WaitForSingleObject`` pair
-    on Windows + ``os.kill(pid, 0)`` on POSIX if psutil is somehow
-    unavailable — e.g. stripped-down install or import error during the
-    scaffold phase before ``psutil`` is pip-installed.
-    """
+    """Return whether a PID is alive without terminating it."""
     try:
         import psutil  # type: ignore
         return bool(psutil.pid_exists(int(pid)))
     except ImportError:
-        pass  # Fall through to stdlib fallback.
+        pass
 
-    if _IS_WINDOWS:
-        try:
-            import ctypes
-            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-            # Pin return types — default ctypes restype is c_int (signed),
-            # which mangles WAIT_* DWORD return codes into negative numbers.
-            kernel32.OpenProcess.restype = ctypes.c_void_p
-            kernel32.WaitForSingleObject.restype = ctypes.c_uint
-            kernel32.GetLastError.restype = ctypes.c_uint
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            SYNCHRONIZE = 0x100000  # required for WaitForSingleObject
-            WAIT_TIMEOUT = 0x00000102
-            ERROR_INVALID_PARAMETER = 87
-            ERROR_ACCESS_DENIED = 5
-            handle = kernel32.OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, int(pid)
-            )
-            if not handle:
-                err = kernel32.GetLastError()
-                if err == ERROR_INVALID_PARAMETER:
-                    return False  # PID definitely gone
-                if err == ERROR_ACCESS_DENIED:
-                    return True   # Exists but owned by another user/session
-                return False      # Conservative default for unknown errors
-            try:
-                wait_result = kernel32.WaitForSingleObject(handle, 0)
-                # WAIT_TIMEOUT = still running; anything else (WAIT_OBJECT_0
-                # via exit, WAIT_FAILED via handle issue) = treat as gone.
-                return wait_result == WAIT_TIMEOUT
-            finally:
-                kernel32.CloseHandle(handle)
-        except (OSError, AttributeError):
-            return False
-    else:
-        try:
-            os.kill(int(pid), 0)  # windows-footgun: ok — POSIX-only branch (the whole point of _pid_exists)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            # Process exists but we can't signal it — still alive.
-            return True
-        except OSError:
-            return False
-
-
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
 
 def _release_file_lock(handle) -> None:
     try:
-        if _IS_WINDOWS:
-            handle.seek(_WINDOWS_LOCK_OFFSET)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     except OSError:
         pass
 
@@ -623,10 +523,9 @@ def acquire_scoped_lock(scope: str, identity: str, metadata: Optional[dict[str, 
                     and current_start != existing.get("start_time")
                 ):
                     stale = True
-                # When start_time comparison is unavailable (macOS / Windows
-                # have no /proc, so both sides are None), fall back to
-                # checking the live process command line.  When cmdline is
-                # also unreadable (Windows has no ps), consult the lock
+                # When start_time comparison is unavailable (macOS has no
+                # /proc), fall back to checking the live process command line.
+                # When cmdline is also unreadable, consult the lock
                 # record's own argv — the gateway writes it at startup and
                 # it's the only identity signal on platforms without ps.
                 # Both oracles must indicate "not a gateway" to mark stale.
@@ -818,12 +717,9 @@ def _consume_pid_marker_for_self(
     our_start_time = _get_process_start_time(our_pid)
     # Start-time is a PID-reuse guard. It is only meaningful when both
     # sides actually have it: ``_get_process_start_time`` returns None on
-    # platforms without ``/proc`` (macOS, native Windows — the very
-    # platform the planned-stop watcher exists for). Requiring a non-None
-    # match there would make every consume return False, so a legitimate
-    # ``hermes gateway stop`` on Windows would be misclassified as an
-    # unexpected ``UNKNOWN`` exit (exit 1) and revived by the service
-    # manager. So: when both start_times are known they must match; when
+    # platforms without ``/proc`` such as macOS. Requiring a non-None
+    # match there would make every consume return False. When both
+    # start_times are known they must match; when
     # either is unknown, fall back to PID equality alone (bounded by the
     # marker's short TTL). This mirrors ``planned_stop_marker_targets_self``
     # so the watcher's non-destructive probe and this authoritative
@@ -988,11 +884,8 @@ def planned_stop_marker_targets_self() -> bool:
 
     # Start-time is a PID-reuse guard. It is only meaningful when both
     # sides actually have it: ``_get_process_start_time`` returns None on
-    # platforms without ``/proc`` (macOS, native Windows — the very
-    # platform this watcher exists for). Requiring a non-None match there
-    # would make the watcher never fire and re-break the #33778 Windows
-    # session-resume path. So: when both start_times are known they must
-    # match; when either is unknown, fall back to PID equality alone
+    # platforms without ``/proc`` such as macOS. When both start_times are
+    # known they must match; when either is unknown, fall back to PID equality alone
     # (the marker is short-lived under a 60s TTL, bounding reuse risk).
     our_start_time = _get_process_start_time(our_pid)
     if target_start_time is not None and our_start_time is not None:

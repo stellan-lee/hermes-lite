@@ -2,7 +2,7 @@
 Lazy dependency installer for opt-in Hermes Agent backends.
 
 Many Hermes features (Mistral TTS, ElevenLabs TTS, Honcho memory, Bedrock,
-Slack, Matrix, etc.) require Python packages that not every user needs. The
+Slack and other optional integrations) require Python packages that not every user needs. The
 historical approach was to bundle them all under ``pyproject.toml`` extras
 (``hermes-agent[all]``) and install them eagerly at setup time. That has
 two problems:
@@ -75,22 +75,7 @@ logger = logging.getLogger(__name__)
 
 
 LAZY_DEPS: dict[str, tuple[str, ...]] = {
-    # ─── Inference providers ───────────────────────────────────────────────
-    # Native Anthropic SDK — needed when provider=anthropic (not via
-    # OpenRouter / aggregators which use the openai SDK).
-    "provider.anthropic": ("anthropic==0.87.0",),  # CVE-2026-34450, CVE-2026-34452
-    # AWS Bedrock provider
-    "provider.bedrock": ("boto3==1.42.89",),
-    # Microsoft Foundry — Entra ID auth (managed identity, workload identity,
-    # service principal, az login, VS Code, azd, PowerShell). Only loaded
-    # when model.auth_mode=entra_id is selected; key-based azure-foundry
-    # users never pay this import.
-    "provider.azure_identity": ("azure-identity==1.25.3",),
-
     # ─── Web search backends ───────────────────────────────────────────────
-    "search.exa": ("exa-py==2.10.2",),
-    "search.firecrawl": ("firecrawl-py==4.17.0",),
-    "search.parallel": ("parallel-web==0.4.2",),
 
     # ─── TTS providers ─────────────────────────────────────────────────────
     # Pinned to exact versions to match pyproject.toml's no-ranges policy
@@ -114,11 +99,9 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     ),
 
     # ─── Image generation backends ─────────────────────────────────────────
-    "image.fal": ("fal-client==0.13.1",),
 
     # ─── Memory providers ──────────────────────────────────────────────────
     "memory.honcho": ("honcho-ai==2.0.1",),
-    "memory.hindsight": ("hindsight-client==0.6.1",),
 
     # ─── Messaging platforms (lazy-installable on demand) ──────────────────
     "platform.telegram": ("python-telegram-bot[webhooks]==22.6",),
@@ -133,48 +116,15 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
         "slack-sdk==3.40.1",
         "aiohttp==3.13.4",  # CVE-2026-34513/34518/34519/34520/34525
     ),
-    "platform.matrix": (
-        "mautrix[encryption]==0.21.0",
-        "Markdown==3.10.2",
-        "aiosqlite==0.22.1",
-        "asyncpg==0.31.0",
-        "aiohttp-socks==0.11.0",
-    ),
-    "platform.dingtalk": (
-        "dingtalk-stream==0.24.3",
-        "alibabacloud-dingtalk==2.2.42",
-        "qrcode==7.4.2",
-    ),
     "platform.feishu": (
         "lark-oapi==1.5.3",
         "qrcode==7.4.2",
     ),
-    # WeCom callback-mode adapter — parses untrusted XML POST bodies. Pulls
-    # defusedxml only; aiohttp/httpx are core dependencies of every messaging
-    # adapter and ship via `platform.discord` / `platform.slack` / etc.
-    "platform.wecom_callback": ("defusedxml==0.7.1",),
-
     # ─── Terminal backends ─────────────────────────────────────────────────
-    "terminal.modal": ("modal==1.3.4",),
-    "terminal.daytona": ("daytona==0.155.0",),
 
     # ─── Skills ────────────────────────────────────────────────────────────
-    "skill.google_workspace": (
-        "google-api-python-client==2.194.0",
-        "google-auth-oauthlib==1.3.1",
-        "google-auth-httplib2==0.3.1",
-    ),
-    "skill.youtube": ("youtube-transcript-api==1.2.4",),
 
     # ─── Tools ─────────────────────────────────────────────────────────────
-    # ACP adapter (VS Code / Zed / JetBrains integration)
-    "tool.acp": ("agent-client-protocol==0.9.0",),
-    # Dashboard (`hermes dashboard`)
-    "tool.dashboard": (
-        "fastapi==0.133.1",
-        "uvicorn[standard]==0.41.0",
-        "starlette==1.0.1",  # CVE-2026-48710 (BadHost) — keep lazy-install in sync with pyproject [web]
-    ),
 }
 
 

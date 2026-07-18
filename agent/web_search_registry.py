@@ -16,11 +16,8 @@ The active provider is chosen by configuration with this precedence:
 2. ``web.backend`` (shared fallback).
 3. If exactly one capability-eligible provider is registered AND available,
    use it.
-4. Legacy preference order — ``firecrawl`` → ``parallel`` → ``tavily`` →
-   ``exa`` → ``searxng`` → ``brave-free`` → ``ddgs`` — filtered by
-   availability. Matches the historic ``tools.web_tools._get_backend()``
-   candidate order so installs that never set a config key keep landing
-   on the same provider they did before the plugin migration.
+4. Bundled preference order — ``brave-free`` → ``ddgs`` — filtered by
+   availability.
 5. Otherwise ``None`` — the tool surfaces a helpful error pointing at
    ``hermes tools``.
 
@@ -113,21 +110,9 @@ def _read_config_key(*path: str) -> Optional[str]:
     return None
 
 
-# Legacy preference order — preserves behaviour for users who set no
-# ``web.backend`` / ``web.<capability>_backend`` config key at all. Matches
-# the historic candidate order in :func:`tools.web_tools._get_backend`
-# (paid providers first so existing paid setups don't get downgraded to
-# a free tier on upgrade). Filtered by ``is_available()`` at walk time so
-# we don't surface a provider the user has no credentials for.
-_LEGACY_PREFERENCE = (
-    "firecrawl",
-    "parallel",
-    "tavily",
-    "exa",
-    "searxng",
-    "brave-free",
-    "ddgs",
-)
+# Default preference when no backend is configured. Availability is checked at
+# resolution time so unavailable providers are never surfaced.
+_DEFAULT_PREFERENCE = ("brave-free", "ddgs")
 
 
 def _resolve(configured: Optional[str], *, capability: str) -> Optional[WebSearchProvider]:
@@ -140,24 +125,18 @@ def _resolve(configured: Optional[str], *, capability: str) -> Optional[WebSearc
        provider that supports *capability*, return it even if its
        :meth:`is_available` returns False — the dispatcher will surface a
        precise "X_API_KEY is not set" error to the user instead of silently
-       routing somewhere else. Matches legacy
-       :func:`tools.web_tools._get_backend` behavior for configured names.
+       routing somewhere else.
 
     2. **Single-provider shortcut.** When only one registered provider
        supports *capability* AND ``is_available()`` reports True, return it.
 
-    3. **Legacy preference walk, filtered by availability.** Walk the
-       :data:`_LEGACY_PREFERENCE` order (firecrawl → parallel → tavily →
-       exa → searxng → brave-free → ddgs) looking for a provider whose
+    3. **Default preference walk, filtered by availability.** Walk the
+       :data:`_DEFAULT_PREFERENCE` order looking for a provider whose
        ``supports_<capability>()`` is True AND whose ``is_available()`` is
-       True. Matches the historic ``tools.web_tools._get_backend()``
-       candidate order so users with credentials but no explicit config
-       key keep landing on the same provider as pre-migration. This is
-       the path that fires when no config key is set — pick the
-       highest-priority backend the user actually has credentials for.
+       True.
 
     Returns None when no provider is configured AND no available provider
-    matches the legacy preference; the dispatcher then returns a "set up a
+    matches the default preference; the dispatcher then returns a "set up a
     provider" error to the user.
     """
     with _lock:
@@ -207,8 +186,8 @@ def _resolve(configured: Optional[str], *, capability: str) -> Optional[WebSearc
     if len(eligible) == 1:
         return eligible[0]
 
-    for legacy in _LEGACY_PREFERENCE:
-        provider = snapshot.get(legacy)
+    for preferred in _DEFAULT_PREFERENCE:
+        provider = snapshot.get(preferred)
         if (
             provider is not None
             and _capable(provider)

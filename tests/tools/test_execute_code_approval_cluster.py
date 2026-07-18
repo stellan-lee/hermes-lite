@@ -250,20 +250,19 @@ def test_env_scrub_hermes_allowlist_and_secret_blocks():
         "HERMES_HOME": "/h", "HERMES_PROFILE": "p",
         "HERMES_CONFIG": "/c.yaml", "HERMES_ENV": "/e",
         # other HERMES_* → dropped (broad prefix removed)
-        "HERMES_BASE_URL": "https://x", "HERMES_INTERACTIVE": "1",
-        "HERMES_PROXY_URL": "https://proxy.internal",
+        "HERMES_UNUSED_FLAG": "x", "HERMES_INTERACTIVE": "1",
         # secret substrings (incl. new DSN/WEBHOOK) → dropped
         "SENTRY_DSN": "https://a@s.io/1", "SLACK_WEBHOOK": "https://h/x",
         "OPENAI_API_KEY": "sk", "GITHUB_TOKEN": "ghp",
         # safe prefix → kept; uncategorized → dropped
         "PATH": "/usr/bin", "RANDOM_X": "y",
     }
-    out = _scrub_child_env(env, is_passthrough=lambda _: False, is_windows=False)
+    out = _scrub_child_env(env, is_passthrough=lambda _: False)
 
     for kept in ("HERMES_HOME", "HERMES_PROFILE", "HERMES_CONFIG", "HERMES_ENV", "PATH"):
         assert kept in out, f"{kept} should be kept"
     for dropped in (
-        "HERMES_BASE_URL", "HERMES_INTERACTIVE", "HERMES_PROXY_URL",
+        "HERMES_UNUSED_FLAG", "HERMES_INTERACTIVE",
         "SENTRY_DSN", "SLACK_WEBHOOK", "OPENAI_API_KEY", "GITHUB_TOKEN",
         "RANDOM_X",
     ):
@@ -276,8 +275,7 @@ def test_env_scrub_passthrough_overrides_secret_block():
     from tools.code_execution_tool import _scrub_child_env
 
     env = {"MY_SERVICE_DSN": "value"}
-    out = _scrub_child_env(env, is_passthrough=lambda k: k == "MY_SERVICE_DSN",
-                           is_windows=False)
+    out = _scrub_child_env(env, is_passthrough=lambda k: k == "MY_SERVICE_DSN")
     assert out.get("MY_SERVICE_DSN") == "value"
 
 
@@ -325,19 +323,18 @@ def test_env_scrub_logs_dropped_hermes_vars(caplog):
 
     env = {
         "HERMES_HOME": "/h",          # allowlisted → kept, not logged
-        "HERMES_BASE_URL": "https://x",   # dropped → logged
-        "HERMES_PROXY_URL": "https://proxy.internal",  # dropped → logged
+        "HERMES_UNUSED_FLAG": "x",   # dropped → logged
         "HERMES_API_KEY": "sk",       # secret → dropped silently (not logged)
         "PATH": "/usr/bin",           # safe prefix → kept
     }
     with caplog.at_level(logging.DEBUG, logger="tools.code_execution_tool"):
-        out = _scrub_child_env(env, is_passthrough=lambda _: False, is_windows=False)
+        out = _scrub_child_env(env, is_passthrough=lambda _: False)
 
     assert "HERMES_HOME" in out and "PATH" in out
-    assert "HERMES_BASE_URL" not in out and "HERMES_PROXY_URL" not in out
+    assert "HERMES_UNUSED_FLAG" not in out
 
     msgs = "\n".join(r.getMessage() for r in caplog.records)
-    assert "HERMES_BASE_URL" in msgs and "HERMES_PROXY_URL" in msgs
+    assert "HERMES_UNUSED_FLAG" in msgs
     assert "env_passthrough" in msgs
     # Secret vars are dropped but must NOT be named in the diagnostic log.
     assert "HERMES_API_KEY" not in msgs
@@ -353,6 +350,5 @@ def test_env_scrub_no_log_when_nothing_dropped(caplog):
         _scrub_child_env(
             {"HERMES_HOME": "/h", "PATH": "/usr/bin"},
             is_passthrough=lambda _: False,
-            is_windows=False,
         )
     assert "dropped" not in "\n".join(r.getMessage() for r in caplog.records)

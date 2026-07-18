@@ -67,7 +67,8 @@ class TestTelegramModelPicker:
         )
 
         assert result.success is True
-        assert "MARKDOWN_V2" in repr(sent["parse_mode"])
+        expected = TelegramAdapter.send_model_picker.__globals__["ParseMode"].MARKDOWN_V2
+        assert sent["parse_mode"] == expected
         assert "provider\\_one" in sent["text"]
         assert "`model_1`" in sent["text"]
 
@@ -98,7 +99,8 @@ class TestTelegramModelPicker:
         await adapter._handle_model_picker_callback(query, "mb", "12345")
 
         edit_kwargs = query.edit_message_text.call_args[1]
-        assert "MARKDOWN_V2" in repr(edit_kwargs["parse_mode"])
+        expected = TelegramAdapter._handle_model_picker_callback.__globals__["ParseMode"].MARKDOWN_V2
+        assert edit_kwargs["parse_mode"] == expected
         assert "provider\\_one" in edit_kwargs["text"]
         assert "`model_1`" in edit_kwargs["text"]
 
@@ -139,84 +141,13 @@ class TestTelegramModelPicker:
         # regression we're guarding).
         query.edit_message_text.assert_awaited()
         edit_kwargs = query.edit_message_text.call_args[1]
-        assert "MARKDOWN_V2" in repr(edit_kwargs["parse_mode"])
+        expected = TelegramAdapter._handle_model_picker_callback.__globals__["ParseMode"].MARKDOWN_V2
+        assert edit_kwargs["parse_mode"] == expected
         # The dynamic result text was routed through format_message
         # (backtick code blocks survive escaping).
         assert "`gpt-5`" in edit_kwargs["text"]
         # State is cleaned up after a successful switch.
         assert "12345" not in adapter._model_picker_state
-
-    @pytest.mark.asyncio
-    async def test_provider_group_folds_and_drills_down(self, monkeypatch):
-        """A provider family (e.g. MiniMax) collapses to one mpg: button at
-        the top level; tapping it expands to its authenticated members as
-        mp: buttons. A group reduced to a single authenticated member shows
-        no submenu (direct mp: button).
-
-        Inspects callback_data by recording every InlineKeyboardButton built,
-        which is robust to whether `telegram` is the real SDK or the module
-        mock (the SDK markup objects don't expose a plain iterable under the
-        mock)."""
-        import gateway.platforms.telegram as tg
-
-        built: list = []
-
-        class _RecordingButton:
-            def __init__(self, text, callback_data=None, **kw):
-                self.text = text
-                self.callback_data = callback_data
-                built.append(callback_data)
-
-        class _RecordingMarkup:
-            def __init__(self, rows):
-                self.inline_keyboard = rows
-
-        monkeypatch.setattr(tg, "InlineKeyboardButton", _RecordingButton)
-        monkeypatch.setattr(tg, "InlineKeyboardMarkup", _RecordingMarkup)
-
-        adapter = _make_adapter()
-
-        async def mock_send_message(**kwargs):
-            return SimpleNamespace(message_id=101)
-
-        adapter._bot.send_message = AsyncMock(side_effect=mock_send_message)
-
-        providers = [
-            {"slug": "minimax", "name": "MiniMax", "total_models": 2},
-            {"slug": "minimax-cn", "name": "MiniMax (China)", "total_models": 3},
-            {"slug": "xai", "name": "xAI", "total_models": 1},  # lone group member
-        ]
-
-        await adapter.send_model_picker(
-            chat_id="12345",
-            providers=providers,
-            current_model="m",
-            current_provider="minimax",
-            session_key="s",
-            on_model_selected=AsyncMock(),
-            metadata=None,
-        )
-
-        # Top-level keyboard: MiniMax family folded into one group button;
-        # xai (lone member) degraded to a direct provider button.
-        assert "mpg:minimax" in built
-        assert "mp:xai" in built
-        assert "mp:minimax" not in built
-        assert "mp:minimax-cn" not in built
-
-        # Drill into the MiniMax group → members appear as mp: buttons + back.
-        built.clear()
-        query = AsyncMock()
-        query.message = MagicMock()
-        query.message.chat_id = 12345
-        query.answer = AsyncMock()
-        query.edit_message_text = AsyncMock()
-
-        await adapter._handle_model_picker_callback(query, "mpg:minimax", "12345")
-
-        assert "mp:minimax" in built
-        assert "mp:minimax-cn" in built
-        assert "mb" in built  # back-to-providers button present
 
     @pytest.mark.asyncio
     async def test_retries_without_thread_when_thread_not_found(self):

@@ -523,7 +523,6 @@ class TestGetModelContextLengthLocalFallback:
 
         with patch("agent.model_metadata.get_cached_context_length", return_value=None), \
              patch("agent.model_metadata.fetch_endpoint_model_metadata", return_value={}), \
-             patch("agent.model_metadata.fetch_model_metadata", return_value={}), \
              patch("agent.model_metadata.is_local_endpoint", return_value=True), \
              patch("agent.model_metadata._query_local_context_length", return_value=131072), \
              patch("agent.model_metadata.save_context_length") as mock_save:
@@ -537,7 +536,6 @@ class TestGetModelContextLengthLocalFallback:
 
         with patch("agent.model_metadata.get_cached_context_length", return_value=None), \
              patch("agent.model_metadata.fetch_endpoint_model_metadata", return_value={}), \
-             patch("agent.model_metadata.fetch_model_metadata", return_value={}), \
              patch("agent.model_metadata.is_local_endpoint", return_value=True), \
              patch("agent.model_metadata._query_local_context_length", return_value=131072), \
              patch("agent.model_metadata.save_context_length") as mock_save:
@@ -551,7 +549,6 @@ class TestGetModelContextLengthLocalFallback:
 
         with patch("agent.model_metadata.get_cached_context_length", return_value=None), \
              patch("agent.model_metadata.fetch_endpoint_model_metadata", return_value={}), \
-             patch("agent.model_metadata.fetch_model_metadata", return_value={}), \
              patch("agent.model_metadata.is_local_endpoint", return_value=True), \
              patch("agent.model_metadata._query_local_context_length", return_value=None):
             result = get_model_context_length("omnicoder-9b", "http://localhost:11434/v1")
@@ -564,7 +561,6 @@ class TestGetModelContextLengthLocalFallback:
 
         with patch("agent.model_metadata.get_cached_context_length", return_value=None), \
              patch("agent.model_metadata.fetch_endpoint_model_metadata", return_value={}), \
-             patch("agent.model_metadata.fetch_model_metadata", return_value={}), \
              patch("agent.model_metadata.is_local_endpoint", return_value=False), \
              patch("agent.model_metadata._query_local_context_length") as mock_query:
             result = get_model_context_length(
@@ -590,7 +586,6 @@ class TestGetModelContextLengthLocalFallback:
 
         with patch("agent.model_metadata.get_cached_context_length", return_value=None), \
              patch("agent.model_metadata.fetch_endpoint_model_metadata", return_value={}), \
-             patch("agent.model_metadata.fetch_model_metadata", return_value={}), \
              patch("agent.model_metadata._query_local_context_length") as mock_query:
             result = get_model_context_length("unknown-xyz-model", "")
 

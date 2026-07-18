@@ -1,15 +1,14 @@
 """Abstract service manager interface.
 
-Wraps the existing systemd (Linux host), launchd (macOS host), Windows
-Scheduled Task (native Windows host), and s6 (container) backends behind
+Wraps the existing systemd (Linux host), launchd (macOS host), and s6
+(container) backends behind
 a common Protocol. Only the s6 backend supports runtime registration
 (for per-profile gateways) — host backends raise NotImplementedError
 from those methods, and callers MUST check supports_runtime_registration()
 before invoking them.
 
 Host-side call sites (setup wizard, uninstall, status) continue to use
-the existing module-level functions in hermes_cli.gateway and
-hermes_cli.gateway_windows directly. This protocol is a thin facade
+the existing module-level functions in hermes_cli.gateway directly. This protocol is a thin facade
 used by new code that needs to be backend-agnostic — specifically the
 profile create/delete hooks (Phase 4) and the s6 dispatch path in
 ``hermes gateway start/stop/restart`` when running inside a container.
@@ -20,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
-ServiceManagerKind = Literal["systemd", "launchd", "windows", "s6", "none"]
+ServiceManagerKind = Literal["systemd", "launchd", "s6", "none"]
 
 # Profile name → service directory mapping. Profile names must be safe
 # as filesystem directory names because the s6 backend creates a service
@@ -87,10 +86,9 @@ def detect_service_manager() -> ServiceManagerKind:
 
     Returns:
         "s6" — inside a container when /init is s6-svscan (Phase 2+)
-        "windows" — native Windows host
         "launchd" — macOS host
         "systemd" — Linux host with a working user/system bus
-        "none" — anything else (Termux, sandbox shells, etc.)
+        "none" — anything else
 
     This function does NOT replace ``supports_systemd_services()`` —
     host call sites continue to use that. It exists for new backend-
@@ -103,14 +101,11 @@ def detect_service_manager() -> ServiceManagerKind:
     from hermes_constants import is_container
     from hermes_cli.gateway import (
         is_macos,
-        is_windows,
         supports_systemd_services,
     )
 
     if is_container() and _s6_running():
         return "s6"
-    if is_windows():
-        return "windows"
     if is_macos():
         return "launchd"
     if supports_systemd_services():
@@ -155,8 +150,7 @@ def _s6_running() -> bool:
 # Backend wrappers
 #
 # These adapters are thin facades over the existing module-level functions
-# in ``hermes_cli.gateway`` (systemd/launchd) and ``hermes_cli.gateway_windows``
-# (Windows Scheduled Tasks). The protocol's ``name`` parameter is currently
+# in ``hermes_cli.gateway`` (systemd/launchd). The protocol's ``name`` parameter is currently
 # unused for host backends — they operate on whichever profile is currently
 # active (set via the ``hermes -p <profile>`` flag before the call). This
 # matches existing host-side semantics; the parameter shape is designed
@@ -241,56 +235,6 @@ class LaunchdServiceManager(_RegistrationUnsupportedMixin):
         return _probe_launchd_service_running()
 
 
-class WindowsServiceManager(_RegistrationUnsupportedMixin):
-    """Thin wrapper around ``hermes_cli.gateway_windows`` (Scheduled Task /
-    Startup-folder fallback).
-
-    The native Windows backend uses a Scheduled Task rather than a true
-    init-system service, but for protocol purposes the lifecycle is the
-    same: start / stop / restart / is_running. ``install`` accepts a
-    handful of Windows-specific kwargs (start_now, start_on_login,
-    elevated_handoff) that are passed straight through — non-Windows
-    callers should never invoke ``install`` on this wrapper.
-    """
-
-    kind: ServiceManagerKind = "windows"
-
-    def install(
-        self,
-        *,
-        force: bool = False,
-        start_now: bool | None = None,
-        start_on_login: bool | None = None,
-        elevated_handoff: bool = False,
-    ) -> None:
-        from hermes_cli import gateway_windows
-        gateway_windows.install(
-            force=force,
-            start_now=start_now,
-            start_on_login=start_on_login,
-            elevated_handoff=elevated_handoff,
-        )
-
-    def start(self, name: str) -> None:
-        from hermes_cli import gateway_windows
-        gateway_windows.start()
-
-    def stop(self, name: str) -> None:
-        from hermes_cli import gateway_windows
-        gateway_windows.stop()
-
-    def restart(self, name: str) -> None:
-        from hermes_cli import gateway_windows
-        gateway_windows.restart()
-
-    def is_running(self, name: str) -> bool:
-        from hermes_cli import gateway_windows
-        from hermes_cli.gateway import find_gateway_pids
-        if not gateway_windows.is_installed():
-            return False
-        return bool(find_gateway_pids())
-
-
 def get_service_manager() -> ServiceManager:
     """Return the ServiceManager instance for the current environment.
 
@@ -302,8 +246,6 @@ def get_service_manager() -> ServiceManager:
         return SystemdServiceManager()
     if kind == "launchd":
         return LaunchdServiceManager()
-    if kind == "windows":
-        return WindowsServiceManager()
     if kind == "s6":
         return S6ServiceManager()
     raise RuntimeError("no supported service manager detected")
@@ -313,7 +255,7 @@ def get_service_manager() -> ServiceManager:
 # S6ServiceManager (container-only)
 #
 # Per-profile gateways are registered dynamically when `hermes profile create`
-# runs inside the container (Phase 4). Static services (main-hermes, dashboard)
+# runs inside the container (Phase 4). Static services (main-hermes)
 # live in /etc/s6-overlay/s6-rc.d/ and are NOT managed by this class — they're
 # part of the image, not runtime-created.
 # ---------------------------------------------------------------------------
@@ -422,7 +364,6 @@ def _seed_supervise_skeleton(svc_dir: Path) -> None:
         if path.exists():
             return
         path.mkdir(parents=False, exist_ok=False)
-        path.chmod(mode)
         try:
             os.chown(path, _HERMES_UID, _HERMES_GID)
         except PermissionError:
@@ -431,6 +372,9 @@ def _seed_supervise_skeleton(svc_dir: Path) -> None:
             # swallowing this keeps both root and unprivileged callers
             # on one code path.
             pass
+        # chown may clear setgid/sticky permission bits on some platforms,
+        # so apply the intended mode after ownership is settled.
+        path.chmod(mode)
 
     # Top-level event/ dir (this is the s6-svlisten1 event-subscription
     # dir at the service root, distinct from supervise/event/).
@@ -537,7 +481,7 @@ class S6ServiceManager:
     """Per-profile gateway supervision via s6-overlay.
 
     Only handles runtime-registered services under
-    ``S6_DYNAMIC_SCANDIR``. Static services (main-hermes, dashboard)
+    ``S6_DYNAMIC_SCANDIR``. Static services (main-hermes)
     are managed by s6-rc at image-build time and are out of scope.
     """
 

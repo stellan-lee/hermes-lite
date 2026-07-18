@@ -148,9 +148,7 @@ def _can_open_browser() -> bool:
     # Explicit SSH session → no local display
     if os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"):
         return False
-    # macOS and Windows usually have a display
-    if os.name == "nt":
-        return True
+    # macOS normally has a local display.
     try:
         if os.uname().sysname == "Darwin":
             return True
@@ -185,7 +183,6 @@ def _write_json(path: Path, data: dict) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     # Tighten parent dir to 0o700 so siblings can't traverse to the creds.
-    # No-op on Windows (POSIX mode bits aren't enforced); ignore failures.
     # secure_parent_dir refuses to chmod / or top-level dirs (#25821).
     secure_parent_dir(path)
     # Per-process random suffix avoids collisions between concurrent

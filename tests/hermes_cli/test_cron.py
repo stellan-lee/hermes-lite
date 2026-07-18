@@ -37,12 +37,8 @@ class TestCronCommandLifecycle:
         assert "Resumed job" in out
         assert "Triggered job" in out
 
-    def test_edit_can_replace_and_clear_skills(self, tmp_cron_dir, capsys):
-        job = create_job(
-            prompt="Combine skill outputs",
-            schedule="every 1h",
-            skill="blogwatcher",
-        )
+    def test_edit_updates_job(self, tmp_cron_dir, capsys):
+        job = create_job(prompt="Original prompt", schedule="every 1h")
 
         cron_command(
             Namespace(
@@ -53,61 +49,37 @@ class TestCronCommandLifecycle:
                 name="Edited Job",
                 deliver=None,
                 repeat=None,
-                skill=None,
-                skills=["maps", "blogwatcher"],
                 profile="default",
-                clear_skills=False,
+                script=None,
+                no_agent=None,
             )
         )
+
         updated = get_job(job["id"])
-        assert updated["skills"] == ["maps", "blogwatcher"]
         assert updated["name"] == "Edited Job"
         assert updated["prompt"] == "Revised prompt"
         assert updated["schedule_display"] == "every 120m"
         assert updated["profile"] == "default"
+        assert "Updated job" in capsys.readouterr().out
 
-        cron_command(
-            Namespace(
-                cron_command="edit",
-                job_id=job["id"],
-                schedule=None,
-                prompt=None,
-                name=None,
-                deliver=None,
-                repeat=None,
-                skill=None,
-                skills=None,
-                profile="",
-                clear_skills=True,
-            )
-        )
-        cleared = get_job(job["id"])
-        assert cleared["skills"] == []
-        assert cleared["skill"] is None
-        assert cleared["profile"] is None
-
-        out = capsys.readouterr().out
-        assert "Updated job" in out
-
-    def test_create_with_multiple_skills(self, tmp_cron_dir, capsys):
+    def test_create_prompt_job(self, tmp_cron_dir, capsys):
         cron_command(
             Namespace(
                 cron_command="create",
                 schedule="every 1h",
-                prompt="Use both skills",
-                name="Skill combo",
+                prompt="Check service health",
+                name="Health check",
                 deliver=None,
                 repeat=None,
-                skill=None,
-                skills=["blogwatcher", "maps"],
                 profile="default",
+                script=None,
+                workdir=None,
+                no_agent=False,
             )
         )
-        out = capsys.readouterr().out
-        assert "Created job" in out
 
+        assert "Created job" in capsys.readouterr().out
         jobs = list_jobs()
         assert len(jobs) == 1
-        assert jobs[0]["skills"] == ["blogwatcher", "maps"]
-        assert jobs[0]["name"] == "Skill combo"
+        assert jobs[0]["name"] == "Health check"
         assert jobs[0]["profile"] == "default"

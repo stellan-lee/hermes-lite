@@ -238,5 +238,12 @@ class TestTodoSkinIntegration:
     """
 
     def test_default_skin_prefix(self):
-        msg = get_cute_tool_message("todo", {}, 0.5)
-        assert msg.startswith("┊")
+        from hermes_cli.skin_engine import get_active_skin_name, set_active_skin
+
+        previous = get_active_skin_name()
+        try:
+            set_active_skin("default")
+            msg = get_cute_tool_message("todo", {}, 0.5)
+            assert msg.startswith("┊")
+        finally:
+            set_active_skin(previous)

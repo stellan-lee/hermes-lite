@@ -12,8 +12,8 @@ MCP server (per `~/.codex/config.toml [mcp_servers.hermes-tools]`) and
 the user gets full Hermes capability inside a Codex turn.
 
 Scope (what we expose):
-  - web_search, web_extract              — Firecrawl, no codex equivalent
-  - browser_navigate / _click / _type /  — Camofox/Browserbase automation
+  - web_search, web_extract              — retained web-provider framework
+  - browser_navigate / _click / _type /  — local browser automation
     _snapshot / _scroll / _back / _press /
     _get_images / _console / _vision
   - vision_analyze                       — image inspection by vision model

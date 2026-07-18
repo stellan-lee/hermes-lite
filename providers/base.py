@@ -5,7 +5,7 @@ auth, endpoints, client quirks, request-time quirks. The transport reads this
 instead of receiving 20+ boolean flags.
 
 Provider profiles are DECLARATIVE — they describe the provider's behavior.
-They do NOT own client construction, credential rotation, or streaming.
+They do NOT own client construction, or streaming.
 Those stay on AIAgent.
 """
 
@@ -17,7 +17,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Sentinel for "omit temperature entirely" (Kimi: server manages it)
+# Sentinel for profiles whose server manages temperature.
 OMIT_TEMPERATURE = object()
 
 
@@ -26,7 +26,7 @@ def _profile_user_agent() -> str:
 
     Used by ``ProviderProfile.fetch_models`` so the catalog probe is not
     served the default ``Python-urllib/<ver>`` UA — some providers
-    (OpenCode Zen, etc.) sit behind a WAF that returns 403 for that.
+    can sit behind a WAF that returns 403 for that.
     """
     try:
         from hermes_cli import __version__ as _ver  # lazy: avoid layer cycle at import time
@@ -45,24 +45,19 @@ class ProviderProfile:
     aliases: tuple = ()
 
     # ── Human-readable metadata ───────────────────────────────
-    display_name: str = ""       # e.g. "GMI Cloud" — shown in picker/labels
-    description: str = ""        # e.g. "GMI Cloud (multi-model direct API)" — picker subtitle
-    signup_url: str = ""         # e.g. "https://www.gmicloud.ai/" — shown during setup
+    display_name: str = ""       # shown in picker/labels
+    description: str = ""        # picker subtitle
+    signup_url: str = ""         # shown during setup
 
     # ── Auth & endpoints ─────────────────────────────────────
     env_vars: tuple = ()
     base_url: str = ""
     models_url: str = ""  # explicit models endpoint; falls back to {base_url}/models
-    auth_type: str = "api_key"   # api_key|oauth_device_code|oauth_external|copilot|aws_sdk
+    auth_type: str = "api_key"   # api_key|oauth_external
     supports_health_check: bool = True  # False → doctor skips /models probe for this provider
 
-    # ── Model catalog ─────────────────────────────────────────
-    # fallback_models: curated list shown in /model picker when live fetch fails.
-    # Only agentic models that support tool calling should appear here.
-    fallback_models: tuple = ()
-
     # hostname: base hostname for URL→provider reverse-mapping in model_metadata.py
-    # e.g. "api.gmi-serving.com". Derived from base_url when empty.
+    # Derived from base_url when empty.
     hostname: str = ""
 
     # ── Client-level quirks (set once at client construction) ─
@@ -83,7 +78,7 @@ class ProviderProfile:
         """Return the provider's base hostname for URL-based detection.
 
         Uses self.hostname if set explicitly, otherwise derives it from base_url.
-        e.g. 'https://api.gmi-serving.com/v1' → 'api.gmi-serving.com'
+        For example, ``https://localhost:1234/v1`` resolves to ``localhost``.
         """
         if self.hostname:
             return self.hostname
@@ -121,9 +116,8 @@ class ProviderProfile:
         The transport merges extra_body_additions into extra_body, and
         top_level_kwargs directly into api_kwargs.
 
-        This split exists because some providers put reasoning config in
-        extra_body (OpenRouter: extra_body.reasoning) while others put it
-        as top-level api_kwargs (Kimi: api_kwargs.reasoning_effort).
+        This supports profiles that place reasoning config either in
+        ``extra_body`` or in top-level request kwargs.
 
         Default: ({}, {}).
         """
@@ -156,9 +150,7 @@ class ProviderProfile:
 
         Resolution order for the endpoint URL:
           1. self.models_url  (explicit override — use when the models
-             endpoint differs from the inference base URL, e.g. OpenRouter
-             exposes a public catalog at /api/v1/models while inference is
-             at /api/v1)
+             endpoint differs from the inference base URL)
           2. self.base_url + "/models"  (standard OpenAI-compat fallback)
 
         The default implementation sends Bearer auth when api_key is given
@@ -181,7 +173,7 @@ class ProviderProfile:
         if api_key:
             req.add_header("Authorization", f"Bearer {api_key}")
         req.add_header("Accept", "application/json")
-        # Some providers (e.g. OpenCode Zen) sit behind a WAF that blocks
+        # Some endpoints sit behind a WAF that blocks
         # the default ``Python-urllib/<ver>`` User-Agent.  Set a generic
         # hermes-cli UA so the catalog endpoint is reachable.
         req.add_header("User-Agent", _profile_user_agent())

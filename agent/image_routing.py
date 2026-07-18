@@ -3,9 +3,8 @@
 Two modes:
 
   native  — attach images as OpenAI-style ``image_url`` content parts on the
-            user turn. Provider adapters (Anthropic, Gemini, Bedrock, Codex,
-            OpenAI chat.completions) already translate these into their
-            vendor-specific multimodal formats.
+            user turn. The Codex and OpenAI-compatible transports translate
+            these into their request formats.
 
   text    — run ``vision_analyze`` on each image up-front and prepend the
             description to the user's text. The model never sees the pixels;
@@ -21,8 +20,7 @@ In ``auto`` mode:
     (i.e. not ``auto`` and not empty), we assume they want the text pipeline
     regardless of the main model — they've opted in to a specific vision
     backend for a reason (cost, quality, local-only, etc.).
-  - Otherwise, if the active model reports ``supports_vision=True`` in its
-    models.dev metadata, we attach natively.
+  - Otherwise, if the active Codex model supports vision, we attach natively.
   - Otherwise (non-vision model, no explicit override), we fall back to text.
 
 This keeps ``vision_analyze`` surfaced as a tool in every session — skills
@@ -151,7 +149,7 @@ def extract_image_refs(text: str) -> Tuple[List[str], List[str]]:
 # would silently enable native vision routing on a model that can't actually
 # handle it. Accept only the values YAML 1.1 / 1.2 treat as booleans, plus
 # real ``bool`` and integer 0/1. Anything else returns None so the caller
-# falls through to models.dev rather than honouring garbage.
+# falls through to retained capability detection rather than honouring garbage.
 _TRUE_TOKENS = frozenset({"true", "yes", "on", "1"})
 _FALSE_TOKENS = frozenset({"false", "no", "off", "0"})
 
@@ -188,7 +186,7 @@ def _supports_vision_override(
          ``model.provider``; both are tried)
 
     Returns None when no override is set, so the caller falls through to
-    models.dev. Returns False explicitly only when the user wrote a
+    retained capability detection. Returns False explicitly only when the user wrote a
     recognised boolean false token.
     """
     if not isinstance(cfg, dict):
@@ -266,22 +264,15 @@ def _lookup_supports_vision(
 
     Consults the user's ``supports_vision`` override in config.yaml first
     (so custom/local models declared as vision-capable don't fall through to
-    text routing in ``auto`` mode), then falls back to models.dev.
+    text routing in ``auto`` mode). Codex models support native images;
+    unknown custom endpoints fall back to text routing unless configured.
     """
     override = _supports_vision_override(cfg, provider, model)
     if override is not None:
         return override
-    if not provider or not model:
-        return None
-    try:
-        from agent.models_dev import get_model_capabilities
-        caps = get_model_capabilities(provider, model)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("image_routing: caps lookup failed for %s:%s — %s", provider, model, exc)
-        return None
-    if caps is None:
-        return None
-    return bool(caps.supports_vision)
+    if provider == "openai-codex" and model:
+        return True
+    return None
 
 
 def decide_image_input_mode(
@@ -292,7 +283,7 @@ def decide_image_input_mode(
     """Return ``"native"`` or ``"text"`` for the given turn.
 
     Args:
-      provider: active inference provider ID (e.g. ``"anthropic"``, ``"openrouter"``).
+      provider: active inference provider ID (for example ``"openai-codex"`` or ``"custom"``).
       model:    active model slug as it would be sent to the provider.
       cfg:      loaded config.yaml dict, or None. When None, behaves as auto.
     """

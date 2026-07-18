@@ -9,7 +9,7 @@ Thank you for contributing to Hermes Agent! This guide covers everything you nee
 We value contributions in this order:
 
 1. **Bug fixes** — crashes, incorrect behavior, data loss. Always top priority.
-2. **Cross-platform compatibility** — macOS, different Linux distros, and WSL2 on Windows. We want Hermes to work everywhere.
+2. **Platform compatibility** — macOS and supported Linux distributions.
 3. **Security hardening** — shell injection, prompt injection, path traversal, privilege escalation. See [Security](#security-considerations).
 4. **Performance and robustness** — retry logic, error handling, graceful degradation.
 5. **New skills** — but only broadly useful ones. See [Should it be a Skill or a Tool?](#should-it-be-a-skill-or-a-tool)
@@ -34,7 +34,7 @@ This is the most common question for new contributors. The answer is almost alwa
 - It requires end-to-end integration with API keys, auth flows, or multi-component configuration managed by the agent harness
 - It needs custom processing logic that must execute precisely every time (not "best effort" from LLM interpretation)
 - It handles binary data, streaming, or real-time events that can't go through the terminal
-- Examples: browser automation (Browserbase session management), TTS (audio encoding + platform delivery), vision analysis (base64 image handling)
+- Examples: local browser automation, TTS (audio encoding + platform delivery), vision analysis (base64 image handling)
 
 ### Should the Skill be bundled?
 
@@ -43,15 +43,15 @@ Bundled skills (in `skills/`) ship with every Hermes install. They should be **b
 - Document handling, web research, common dev workflows, system administration
 - Used regularly by a wide range of people
 
-If your skill is official and useful but not universally needed (e.g., a paid service integration, a heavyweight dependency), put it in **`optional-skills/`** — it ships with the repo but isn't activated by default. Users can discover it via `hermes skills browse` (labeled "official") and install it with `hermes skills install` (no third-party warning, built-in trust).
+If your skill is official and useful but not universally needed (e.g., a paid service integration or a heavyweight dependency), put it in **`optional-skills/`**. It ships with the repository but is not copied into the active profile by default.
 
-If your skill is specialized, community-contributed, or niche, it's better suited for a **Skills Hub** — upload it to a skills registry and share it in the [Nous Research Discord](https://discord.gg/NousResearch). Users can install it with `hermes skills install`.
+Specialized community skills should ship independently and can be copied into `~/.hermes/skills/` or a project-local skills directory.
 
 ---
 
 ## Memory Providers: Ship as a Standalone Plugin
 
-**We are no longer accepting new memory providers into this repo.** The set of built-in providers under `plugins/memory/` (honcho, mem0, supermemory, byterover, hindsight, holographic, openviking, retaindb) is closed. If you want to add a new memory backend, publish it as a **standalone plugin repo** that users install into `~/.hermes/plugins/` (or via a pip entry point).
+**We are no longer accepting new memory providers into this repo.** The retained built-in providers under `plugins/memory/` are Honcho and Holographic. If you want to add a new memory backend, publish it as a **standalone plugin repo** that users install into `~/.hermes/plugins/` (or via a pip entry point).
 
 Standalone memory plugins:
 
@@ -76,7 +76,7 @@ This isn't a quality bar — it's a coupling-and-maintenance decision. Memory pr
 | **Git** | With `--recurse-submodules` support, and the `git-lfs` extension installed |
 | **Python 3.11+** | uv will install it if missing |
 | **uv** | Fast Python package manager ([install](https://docs.astral.sh/uv/)) |
-| **Node.js 20+** | Optional — needed for browser tools and WhatsApp bridge (matches root `package.json` engines) |
+| **Node.js 20+** | Needed for TUI development and local browser tooling |
 
 ### Clone and install
 
@@ -154,13 +154,13 @@ hermes-agent/
 │   ├── main.py                   # Entry point, argument parsing, command dispatch
 │   ├── config.py                 # Config management, migration, env var definitions
 │   ├── setup.py                  # Interactive setup wizard
-│   ├── auth.py                   # Provider resolution, OAuth, Nous Portal
-│   ├── models.py                 # OpenRouter model selection lists
+│   ├── auth.py                   # Provider resolution and Codex OAuth
+│   ├── models.py                 # Retained model selection helpers
 │   ├── banner.py                 # Welcome banner, ASCII art
 │   ├── commands.py               # Central slash command registry (CommandDef), autocomplete, gateway helpers
 │   ├── callbacks.py              # Interactive callbacks (clarify, sudo, approval)
 │   ├── doctor.py                 # Diagnostics
-│   ├── skills_hub.py             # Skills Hub CLI + /skills slash command
+│   ├── skills_config.py          # Local skills configuration helpers
 │   └── skin_engine.py            # Skin/theme engine — data-driven CLI visual customization
 │
 ├── tools/                    # Tool implementations (self-registering)
@@ -168,7 +168,7 @@ hermes-agent/
 │   ├── approval.py               # Dangerous command detection + per-session approval
 │   ├── terminal_tool.py          # Terminal orchestration (sudo, env lifecycle, backends)
 │   ├── file_operations.py        # read_file, write_file, search, patch, etc.
-│   ├── web_tools.py              # web_search, web_extract (Parallel/Firecrawl + Gemini summarization)
+│   ├── web_tools.py              # web_search and web_extract plugin dispatch
 │   ├── vision_tools.py           # Image analysis via multimodal models
 │   ├── delegate_tool.py          # Subagent spawning and parallel task execution
 │   ├── code_execution_tool.py    # Sandboxed Python with RPC tool access
@@ -177,22 +177,20 @@ hermes-agent/
 │   ├── skill_tools.py            # Skill search, load, manage
 │   └── environments/             # Terminal execution backends
 │       ├── base.py                   # BaseEnvironment ABC
-│       ├── local.py, docker.py, ssh.py, singularity.py, modal.py, daytona.py
+│       ├── local.py, docker.py, ssh.py
 │
 ├── gateway/                  # Messaging gateway
 │   ├── run.py                    # GatewayRunner — platform lifecycle, message routing, cron
 │   ├── config.py                 # Platform configuration resolution
 │   ├── session.py                # Session store, context prompts, reset policies
-│   └── platforms/                # Platform adapters
-│       ├── telegram.py, discord_adapter.py, slack.py, whatsapp.py
+│   └── platforms/                # Built-in platform adapters
+│       ├── telegram.py, slack.py, feishu.py, email.py, webhook.py
 │
-├── scripts/                  # Installer and bridge scripts
-│   ├── install.sh                # Linux/macOS installer
-│   ├── install.ps1               # Windows PowerShell installer
-│   └── whatsapp-bridge/          # Node.js WhatsApp bridge (Baileys)
+├── scripts/                  # Install, release, and test helpers
+│   └── install.sh                # Linux/macOS installer
 │
 ├── skills/                   # Bundled skills (copied to ~/.hermes/skills/ on install)
-├── optional-skills/          # Official optional skills (discoverable via hub, not activated by default)
+├── optional-skills/          # Shipped optional skills (not activated by default)
 ├── tests/                    # Test suite
 │
 ├── cli-config.yaml.example   # Example configuration (copied to ~/.hermes/config.yaml)
@@ -205,13 +203,12 @@ hermes-agent/
 |------|---------|
 | `~/.hermes/config.yaml` | Settings (model, terminal, toolsets, compression, etc.) |
 | `~/.hermes/.env` | API keys and secrets |
-| `~/.hermes/auth.json` | OAuth credentials (Nous Portal) |
-| `~/.hermes/skills/` | All active skills (bundled + hub-installed + agent-created) |
+| `~/.hermes/auth.json` | Codex OAuth credentials |
+| `~/.hermes/skills/` | Active bundled, local, and agent-created skills |
 | `~/.hermes/memories/` | Persistent memory (MEMORY.md, USER.md) |
 | `~/.hermes/state.db` | SQLite session database |
 | `~/.hermes/sessions/` | Gateway routing index (`sessions.json`), request-dump breadcrumbs, gateway `*.jsonl` transcripts, and (optionally) per-session JSON snapshots when `sessions.write_json_snapshots: true` is set. The per-session snapshots are off by default; state.db is canonical. |
 | `~/.hermes/cron/` | Scheduled job data |
-| `~/.hermes/whatsapp/session/` | WhatsApp bridge credentials |
 
 ---
 
@@ -240,8 +237,7 @@ User message → AIAgent._run_agent_loop()
 - **Toolset grouping**: Tools are grouped into toolsets (`web`, `terminal`, `file`, `browser`, etc.) that can be enabled/disabled per platform.
 - **Session persistence**: All conversations are stored in SQLite (`hermes_state.py`) with full-text search and unique session titles. Per-session JSON snapshots in `~/.hermes/sessions/` were superseded by the SQLite store and are off by default; opt back in with `sessions.write_json_snapshots: true` if you have external tooling that consumes the JSON files directly.
 - **Ephemeral injection**: System prompts and prefill messages are injected at API call time, never persisted to the database or logs.
-- **Provider abstraction**: The agent works with any OpenAI-compatible API. Provider resolution happens at init time (OpenRouter API key, Anthropic, or custom endpoint).
-- **Provider routing**: When using OpenRouter, `provider_routing` in config.yaml controls provider selection (sort by throughput/latency/price, allow/ignore specific providers, data retention policies). These are injected as `extra_body.provider` in API requests.
+- **Provider abstraction**: The agent supports Codex OAuth and custom/local OpenAI-compatible endpoints.
 
 ---
 
@@ -422,7 +418,7 @@ metadata:
 **Examples:**
 
 ```yaml
-# DuckDuckGo search — shown when Firecrawl (web toolset) is unavailable
+# DuckDuckGo search — shown when the web toolset is unavailable
 metadata:
   hermes:
     fallback_for_toolsets: [web]
@@ -432,7 +428,7 @@ metadata:
   hermes:
     requires_toolsets: [terminal]
 
-# Local browser fallback — shown when Browserbase is unavailable
+# Browser helper — shown when the browser toolset is unavailable
 metadata:
   hermes:
     fallback_for_toolsets: [browser]
@@ -585,194 +581,6 @@ See `hermes_cli/skin_engine.py` for the full schema and existing skins as exampl
 
 ---
 
-## Cross-Platform Compatibility
-
-Hermes runs on Linux, macOS, and native Windows (plus WSL2). When writing code
-that touches the OS, assume *any* platform can hit your code path.
-
-> **Before you PR:** run `scripts/check-windows-footguns.py` to catch the
-> common Windows-unsafe patterns in your diff. It's grep-based and cheap;
-> CI runs it on every PR too.
-
-### Critical rules
-
-1. **Never call `os.kill(pid, 0)` for liveness checks.** `os.kill(pid, 0)`
-   is a standard POSIX idiom to check "is this PID alive" — the signal 0
-   is a no-op permission check. **On Windows it is NOT a no-op.** Python's
-   Windows `os.kill` maps `sig=0` to `CTRL_C_EVENT` (they collide at the
-   integer value 0) and routes it through `GenerateConsoleCtrlEvent(0, pid)`,
-   which broadcasts Ctrl+C to the **entire console process group** containing
-   the target PID. "Probe if alive" silently becomes "kill the target and
-   often unrelated processes sharing its console." See [bpo-14484](https://bugs.python.org/issue14484)
-   (open since 2012 — will never be fixed for compat reasons).
-
-   **Preferred:** use `psutil` (a core dependency — always available):
-
-   ```python
-   import psutil
-   if psutil.pid_exists(pid):
-       # process is alive — safe on every platform
-       ...
-   ```
-
-   If you specifically need the hermes wrapper (it has a stdlib fallback
-   for scaffold-phase imports before pip install finishes), use
-   `gateway.status._pid_exists(pid)`. It calls `psutil.pid_exists` first
-   and falls back to a hand-rolled `OpenProcess + WaitForSingleObject`
-   dance on Windows only when psutil is somehow missing.
-
-   Audit grep for new callsites: `rg "os\.kill\([^,]+,\s*0\s*\)"`. Any hit
-   in non-test code is presumptively a Windows silent-kill bug.
-
-2. **Use `shutil.which()` before shelling out — don't assume Windows has
-   tools Linux has.** `wmic` was removed in Windows 10 21H1 and later. `ps`,
-   `kill`, `grep`, `awk`, `fuser`, `lsof`, `pgrep`, and most POSIX CLI tools
-   simply don't exist on Windows. Test availability with
-   `shutil.which("tool")` and fall back to a Windows-native equivalent —
-   usually PowerShell via `subprocess.run(["powershell", "-NoProfile",
-   "-Command", ...])`.
-
-   For process enumeration: PowerShell's `Get-CimInstance Win32_Process` is
-   the modern replacement for `wmic process`. See
-   `hermes_cli/gateway.py::_scan_gateway_pids` for the pattern.
-
-3. **`termios` and `fcntl` are Unix-only.** Always catch both `ImportError`
-   and `NotImplementedError`:
-   ```python
-   try:
-       from simple_term_menu import TerminalMenu
-       menu = TerminalMenu(options)
-       idx = menu.show()
-   except (ImportError, NotImplementedError):
-       # Fallback: numbered menu for Windows
-       for i, opt in enumerate(options):
-           print(f"  {i+1}. {opt}")
-       idx = int(input("Choice: ")) - 1
-   ```
-
-4. **File encoding.** Windows may save `.env` files in `cp1252`. Always
-   handle encoding errors:
-   ```python
-   try:
-       load_dotenv(env_path)
-   except UnicodeDecodeError:
-       load_dotenv(env_path, encoding="latin-1")
-   ```
-   Config files (`config.yaml`) may be saved with a UTF-8 BOM by Notepad and
-   similar editors — use `encoding="utf-8-sig"` when reading files that
-   could have been touched by a Windows GUI editor.
-
-5. **Process management.** `os.setsid()`, `os.killpg()`, `os.fork()`,
-   `os.getuid()`, and POSIX signal handling differ on Windows. Guard with
-   `platform.system()`, `sys.platform`, or `hasattr(os, "setsid")`:
-   ```python
-   if platform.system() != "Windows":
-       kwargs["preexec_fn"] = os.setsid
-   else:
-       kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-   ```
-
-   **Preferred:** for killing a process AND its children (what `os.killpg`
-   does on POSIX), use `psutil` — it works on every platform:
-   ```python
-   import psutil
-   try:
-       parent = psutil.Process(pid)
-       # Kill children first (leaf-up), then the parent.
-       for child in parent.children(recursive=True):
-           child.kill()
-       parent.kill()
-   except psutil.NoSuchProcess:
-       pass
-   ```
-
-6. **Signals that don't exist on Windows: `SIGALRM`, `SIGCHLD`, `SIGHUP`,
-   `SIGUSR1`, `SIGUSR2`, `SIGPIPE`, `SIGQUIT`, `SIGKILL`.** Python's
-   `signal` module raises `AttributeError` at import time if you reference
-   them on Windows. Use `getattr(signal, "SIGKILL", signal.SIGTERM)` or
-   gate the whole block behind a platform check. `loop.add_signal_handler`
-   raises `NotImplementedError` on Windows — always catch it.
-
-7. **Path separators.** Use `pathlib.Path` instead of string concatenation
-   with `/`. Forward slashes work almost everywhere on Windows, but
-   `subprocess.run(["cmd.exe", "/c", ...])` and other shell contexts can
-   require backslashes — convert with `str(path)` at the subprocess boundary,
-   not inside Python logic.
-
-8. **Symlinks need elevated privileges on Windows** (unless Developer Mode is
-   on). Tests that create symlinks need `@pytest.mark.skipif(sys.platform ==
-   "win32", reason="Symlinks require elevated privileges on Windows")`.
-
-9. **POSIX file modes (0o600, 0o644, etc.) are NOT enforced on NTFS** by
-   default. Tests that assert on `stat().st_mode & 0o777` must skip on
-   Windows — the concept doesn't translate. Use ACLs (`icacls`, `pywin32`)
-   for Windows secret-file protection if needed.
-
-10. **Detached background daemons on Windows need `pythonw.exe`, NOT
-    `python.exe`.** `python.exe` always allocates or attaches to a console,
-    which makes it vulnerable to `CTRL_C_EVENT` broadcasts from any sibling
-    process. `pythonw.exe` is the no-console variant. Combine with
-    `CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP |
-    CREATE_BREAKAWAY_FROM_JOB` in `subprocess.Popen(creationflags=...)`.
-    See `hermes_cli/gateway_windows.py::_spawn_detached` for the reference
-    implementation.
-
-11. **`subprocess.Popen` with `.cmd` or `.bat` shims needs `shutil.which`
-    to resolve.** Passing `"agent-browser"` to `Popen` on Windows finds
-    the extensionless POSIX shebang shim in `node_modules/.bin/`, which
-    `CreateProcessW` can't execute — you'll get `WinError 193 "not a valid
-    Win32 application"`. Use `shutil.which("agent-browser", path=local_bin)`
-    which honors PATHEXT and picks the `.CMD` variant on Windows.
-
-12. **Don't use shell shebangs as a way to run Python.** `#!/usr/bin/env
-    python` only works when the file is executed through a Unix shell.
-    `subprocess.run(["./myscript.py"])` on Windows fails even if the file
-    has a shebang line. Always invoke Python explicitly:
-    `[sys.executable, "myscript.py"]`.
-
-13. **Shell commands in installers.** If you change `scripts/install.sh`,
-    make the equivalent change in `scripts/install.ps1`. The two scripts
-    are the canonical example of "works on Linux does not mean works on
-    Windows" and have drifted multiple times — keep them in lockstep.
-
-14. **Known paths that are OneDrive-redirected on Windows:** Desktop,
-    Documents, Pictures, Videos. The "real" path when OneDrive Backup is
-    enabled is `%USERPROFILE%\OneDrive\Desktop` (etc.), NOT
-    `%USERPROFILE%\Desktop` (which exists as an empty husk). Resolve the
-    real location via `ctypes` + `SHGetKnownFolderPath` or by reading the
-    `Shell Folders` registry key — never assume `~/Desktop`.
-
-15. **CRLF vs LF in generated scripts.** Windows `cmd.exe` and `schtasks`
-    parse line-by-line; mixed or LF-only line endings can break multi-line
-    `.cmd` / `.bat` files. Use `open(path, "w", encoding="utf-8",
-    newline="\r\n")` — or `open(path, "wb")` + explicit bytes — when
-    generating scripts Windows will execute.
-
-16. **Two different quoting schemes in one command line.** `subprocess.run
-    (["schtasks", "/TR", some_cmd])` → schtasks itself parses `/TR`, AND
-    the `some_cmd` string is re-parsed by `cmd.exe` when the task fires.
-    Different parsers, different escape rules. Use two separate quoting
-    helpers and never cross them. See `hermes_cli/gateway_windows.py::
-    _quote_cmd_script_arg` and `_quote_schtasks_arg` for the reference
-    pair.
-
-### Testing cross-platform
-
-Tests that use POSIX-only syscalls need a skip marker. Common ones:
-- Symlinks → `@pytest.mark.skipif(sys.platform == "win32", ...)`
-- `0o600` file modes → `@pytest.mark.skipif(sys.platform.startswith("win"), ...)`
-- `signal.SIGALRM` → Unix-only (see `tests/conftest.py::_enforce_test_timeout`)
-- `os.setsid` / `os.fork` → Unix-only
-- Live Winsock / Windows-specific regression tests →
-  `@pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific regression")`
-
-If you monkeypatch `sys.platform` for cross-platform tests, also patch
-`platform.system()` / `platform.release()` / `platform.mac_ver()` — each
-re-reads the real OS independently, so half-patched tests still route
-through the wrong branch on a Windows runner.
-
----
-
 ## Security Considerations
 
 Hermes has terminal access. Security matters.
@@ -785,7 +593,6 @@ Hermes has terminal access. Security matters.
 | **Dangerous command detection** | Regex patterns in `tools/approval.py` with user approval flow |
 | **Cron prompt injection** | Scanner in `tools/cronjob_tools.py` blocks instruction-override patterns |
 | **Write deny list** | Protected paths (`~/.ssh/authorized_keys`, `/etc/shadow`) resolved via `os.path.realpath()` to prevent symlink bypass |
-| **Skills guard** | Security scanner for hub-installed skills (`tools/skills_guard.py`) |
 | **Code execution sandbox** | `execute_code` child process runs with API keys stripped from environment |
 | **Container hardening** | Docker: all capabilities dropped, no privilege escalation, PID limits, size-limited tmpfs |
 
@@ -795,7 +602,7 @@ Hermes has terminal access. Security matters.
 - **Resolve symlinks** with `os.path.realpath()` before path-based access control checks
 - **Don't log secrets.** API keys, tokens, and passwords should never appear in log output
 - **Catch broad exceptions** around tool execution so a single failure doesn't crash the agent loop
-- **Test on all platforms** if your change touches file paths, process management, or shell commands
+- **Test on supported platforms** if your change touches file paths, process management, or shell commands
 
 If your PR affects security, note it explicitly in the description.
 
@@ -806,11 +613,11 @@ After the [litellm supply chain compromise](https://github.com/BerriAI/litellm/i
 | Source type | Required treatment | Rationale |
 |---|---|---|
 | **PyPI package** | `>=floor,<next_major` | PyPI versions are immutable once published, but new versions can be pushed into your range. A `<next_major` ceiling stops a 1.x install from upgrading to a malicious 2.0.0. |
-| **Git URL** (atroposlib, tinker, yc-bench, Baileys) | Full commit SHA | Branches and tags are mutable refs; SHA is content-addressed. |
+| **Git URL** | Full commit SHA | Branches and tags are mutable refs; SHA is content-addressed. |
 | **GitHub Actions** | Full commit SHA + version comment | Action tags are mutable refs (e.g. tj-actions/changed-files March 2025). Pin as `uses: owner/action@<sha>  # vX.Y.Z` |
 | **CI-only pip installs** | `==exact` | Hermetic CI builds; churn is acceptable. |
 
-**Every new PyPI dependency in a PR must have a `<next_major` upper bound.** PRs adding unbounded `>=X.Y.Z` specs will be rejected by reviewers. The `supply-chain-audit.yml` CI workflow also flags dependency manifest changes for manual review.
+**Every new PyPI dependency in a PR must have a `<next_major` upper bound.** PRs adding unbounded `>=X.Y.Z` specs will be rejected by reviewers. Run `uv lock --check` after dependency changes.
 
 **How to determine the ceiling:**
 - If the package is at version `1.x.y`, use `<2`.
@@ -826,7 +633,7 @@ After the [litellm supply chain compromise](https://github.com/BerriAI/litellm/i
 # ✅ Correct — pre-1.0 (tight minor window)
 "asyncpg>=0.29,<0.32"
 "aiosqlite>=0.20,<0.23"
-"hindsight-client>=0.4.22,<0.5"
+"honcho-ai>=2.0,<3"
 
 # ❌ Rejected — no upper bound
 "some-package>=1.2.3"
@@ -858,7 +665,7 @@ refactor/description   # Code restructuring
 
 1. **Run tests**: `scripts/run_tests.sh` (recommended; same as CI) or `pytest tests/ -v` with the project venv activated
 2. **Test manually**: Run `hermes` and exercise the code path you changed
-3. **Check cross-platform impact**: If you touch file I/O, process management, or terminal handling, consider macOS, Linux, and WSL2
+3. **Check platform impact**: If you touch file I/O, process management, or terminal handling, consider macOS and Linux
 4. **Keep PRs focused**: One logical change per PR. Don't mix a bug fix with a refactor with a new feature.
 
 ### PR description
@@ -886,12 +693,12 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 | `refactor` | Code restructuring (no behavior change) |
 | `chore` | Build, CI, dependency updates |
 
-Scopes: `cli`, `gateway`, `tools`, `skills`, `agent`, `install`, `whatsapp`, `security`, etc.
+Scopes: `cli`, `gateway`, `tools`, `skills`, `agent`, `install`, `security`, etc.
 
 Examples:
 ```
 fix(cli): prevent crash in save_config_value when model is a string
-feat(gateway): add WhatsApp multi-user session isolation
+feat(gateway): improve Feishu topic routing
 fix(security): prevent shell injection in sudo password piping
 test(tools): add unit tests for file_operations
 ```
@@ -912,7 +719,7 @@ test(tools): add unit tests for file_operations
 
 - **Discord**: [discord.gg/NousResearch](https://discord.gg/NousResearch) — for questions, showcasing projects, and sharing skills
 - **GitHub Discussions**: For design proposals and architecture discussions
-- **Skills Hub**: Upload specialized skills to a registry and share them with the community
+- **Skills**: Share standalone `SKILL.md` packages with the community
 
 ---
 

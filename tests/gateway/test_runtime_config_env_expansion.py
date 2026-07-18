@@ -51,13 +51,6 @@ def test_load_prefill_messages_expands_env_var_path(monkeypatch, gateway_home):
             {"enabled": True, "effort": "high"},
         ),
         (
-            "agent:\n  service_tier: ${SERVICE_TIER}\n",
-            "SERVICE_TIER",
-            "priority",
-            "_load_service_tier",
-            "priority",
-        ),
-        (
             "display:\n  busy_input_mode: ${BUSY_MODE}\n",
             "BUSY_MODE",
             "steer",

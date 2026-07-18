@@ -249,11 +249,7 @@ SCENARIOS: List[Dict[str, Any]] = [
 
 
 def setup_isolated_home(enabled: bool) -> Path:
-    """Create a fresh ~/.hermes/ for one test, copying minimal credentials.
-
-    Also reads OPENROUTER_API_KEY from the user's real ``~/.hermes/.env`` so
-    the agent can authenticate against OpenRouter inside the isolated home.
-    """
+    """Create an isolated home using the user's retained runtime config."""
     home_dir = Path(tempfile.mkdtemp(prefix="hermes_ts_live_"))
     hermes_home = home_dir / ".hermes"
     hermes_home.mkdir(parents=True)
@@ -261,8 +257,8 @@ def setup_isolated_home(enabled: bool) -> Path:
     if ORIGINAL_AUTH.exists():
         shutil.copy(ORIGINAL_AUTH, hermes_home / "auth.json")
 
-    # Copy .env so OPENROUTER_API_KEY (or others) are visible to the agent
-    # running inside the isolated home.
+    # Copy secrets for a configured custom endpoint. Codex authentication is
+    # copied separately via auth.json above.
     real_env_file = Path.home() / ".hermes" / ".env"
     if real_env_file.exists():
         shutil.copy(real_env_file, hermes_home / ".env")
@@ -275,21 +271,24 @@ def setup_isolated_home(enabled: bool) -> Path:
         from hermes_cli.env_loader import load_hermes_dotenv
         load_hermes_dotenv(hermes_home=str(Path.home() / ".hermes"))
 
-    cfg = {
-        "model": {
-            "provider": "openrouter",
-            "model": "anthropic/claude-haiku-4.5",
-        },
-        "tools": {
-            "tool_search": {
-                "enabled": "on" if enabled else "off",
-                "threshold_pct": 10,
-                "search_default_limit": 5,
-                "max_search_limit": 20,
-            },
-        },
-        "logging": {"level": "WARNING"},
+    cfg = {}
+    real_config = Path.home() / ".hermes" / "config.yaml"
+    if real_config.exists():
+        try:
+            import yaml
+            loaded = yaml.safe_load(real_config.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                cfg = loaded
+        except Exception:
+            pass
+    tools_cfg = cfg.setdefault("tools", {})
+    tools_cfg["tool_search"] = {
+        "enabled": "on" if enabled else "off",
+        "threshold_pct": 10,
+        "search_default_limit": 5,
+        "max_search_limit": 20,
     }
+    cfg["logging"] = {"level": "WARNING"}
     (hermes_home / "config.yaml").write_text(_yaml_dump(cfg), encoding="utf-8")
     return hermes_home
 
@@ -381,11 +380,10 @@ def run_one_scenario(scenario: Dict[str, Any], enabled: bool, out_dir: Path) -> 
     error = None
     final_response = ""
     messages_out = []
+    agent = None
     try:
         from run_agent import AIAgent
         agent = AIAgent(
-            provider="openrouter",
-            model="anthropic/claude-haiku-4.5",
             enabled_toolsets=None,  # Default = all available toolsets, including the registered mcp-fake tools
             quiet_mode=True,
             save_trajectories=False,
@@ -423,7 +421,7 @@ def run_one_scenario(scenario: Dict[str, Any], enabled: bool, out_dir: Path) -> 
         "scenario_id": scenario["id"],
         "scenario_description": scenario["description"],
         "tool_search_enabled": enabled,
-        "model": "anthropic/claude-haiku-4.5 (via openrouter)",
+        "model": f"{getattr(agent, 'model', '')} (via {getattr(agent, 'provider', '')})",
         "prompt": scenario["prompt"],
         "expected_underlying_tools": scenario.get("expected_underlying_tools", []),
         "n_fake_tools_registered": n_registered,
@@ -447,19 +445,19 @@ def run_one_scenario(scenario: Dict[str, Any], enabled: bool, out_dir: Path) -> 
 def _redact_secrets(text: str) -> str:
     """Strip anything secret-shaped from text before it is stored or printed.
 
-    The harness runs against a real OpenRouter key, and ``error`` can carry a
+    The harness runs against real configured credentials, and ``error`` can carry a
     full traceback that — for an auth failure — may echo a request header or
     URL containing the key. We never want a credential landing in a checked-in
     transcript or the console, so we mask:
-      * the live OPENROUTER_API_KEY value, if present in the environment, and
-      * any ``sk-``/``sk-or-`` style bearer token by pattern.
+      * configured API-key-shaped environment values, and
+      * any ``sk-`` style bearer token by pattern.
     """
     if not text:
         return text
     out = text
-    live_key = os.environ.get("OPENROUTER_API_KEY")
-    if live_key and len(live_key) >= 8:
-        out = out.replace(live_key, "[REDACTED]")
+    for name, live_key in os.environ.items():
+        if (name.endswith("_API_KEY") or name.endswith("_TOKEN")) and len(live_key) >= 8:
+            out = out.replace(live_key, "[REDACTED]")
     out = re.sub(r"sk-[A-Za-z0-9_\-]{12,}", "[REDACTED]", out)
     out = re.sub(r"(?i)(authorization|bearer)\s*[:=]\s*\S+", r"\1: [REDACTED]", out)
     return out

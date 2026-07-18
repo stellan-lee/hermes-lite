@@ -172,6 +172,14 @@ class TestImageToBase64DataUrl:
 class TestHandleVisionAnalyze:
     """Verify _handle_vision_analyze returns an Awaitable and builds correct prompt."""
 
+    @pytest.fixture(autouse=True)
+    def _use_auxiliary_path(self, monkeypatch):
+        """Keep auxiliary-path assertions independent of prior Codex routing state."""
+        monkeypatch.setattr(
+            "tools.vision_tools._should_use_native_vision_fast_path",
+            lambda: False,
+        )
+
     def test_returns_awaitable(self):
         """The handler must return an Awaitable (coroutine) since it's registered as async."""
         with patch(

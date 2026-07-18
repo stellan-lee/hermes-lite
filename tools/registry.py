@@ -110,7 +110,7 @@ class ToolEntry:
 # check_fn TTL cache
 #
 # check_fn callables like tools/terminal_tool.check_terminal_requirements
-# probe external state (Docker daemon, Modal SDK install, playwright binary
+# probe external state (Docker daemon, Playwright binary
 # availability). For a long-lived CLI or gateway process, calling them on
 # every get_definitions() is pure waste — external state changes on human
 # timescales. Cache results for ~30 s so env-var flips via ``hermes tools``
@@ -340,7 +340,7 @@ class ToolRegistry:
         Only tools whose ``check_fn()`` returns True (or have no check_fn)
         are included. ``check_fn()`` results are cached for ~30 s via
         :func:`_check_fn_cached` to amortize repeat probes (check_terminal_
-        requirements probes modal/docker, browser checks probe playwright,
+        requirements probes Docker, browser checks probe Playwright,
         etc.); TTL chosen so env-var changes (``hermes tools enable foo``)
         still take effect in near-real-time without forcing a full cache
         flush on every call.

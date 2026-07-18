@@ -9,39 +9,29 @@ moa = importlib.import_module("tools.mixture_of_agents_tool")
 
 
 def test_moa_defaults_are_well_formed():
-    # Invariants, not a catalog snapshot: the exact model list churns with
-    # OpenRouter availability (see PR #6636 where gemini-3-pro-preview was
-    # removed upstream). What we care about is that the defaults are present
-    # and valid vendor/model slugs.
+    # MoA defaults to independent calls through the current retained runtime.
     assert isinstance(moa.REFERENCE_MODELS, list)
     assert len(moa.REFERENCE_MODELS) >= 1
-    for m in moa.REFERENCE_MODELS:
-        assert isinstance(m, str) and "/" in m and not m.startswith("/")
-    assert isinstance(moa.AGGREGATOR_MODEL, str)
-    assert "/" in moa.AGGREGATOR_MODEL
+    assert set(moa.REFERENCE_MODELS) == {"active"}
+    assert moa.AGGREGATOR_MODEL == "active"
 
 
 @pytest.mark.asyncio
 async def test_reference_model_retry_warnings_avoid_exc_info_until_terminal_failure(monkeypatch):
-    fake_client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(
-                create=AsyncMock(side_effect=RuntimeError("rate limited"))
-            )
-        )
-    )
     warn = MagicMock()
     err = MagicMock()
 
-    monkeypatch.setattr(moa, "_get_openrouter_client", lambda: fake_client)
+    monkeypatch.setattr(
+        moa, "async_call_llm", AsyncMock(side_effect=RuntimeError("rate limited"))
+    )
     monkeypatch.setattr(moa.logger, "warning", warn)
     monkeypatch.setattr(moa.logger, "error", err)
 
     model, message, success = await moa._run_reference_model_safe(
-        "openai/gpt-5.4-pro", "hello", max_retries=2
+        "active", "hello", max_retries=2
     )
 
-    assert model == "openai/gpt-5.4-pro"
+    assert model == "active"
     assert success is False
     assert "failed after 2 attempts" in message
     assert warn.call_count == 2
@@ -52,11 +42,10 @@ async def test_reference_model_retry_warnings_avoid_exc_info_until_terminal_fail
 
 @pytest.mark.asyncio
 async def test_moa_top_level_error_logs_single_traceback_on_aggregator_failure(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr(
         moa,
         "_run_reference_model_safe",
-        AsyncMock(return_value=("anthropic/claude-opus-4.6", "ok", True)),
+        AsyncMock(return_value=("active", "ok", True)),
     )
     monkeypatch.setattr(
         moa,
@@ -75,7 +64,7 @@ async def test_moa_top_level_error_logs_single_traceback_on_aggregator_failure(m
     result = json.loads(
         await moa.mixture_of_agents_tool(
             "solve this",
-            reference_models=["anthropic/claude-opus-4.6"],
+            reference_models=["active"],
         )
     )
 

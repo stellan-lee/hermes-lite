@@ -417,8 +417,8 @@ class TestUnsupportedPlatform:
 
     @patch("tools.tirith_security._load_security_config")
     def test_explicit_path_still_honored_on_unsupported_platform(self, mock_cfg):
-        """If a user explicitly configured a tirith_path (e.g. they built it
-        themselves under WSL), the unsupported-platform short-circuit must
+        """If a user explicitly configured a tirith_path, the
+        unsupported-platform short-circuit must
         NOT override that — explicit config wins."""
         mock_cfg.return_value = {"tirith_enabled": True,
                                  "tirith_path": "/opt/custom/tirith",

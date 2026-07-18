@@ -41,12 +41,13 @@ from hermes_state import SessionDB
 
 def _build_agent_with_db(db: SessionDB, session_id: str):
     """Build an AIAgent that's wired to ``db`` and pinned to ``session_id``."""
-    with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
+    with patch("agent.context_compressor.get_model_context_length", return_value=128_000):
         from run_agent import AIAgent
 
         agent = AIAgent(
             api_key="test-key",
-            base_url="https://openrouter.ai/api/v1",
+            base_url="http://localhost:8080/v1",
+            provider="custom",
             model="test/model",
             quiet_mode=True,
             session_db=db,
@@ -77,6 +78,9 @@ def _build_agent_with_db(db: SessionDB, session_id: str):
     compressor._last_aux_model_failure_model = None
     compressor._last_aux_model_failure_error = None
     agent.context_compressor = compressor
+    # This regression covers the retained legacy rotation path specifically;
+    # the default in-place compaction path intentionally keeps the same ID.
+    agent.compression_in_place = False
     return agent
 
 

@@ -41,7 +41,6 @@ class TurnOrigin(StrEnum):
     GATEWAY = "gateway"
     SUBAGENT = "subagent"
     BATCH = "batch"
-    ACP = "acp"
     CRON = "cron"
     UNKNOWN = "unknown"
 

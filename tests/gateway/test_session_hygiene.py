@@ -459,7 +459,7 @@ async def test_session_hygiene_retains_parent_route_on_persistence_failure(
         platform=Platform.TELEGRAM,
         chat_type="group",
     )
-    session_entry.last_prompt_tokens = 77
+    session_entry.last_prompt_tokens = 90
     runner.session_store.get_or_create_session.return_value = session_entry
     runner.session_store.load_transcript.return_value = _make_history(
         6, content_size=400
@@ -516,7 +516,7 @@ async def test_session_hygiene_retains_parent_route_on_persistence_failure(
 
     assert result == "ok"
     assert session_entry.session_id == "sess-1"
-    assert session_entry.last_prompt_tokens == 77
+    assert session_entry.last_prompt_tokens == 90
     assert FakeCompressAgent.last_instance.session_id == "sess-1"
     runner._session_db.rollback_compression_rotation.assert_called_once_with(
         "sess-1", "sess-1_compressed"

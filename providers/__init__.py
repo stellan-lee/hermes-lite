@@ -15,22 +15,15 @@ plugins override bundled plugins on name collision (last-writer-wins), so
 third parties can monkey-patch or replace any built-in profile without
 editing the repo.
 
-For backward compatibility, ``providers/*.py`` files (other than ``base.py``
-and ``__init__.py``) are still discovered via ``pkgutil.iter_modules``.
-This lets out-of-tree users drop a single-file profile into an editable
-install without the plugin dir structure. New profiles should prefer the
-plugin layout.
-
 Usage::
 
     from providers import get_provider_profile
-    profile = get_provider_profile("nvidia")   # ProviderProfile or None
-    profile = get_provider_profile("kimi")     # checks name + aliases
+    profile = get_provider_profile("openai-codex")
+    profile = get_provider_profile("ollama")  # resolves the custom alias
 """
 
 from __future__ import annotations
 
-import importlib
 import importlib.util
 import logging
 import sys
@@ -143,8 +136,6 @@ def _discover_providers() -> None:
     Order:
       1. Bundled plugins at ``<repo>/plugins/model-providers/<name>/``
       2. User plugins at ``$HERMES_HOME/plugins/model-providers/<name>/``
-      3. Legacy per-file modules at ``providers/<name>.py`` (back-compat)
-
     Each step imports its plugins, which call ``register_provider()`` at
     module-level. Later steps win on name collision.
     """
@@ -169,23 +160,3 @@ def _discover_providers() -> None:
             if not child.is_dir() or child.name.startswith(("_", ".")):
                 continue
             _import_plugin_dir(child, "user")
-
-    # 3. Legacy single-file profiles at providers/<name>.py. Kept for
-    #    back-compat — if someone drops a ``providers/foo.py`` into an
-    #    editable install, it still works without the plugin layout.
-    try:
-        import pkgutil
-
-        import providers as _pkg
-
-        for _importer, modname, _ispkg in pkgutil.iter_modules(_pkg.__path__):
-            if modname.startswith("_") or modname == "base":
-                continue
-            try:
-                importlib.import_module(f"providers.{modname}")
-            except ImportError as exc:
-                logger.warning(
-                    "Failed to import legacy provider module %s: %s", modname, exc
-                )
-    except Exception:
-        pass

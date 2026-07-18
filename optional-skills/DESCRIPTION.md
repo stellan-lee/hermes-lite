@@ -3,13 +3,13 @@
 Official skills maintained by Nous Research that are **not activated by default**.
 
 These skills ship with the hermes-agent repository but are not copied to
-`~/.hermes/skills/` during setup. They are discoverable via the Skills Hub:
+`~/.hermes/skills/` during setup. To activate one, copy its directory into
+`~/.hermes/skills/` or a project-local skills directory, then configure it
+with the local `hermes skills` command.
 
 ```bash
-hermes skills browse               # browse all skills, official shown first
-hermes skills browse --source official  # browse only official optional skills
-hermes skills search <query>       # finds optional skills labeled "official"
-hermes skills install <identifier> # copies to ~/.hermes/skills/ and activates
+cp -R optional-skills/devops/cli ~/.hermes/skills/
+hermes skills
 ```
 
 ## Why optional?

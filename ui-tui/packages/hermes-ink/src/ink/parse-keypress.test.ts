@@ -135,7 +135,7 @@ describe('fragmented SGR mouse recovery', () => {
   })
 
   it('swallows a fully degraded mouse-burst noise blob without leaking prompt text', () => {
-    // Captured from Windows Terminal during a heavy tool-call render: the event
+    // Captured during a heavy tool-call render: the event
     // loop blocked past App's 50ms flush timer, so a long burst of SGR mouse
     // reports (mode 1003 any-motion) arrived as text with prefixes AND
     // too degraded for SGR_MOUSE_FRAGMENT_RE (1- and 2-param remnants, a

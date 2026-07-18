@@ -1,9 +1,8 @@
 """Stream diagnostics — per-attempt counters, exception chains, retry logging.
 
 When a streaming chat-completions request dies mid-response, we want to
-know why: which Cloudflare edge served the request, which OpenRouter
-downstream provider answered, how many bytes/chunks we got before the
-drop, the HTTP status, the underlying httpx error class.  These helpers
+know why: which edge served the request, how many bytes/chunks we got before
+the drop, the HTTP status, and the underlying httpx error class. These helpers
 collect that info and emit it both to ``agent.log`` (full detail) and to
 the user-facing status line (compact).
 
@@ -29,9 +28,6 @@ logger = logging.getLogger(__name__)
 STREAM_DIAG_HEADERS = (
     "cf-ray",
     "cf-cache-status",
-    "x-openrouter-provider",
-    "x-openrouter-model",
-    "x-openrouter-id",
     "x-request-id",
     "x-vercel-id",
     "via",
@@ -138,7 +134,7 @@ def log_stream_retry(
 
     When *diag* is provided (the per-attempt stream-diagnostic dict from
     :func:`stream_diag_init`), the WARNING also captures upstream headers
-    (cf-ray, x-openrouter-provider, x-openrouter-id), HTTP status, bytes
+    (cf-ray, request id, server), HTTP status, bytes
     streamed before the drop, and elapsed time on the dying attempt.
     These are the breadcrumbs needed to answer "is one CF edge / one
     downstream provider responsible, or is it random across runs?"
@@ -232,7 +228,7 @@ def emit_stream_drop(
     so they're easy to attribute.  All cases also write a structured
     WARNING to ``agent.log`` via :func:`log_stream_retry` with the full
     diagnostic detail (subagent_id, provider, base_url, error_type,
-    cf-ray, x-openrouter-provider, bytes/chunks, elapsed) for post-hoc
+    cf-ray, request id, bytes/chunks, elapsed) for post-hoc
     analysis.
 
     The user-visible status line is intentionally compact: provider,

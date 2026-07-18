@@ -2,7 +2,7 @@
 Hermes Gateway - Multi-platform messaging integration.
 
 This module provides a unified gateway for connecting the Hermes agent
-to various messaging platforms (Telegram, Discord, WhatsApp, Weixin, and more) with:
+to messaging platforms (Telegram, Discord, Slack, Feishu, email, and webhooks) with:
 - Session management (persistent conversations with reset policies)
 - Dynamic context injection (agent knows where messages come from)
 - Delivery routing (cron job outputs to appropriate channels)

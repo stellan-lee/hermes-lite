@@ -627,36 +627,6 @@ def test_command_dispatch_queue_requires_arg(server):
     assert resp["error"]["code"] == 4004
 
 
-def test_skills_manage_search_uses_tools_hub_sources(server):
-    result = type("Result", (), {
-        "description": "Build better terminal demos",
-        "name": "showroom",
-    })()
-    auth = MagicMock(return_value="auth")
-    router = MagicMock(return_value=["source"])
-    search = MagicMock(return_value=[result])
-    fake_hub = types.SimpleNamespace(
-        GitHubAuth=auth,
-        create_source_router=router,
-        unified_search=search,
-    )
-
-    with patch.dict(sys.modules, {"tools.skills_hub": fake_hub}):
-        resp = server.handle_request({
-            "id": "skills-search",
-            "method": "skills.manage",
-            "params": {"action": "search", "query": "showroom"},
-        })
-
-    assert "error" not in resp
-    assert resp["result"] == {
-        "results": [{"description": "Build better terminal demos", "name": "showroom"}]
-    }
-    auth.assert_called_once_with()
-    router.assert_called_once_with("auth")
-    search.assert_called_once_with("showroom", ["source"], source_filter="all", limit=20)
-
-
 def test_command_dispatch_steer_fallback_sends_message(server):
     """command.dispatch /steer with no active agent falls back to send."""
     sid = "test-session"

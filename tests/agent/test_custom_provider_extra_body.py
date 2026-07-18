@@ -8,7 +8,7 @@ def test_custom_provider_extra_body_merges_into_request_overrides():
         provider="custom",
         model="google/gemma-4-31b-it",
         base_url="https://example.test/v1",
-        request_overrides={"service_tier": "priority"},
+        request_overrides={"custom_option": "value"},
     )
 
     _merge_custom_provider_extra_body(
@@ -27,7 +27,7 @@ def test_custom_provider_extra_body_merges_into_request_overrides():
     )
 
     assert agent.request_overrides == {
-        "service_tier": "priority",
+        "custom_option": "value",
         "extra_body": {
             "enable_thinking": True,
             "reasoning_effort": "high",

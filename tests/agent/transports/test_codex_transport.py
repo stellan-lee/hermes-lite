@@ -91,35 +91,7 @@ class TestCodexBuildKwargs:
         )
         assert kw.get("prompt_cache_key") == "test-session-123"
 
-    def test_github_responses_no_cache_key(self, transport):
-        messages = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gpt-5.4", messages=messages, tools=[],
-            session_id="test-session",
-            is_github_responses=True,
-        )
-        assert "prompt_cache_key" not in kw
 
-    def test_xai_responses_sends_cache_key_via_extra_body(self, transport):
-        """xAI's Responses API documents ``prompt_cache_key`` as the
-        body-level cache-routing key (the ``x-grok-conv-id`` header is
-        Chat-Completions-only). Passing it via ``extra_body`` is robust
-        against openai SDK builds whose ``Responses.stream()`` kwarg
-        signature ever drops the field — the body field still serializes
-        and reaches xAI either way. The ``x-grok-conv-id`` header is kept
-        as a belt-and-braces fallback so cache routing survives even
-        when the body field would be stripped by an intermediate proxy.
-        Ref: https://docs.x.ai/developers/advanced-api-usage/prompt-caching/maximizing-cache-hits
-        """
-        messages = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="grok-4.3", messages=messages, tools=[],
-            session_id="conv-xai-1",
-            is_xai_responses=True,
-        )
-        assert "prompt_cache_key" not in kw
-        assert kw.get("extra_body", {}).get("prompt_cache_key") == "conv-xai-1"
-        assert kw.get("extra_headers", {}).get("x-grok-conv-id") == "conv-xai-1"
 
     def test_xai_responses_extra_body_preserves_caller_fields(self, transport):
         """When the caller already supplies ``extra_body`` (e.g. via
@@ -155,28 +127,7 @@ class TestCodexBuildKwargs:
         )
         assert "max_output_tokens" not in kw
 
-    def test_xai_headers(self, transport):
-        messages = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="grok-3", messages=messages, tools=[],
-            session_id="conv-123",
-            is_xai_responses=True,
-        )
-        assert kw.get("extra_headers", {}).get("x-grok-conv-id") == "conv-123"
 
-    def test_xai_headers_preserve_request_override_headers(self, transport):
-        messages = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="grok-3", messages=messages, tools=[],
-            session_id="conv-123",
-            is_xai_responses=True,
-            request_overrides={"extra_headers": {"X-Test": "1", "X-Trace": "abc"}},
-        )
-        assert kw.get("extra_headers") == {
-            "X-Test": "1",
-            "X-Trace": "abc",
-            "x-grok-conv-id": "conv-123",
-        }
 
     def test_minimal_effort_clamped(self, transport):
         messages = [{"role": "user", "content": "Hi"}]
@@ -187,22 +138,6 @@ class TestCodexBuildKwargs:
         # "minimal" should be clamped to "low"
         assert kw.get("reasoning", {}).get("effort") == "low"
 
-    def test_xai_reasoning_effort_passed(self, transport):
-        messages = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="grok-4.3", messages=messages, tools=[],
-            is_xai_responses=True,
-            reasoning_config={"effort": "high"},
-        )
-        # xAI Responses receives reasoning.effort on the allowlisted models.
-        assert kw.get("reasoning") == {"effort": "high"}
-        # As of May 2026 (post-revert of PR #26644) we DO request
-        # reasoning.encrypted_content back from xAI so we can replay it
-        # across turns for cross-turn coherence — xAI explicitly relies
-        # on this for their partnership integration.  See
-        # tests/run_agent/test_codex_xai_oauth_recovery.py for the
-        # full history.
-        assert "reasoning.encrypted_content" in kw.get("include", [])
 
     def test_xai_reasoning_disabled_no_reasoning_key(self, transport):
         messages = [{"role": "user", "content": "Hi"}]
@@ -232,112 +167,13 @@ class TestCodexBuildKwargs:
     # ``reasoning.encrypted_content`` back from xAI on every model —
     # see test_xai_reasoning_effort_passed for the rationale.
 
-    def test_xai_grok_4_omits_reasoning_effort(self, transport):
-        """grok-4 / grok-4-0709 reject reasoning.effort with HTTP 400."""
-        messages = [{"role": "user", "content": "Hi"}]
-        for model in ("grok-4", "grok-4-0709"):
-            kw = transport.build_kwargs(
-                model=model, messages=messages, tools=[],
-                is_xai_responses=True,
-                reasoning_config={"effort": "high"},
-            )
-            assert "reasoning" not in kw, (
-                f"{model} must not receive a reasoning key (xAI rejects it)"
-            )
-            # Even without the effort dial we still ask xAI to echo back
-            # encrypted reasoning content so it can be replayed next turn.
-            assert "reasoning.encrypted_content" in kw.get("include", [])
 
-    def test_xai_grok_4_fast_omits_reasoning_effort(self, transport):
-        """grok-4-fast and grok-4-1-fast variants reject reasoning.effort."""
-        messages = [{"role": "user", "content": "Hi"}]
-        for model in (
-            "grok-4-fast-reasoning",
-            "grok-4-fast-non-reasoning",
-            "grok-4-1-fast-reasoning",
-            "grok-4-1-fast-non-reasoning",
-        ):
-            kw = transport.build_kwargs(
-                model=model, messages=messages, tools=[],
-                is_xai_responses=True,
-                reasoning_config={"effort": "low"},
-            )
-            assert "reasoning" not in kw, (
-                f"{model} must not receive a reasoning key (xAI rejects it)"
-            )
 
-    def test_xai_grok_3_non_mini_omits_reasoning_effort(self, transport):
-        """Plain grok-3 rejects reasoning.effort — only grok-3-mini accepts it."""
-        messages = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="grok-3", messages=messages, tools=[],
-            is_xai_responses=True,
-            reasoning_config={"effort": "medium"},
-        )
-        assert "reasoning" not in kw
 
-    def test_xai_grok_3_mini_keeps_reasoning_effort(self, transport):
-        """grok-3-mini and -fast variants do accept the effort dial."""
-        messages = [{"role": "user", "content": "Hi"}]
-        for model in ("grok-3-mini", "grok-3-mini-fast"):
-            kw = transport.build_kwargs(
-                model=model, messages=messages, tools=[],
-                is_xai_responses=True,
-                reasoning_config={"effort": "high"},
-            )
-            assert kw.get("reasoning") == {"effort": "high"}
 
-    def test_xai_grok_4_20_0309_variants_omit_reasoning_effort(self, transport):
-        """grok-4.20-0309-(non-)reasoning reject the effort dial.
 
-        Counterintuitively, only grok-4.20-multi-agent-0309 accepts it.
-        """
-        messages = [{"role": "user", "content": "Hi"}]
-        for model in ("grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning"):
-            kw = transport.build_kwargs(
-                model=model, messages=messages, tools=[],
-                is_xai_responses=True,
-                reasoning_config={"effort": "high"},
-            )
-            assert "reasoning" not in kw, f"{model} must not receive reasoning"
 
-    def test_xai_grok_4_20_multi_agent_keeps_reasoning_effort(self, transport):
-        """grok-4.20-multi-agent-0309 is the one grok-4.20 variant that accepts effort."""
-        messages = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="grok-4.20-multi-agent-0309", messages=messages, tools=[],
-            is_xai_responses=True,
-            reasoning_config={"effort": "low"},
-        )
-        assert kw.get("reasoning") == {"effort": "low"}
 
-    def test_xai_grok_code_fast_omits_reasoning_effort(self, transport):
-        """grok-code-fast-1 rejects reasoning.effort."""
-        messages = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="grok-code-fast-1", messages=messages, tools=[],
-            is_xai_responses=True,
-            reasoning_config={"effort": "high"},
-        )
-        assert "reasoning" not in kw
-
-    def test_xai_aggregator_prefix_stripped(self, transport):
-        """`x-ai/grok-3-mini` (OpenRouter-style slug) still resolves correctly."""
-        messages = [{"role": "user", "content": "Hi"}]
-        # Effort-capable
-        kw = transport.build_kwargs(
-            model="x-ai/grok-3-mini", messages=messages, tools=[],
-            is_xai_responses=True,
-            reasoning_config={"effort": "high"},
-        )
-        assert kw.get("reasoning") == {"effort": "high"}
-        # Effort-incapable
-        kw = transport.build_kwargs(
-            model="x-ai/grok-4-0709", messages=messages, tools=[],
-            is_xai_responses=True,
-            reasoning_config={"effort": "high"},
-        )
-        assert "reasoning" not in kw
 
 
 class TestCodexValidateResponse:
@@ -515,79 +351,8 @@ class TestCodexTransportTimeout:
         assert kw.get("timeout") == 450.0
 
 
-class TestCodexTransportXaiServiceTierStrip:
-    """xAI Responses API rejects ``service_tier`` (#28490).
-
-    ``resolve_fast_mode_overrides`` only returns ``service_tier`` for
-    OpenAI fast-eligible models, so on paper the field should never
-    reach a Grok request.  But ``self.service_tier`` lingers across
-    model switches and can also be set directly via ``agent.service_tier``
-    in config.yaml — both leak paths plumb through ``request_overrides``
-    and would 400 against xAI's ``/v1/responses``.
-    Strip defensively when targeting xAI.
-    """
-
-    @pytest.fixture
-    def transport(self):
-        from agent.transports.codex import ResponsesApiTransport
-        return ResponsesApiTransport()
-
-    def test_xai_strips_service_tier_from_request_overrides(self, transport):
-        """Headline #28490 case: service_tier=priority leaks through
-        request_overrides, must not reach the xAI request body."""
-        kw = transport.build_kwargs(
-            model="grok-4.3",
-            messages=[{"role": "user", "content": "hi"}],
-            tools=[],
-            is_xai_responses=True,
-            request_overrides={"service_tier": "priority"},
-        )
-        assert "service_tier" not in kw, (
-            f"service_tier must be stripped on xAI requests, "
-            f"got {kw.get('service_tier')!r}"
-        )
-
-    def test_non_xai_codex_preserves_service_tier(self, transport):
-        """The strip is xAI-only — native Codex DOES accept
-        service_tier=priority (OpenAI Priority Processing).  Stripping
-        it elsewhere would silently disable the user's fast-mode opt-in.
-        """
-        kw = transport.build_kwargs(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": "hi"}],
-            tools=[],
-            is_xai_responses=False,
-            is_codex_backend=True,
-            request_overrides={"service_tier": "priority"},
-        )
-        assert kw.get("service_tier") == "priority", (
-            "non-xAI codex_responses providers must keep service_tier"
-        )
-
-    def test_github_responses_preserves_service_tier(self, transport):
-        """GitHub Models (Copilot) is another codex_responses surface
-        that should not be affected by the xAI strip."""
-        kw = transport.build_kwargs(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": "hi"}],
-            tools=[],
-            is_github_responses=True,
-            request_overrides={"service_tier": "priority"},
-        )
-        assert kw.get("service_tier") == "priority"
-
-
-class TestPreflightSlashEnumStrip:
-    """xAI Responses safety-net: strip slash-containing enum values
-    when the model name indicates a Grok target (#28490).
-
-    Native Codex accepts ``/``-containing enums; xAI rejects them with
-    HTTP 400 "Invalid arguments passed to the model".  The main agent
-    loop and the auxiliary client already sanitize at request-build
-    time; this preflight catches any future code path that bypasses
-    those — gated on model name so we don't unnecessarily strip on
-    non-xAI providers.
-    """
+class TestPreflightToolSchemas:
+    """Codex preflight preserves valid OpenAI-compatible tool schemas."""
 
     def _make_kwargs(self, model: str, enum_values: list[str]) -> dict:
         return {
@@ -612,38 +377,8 @@ class TestPreflightSlashEnumStrip:
             ],
         }
 
-    def test_grok_model_strips_slash_enum_values(self):
-        """When the model name is Grok-family, slash-containing enum
-        values are stripped so xAI doesn't 400 on the tool schema."""
-        from agent.codex_responses_adapter import _preflight_codex_api_kwargs
-        kwargs = self._make_kwargs(
-            "grok-4.3",
-            ["Qwen/Qwen3.5-0.8B", "openai/gpt-oss-20b", "plain-id"],
-        )
-        result = _preflight_codex_api_kwargs(kwargs)
-        # The enum keyword itself is stripped (per strip_slash_enum's
-        # semantics — it removes the constraint entirely when any value
-        # contains /).
-        params = result["tools"][0]["parameters"]
-        assert "enum" not in params["properties"]["model_id"], (
-            "slash-containing enum must be stripped on Grok"
-        )
-
-    def test_aggregator_prefixed_grok_also_strips(self):
-        """Aggregator-prefixed (x-ai/grok-*) names hit the same path."""
-        from agent.codex_responses_adapter import _preflight_codex_api_kwargs
-        kwargs = self._make_kwargs(
-            "x-ai/grok-4.3",
-            ["Qwen/Qwen3.5-0.8B"],
-        )
-        result = _preflight_codex_api_kwargs(kwargs)
-        assert "enum" not in result["tools"][0]["parameters"]["properties"]["model_id"]
-
-    def test_non_grok_model_preserves_slash_enum_values(self):
-        """Native Codex / GitHub Models DO accept slash-containing
-        enums.  The safety-net must NOT strip there or we silently
-        degrade tool-schema constraints on every codex_responses
-        provider that isn't xAI."""
+    def test_codex_model_preserves_slash_enum_values(self):
+        """Native Codex accepts slash-containing enum values."""
         from agent.codex_responses_adapter import _preflight_codex_api_kwargs
         kwargs = self._make_kwargs(
             "gpt-5.5",
@@ -651,7 +386,6 @@ class TestPreflightSlashEnumStrip:
         )
         result = _preflight_codex_api_kwargs(kwargs)
         params = result["tools"][0]["parameters"]
-        # The enum must survive on non-xAI providers.
         assert params["properties"]["model_id"].get("enum") == [
             "Qwen/Qwen3.5-0.8B", "plain-id"
         ]

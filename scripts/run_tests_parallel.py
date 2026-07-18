@@ -131,7 +131,7 @@ def _count_tests(
 
     counts: dict[Path, int] = {}
     for line in result.stdout.splitlines():
-        # Lines look like: tests/acp/test_auth.py::TestClass::test_name
+        # Lines look like: tests/agent/test_auth.py::TestClass::test_name
         if "::" not in line:
             continue
         file_part = line.split("::", 1)[0]
@@ -195,7 +195,7 @@ def _kill_tree(proc: "subprocess.Popen", pgid: int | None = None) -> None:
     long-running grandchildren that survive the pytest subprocess exit
     if we don't kill the whole tree. ``subprocess.Popen.kill()`` only
     targets the immediate child; grandchildren reparent to PID 1
-    (Linux) / get adopted by services.exe (Windows) and leak.
+    and leak.
 
     POSIX: the caller must pass ``pgid`` — the process group id captured
     immediately after Popen (via ``os.getpgid(proc.pid)``). We can't
@@ -205,39 +205,22 @@ def _kill_tree(proc: "subprocess.Popen", pgid: int | None = None) -> None:
     the group are still alive. SIGKILL'ing the captured pgid takes out
     everything in that group atomically.
 
-    Windows: ``taskkill /F /T /PID`` walks the recorded ppid chain and
-    terminates the whole tree, even when the root has already exited.
-
     Why not psutil: psutil walks the parent-child tree, but in the
     happy path the root has already been reaped so ``psutil.Process(pid)``
     can't find it; grandchildren reparented to PID 1 are also
     unreachable by tree walk at that point. The platform-native
-    primitives (process groups / taskkill) handle both cases correctly
+    process-group primitive handles both cases correctly
     without an extra abstraction layer.
     """
     if proc.pid is None:
         return
 
-    if sys.platform == "win32":
+    if pgid is not None:
         try:
-            
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )  # windows-footgun: ok
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            import signal as _signal
+            os.killpg(pgid, _signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
             pass
-    else:
-        # POSIX: kill the captured pgid. Local-import signal so the
-        # SIGKILL attribute is never referenced on Windows.
-        if pgid is not None:
-            try:
-                import signal as _signal
-                os.killpg(pgid, _signal.SIGKILL)  # windows-footgun: ok
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
 
     # Belt-and-suspenders: ensure subprocess.communicate() sees the exit.
     try:
@@ -286,26 +269,20 @@ def _run_one_file(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        # POSIX: place the child at the head of its own process group so
-        # _kill_tree can SIGKILL the group atomically.
-        # Windows: this maps to CREATE_NEW_PROCESS_GROUP in CPython 3.12+;
-        # _kill_tree handles the Windows path via taskkill /F /T.
+        # Place the child at the head of its own process group so _kill_tree
+        # can SIGKILL the group atomically.
         start_new_session=True,
     )
 
     # Capture the pgid NOW, before the leader can exit and be reaped.
     # Once the leader is reaped, os.getpgid(proc.pid) raises
     # ProcessLookupError even though grandchildren in that group are
-    # still alive — defeating the whole cleanup. None on Windows where
-    # the pgid concept doesn't apply (taskkill walks ppid chain instead).
+    # still alive — defeating the whole cleanup.
     pgid: int | None = None
-    if sys.platform != "win32":
-        try:
-            pgid = os.getpgid(proc.pid)
-        except (ProcessLookupError, PermissionError):
-            # Astonishingly fast child? Already dead. _kill_tree's
-            # fallback will handle this case as a no-op.
-            pgid = None
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError):
+        pgid = None
 
     try:
         output, _ = proc.communicate(timeout=file_timeout)
@@ -382,8 +359,8 @@ def _parse_pytest_summary(output: str) -> dict[str, int]:
 
 def _format_file(file: Path, repo_root: Path) -> str:
     """Render a test-file path for display: strip the repo-root prefix
-    when possible so output reads ``tests/acp/test_auth.py`` instead of
-    ``/home/runner/work/hermes-agent/hermes-agent/tests/acp/test_auth.py``.
+    when possible so output reads ``tests/agent/test_auth.py`` instead of
+    ``/home/runner/work/hermes-agent/hermes-agent/tests/agent/test_auth.py``.
 
     Falls back to the absolute path for anything outside the repo root.
     """

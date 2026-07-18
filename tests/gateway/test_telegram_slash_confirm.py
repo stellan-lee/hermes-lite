@@ -71,7 +71,8 @@ class TestSendSlashConfirm:
         )
 
         assert result.success is True
-        assert "MARKDOWN_V2" in repr(sent["parse_mode"])
+        expected = TelegramAdapter.send_slash_confirm.__globals__["ParseMode"].MARKDOWN_V2
+        assert sent["parse_mode"] == expected
         # Underscores and dots must be escaped by format_message
         assert "script\\_name" in sent["text"]
         assert "\\." in sent["text"]

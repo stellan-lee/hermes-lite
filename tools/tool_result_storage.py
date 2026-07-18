@@ -9,8 +9,7 @@ Defense against context-window overflow operates at three levels:
 2. **Per-result persistence** (maybe_persist_tool_result): After a tool
    returns, if its output exceeds the tool's registered threshold
    (registry.get_max_result_size), the full output is written INTO THE
-   SANDBOX temp dir (for example /tmp/hermes-results/{tool_use_id}.txt on
-   standard Linux, or $TMPDIR/hermes-results/{tool_use_id}.txt on Termux)
+   SANDBOX temp dir (for example /tmp/hermes-results/{tool_use_id}.txt)
    via env.execute(). The in-context content is replaced with a preview +
    file path reference. The model can read_file to access the full output
    on any backend.
@@ -83,10 +82,7 @@ def _write_to_sandbox(content: str, remote_path: str, env) -> bool:
     (32 * PAGE_SIZE), so the previous heredoc-in-the-command-string approach
     silently failed with ``OSError: [Errno 7] Argument list too long`` for any
     tool result over ~128 KB — exactly the case persistence exists to handle.
-    Routing through stdin removes that ceiling on local + ssh (``_stdin_mode
-    == "pipe"``); remote backends with ``_stdin_mode == "heredoc"`` keep their
-    existing API-body sized limit, which is orders of magnitude larger than
-    the exec-arg ceiling.
+    Routing through stdin removes that ceiling on local and SSH backends.
     """
     storage_dir = os.path.dirname(remote_path)
     cmd = f"mkdir -p {shlex.quote(storage_dir)} && cat > {shlex.quote(remote_path)}"
@@ -130,7 +126,7 @@ def maybe_persist_tool_result(
     """Layer 2: persist oversized result into the sandbox, return preview + path.
 
     Writes via env.execute() so the file is accessible from any backend
-    (local, Docker, SSH, Modal, Daytona). Falls back to inline truncation
+    (local, Docker, SSH). Falls back to inline truncation
     if write fails or no env is available.
 
     Args:

@@ -1,7 +1,7 @@
 """OpenAI Chat Completions transport.
 
-Handles the default api_mode ('chat_completions') used by ~16 OpenAI-compatible
-providers (OpenRouter, Nous, NVIDIA, Qwen, Ollama, DeepSeek, xAI, Kimi, etc.).
+Handles the default api_mode (``chat_completions``) for custom and local
+OpenAI-compatible endpoints.
 
 Messages and tools are already in OpenAI format — convert_messages and
 convert_tools are near-identity.  The complexity lives in build_kwargs
@@ -13,90 +13,9 @@ import copy
 from typing import Any, Dict
 
 from agent.lmstudio_reasoning import resolve_lmstudio_effort
-from agent.moonshot_schema import is_moonshot_model, sanitize_moonshot_tools
 from agent.prompt_builder import DEVELOPER_ROLE_MODELS
 from agent.transports.base import ProviderTransport
 from agent.transports.types import NormalizedResponse, ToolCall, Usage
-
-
-def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> dict | None:
-    """Translate Hermes/OpenRouter-style reasoning config to Gemini thinkingConfig."""
-    if reasoning_config is None or not isinstance(reasoning_config, dict):
-        return None
-
-    normalized_model = (model or "").strip().lower()
-    if normalized_model.startswith("google/"):
-        normalized_model = normalized_model.split("/", 1)[1]
-
-    # ``thinking_config`` is a Gemini-only request parameter. The same
-    # ``gemini`` provider also serves Gemma (and historically PaLM/Bard);
-    # those reject the field with HTTP 400 "Unknown name 'thinking_config':
-    # Cannot find field" — including the polite ``{"includeThoughts": False}``
-    # form. Omit the field entirely on non-Gemini models. (#17426)
-    if not normalized_model.startswith("gemini"):
-        return None
-
-    if reasoning_config.get("enabled") is False:
-        # Gemini can hide thought parts even when internal thinking still
-        # happens; omit thinkingLevel to avoid model-specific validation quirks.
-        return {"includeThoughts": False}
-
-    effort = str(reasoning_config.get("effort", "medium") or "medium").strip().lower()
-    if effort == "none":
-        return {"includeThoughts": False}
-
-    thinking_config: Dict[str, Any] = {"includeThoughts": True}
-
-    # Gemini 2.5 accepts thinkingBudget; don't guess a budget from Hermes'
-    # coarse effort levels. ``includeThoughts`` alone is enough to surface
-    # thought parts without risking request validation errors.
-    if normalized_model.startswith("gemini-2.5-"):
-        return thinking_config
-
-    if effort not in {"minimal", "low", "medium", "high", "xhigh"}:
-        effort = "medium"
-
-    # Gemini 3 Flash documents low/medium/high thinking levels; Gemini 3 Pro
-    # is stricter (low/high). Clamp Hermes' wider effort set to what each
-    # family accepts so we never forward an undocumented level verbatim.
-    if normalized_model.startswith(("gemini-3", "gemini-3.1")):
-        if "flash" in normalized_model:
-            if effort in {"minimal", "low"}:
-                thinking_config["thinkingLevel"] = "low"
-            elif effort in {"high", "xhigh"}:
-                thinking_config["thinkingLevel"] = "high"
-            else:
-                thinking_config["thinkingLevel"] = "medium"
-        elif "pro" in normalized_model:
-            thinking_config["thinkingLevel"] = (
-                "high" if effort in {"high", "xhigh"} else "low"
-            )
-
-    return thinking_config
-
-
-def _snake_case_gemini_thinking_config(config: dict | None) -> dict | None:
-    """Convert Gemini thinking config keys to the OpenAI-compat field names."""
-    if not isinstance(config, dict) or not config:
-        return None
-
-    translated: Dict[str, Any] = {}
-    if isinstance(config.get("includeThoughts"), bool):
-        translated["include_thoughts"] = config["includeThoughts"]
-    if isinstance(config.get("thinkingLevel"), str) and config["thinkingLevel"].strip():
-        translated["thinking_level"] = config["thinkingLevel"].strip().lower()
-    if isinstance(config.get("thinkingBudget"), (int, float)):
-        translated["thinking_budget"] = int(config["thinkingBudget"])
-    return translated or None
-
-
-def _is_gemini_openai_compat_base_url(base_url: Any) -> bool:
-    normalized = str(base_url or "").strip().rstrip("/").lower()
-    if not normalized:
-        return False
-    if "generativelanguage.googleapis.com" not in normalized:
-        return False
-    return normalized.endswith("/openai")
 
 
 class ChatCompletionsTransport(ProviderTransport):
@@ -210,34 +129,16 @@ class ChatCompletionsTransport(ProviderTransport):
             # Provider profile path (all per-provider quirks live in providers/)
             provider_profile: ProviderProfile | None — when present, delegates to
                 _build_kwargs_from_profile(); all flag params below are bypassed.
-            # Legacy-path flags — only used when provider_profile is None
-            # (i.e. custom / unregistered providers). Known providers all go
-            # through provider_profile.
-            is_openrouter: bool
-            is_nous: bool
-            is_qwen_portal: bool
-            is_github_models: bool
-            is_nvidia_nim: bool
-            is_kimi: bool
-            is_tokenhub: bool
+            # Retained compatible-runtime flags
             is_lmstudio: bool
             is_custom_provider: bool
             ollama_num_ctx: int | None
-            # Provider routing
-            provider_preferences: dict | None
-            # Qwen-specific
-            qwen_prepare_fn: callable | None — runs AFTER codex sanitization
-            qwen_prepare_inplace_fn: callable | None — in-place variant for deepcopied lists
-            qwen_session_metadata: dict | None
             # Temperature
             fixed_temperature: Any — from _fixed_temperature_for_model()
             omit_temperature: bool
             # Reasoning
             supports_reasoning: bool
-            github_reasoning_extra: dict | None
             lmstudio_reasoning_options: list[str] | None  # raw allowed_options from /api/v1/models
-            # Claude on OpenRouter/Nous max output
-            anthropic_max_output: int | None
             extra_body_additions: dict | None
         """
         # Codex sanitization: drop reasoning_items / call_id / response_item_id
@@ -274,61 +175,20 @@ class ChatCompletionsTransport(ProviderTransport):
         if timeout is not None:
             api_kwargs["timeout"] = timeout
 
-        # Tools
+        # Tools are already OpenAI-compatible schemas.
         if tools:
-            # Moonshot/Kimi uses a stricter flavored JSON Schema.  Rewriting
-            # tool parameters here keeps aggregator routes (Nous, OpenRouter,
-            # etc.) compatible, in addition to direct moonshot.ai endpoints.
-            if is_moonshot_model(model):
-                tools = sanitize_moonshot_tools(tools)
             api_kwargs["tools"] = tools
 
         # max_tokens resolution — priority: ephemeral > user > provider default
         max_tokens_fn = params.get("max_tokens_param_fn")
         ephemeral = params.get("ephemeral_max_output_tokens")
         max_tokens = params.get("max_tokens")
-        anthropic_max_out = params.get("anthropic_max_output")
-        is_nvidia_nim = params.get("is_nvidia_nim", False)
-        is_kimi = params.get("is_kimi", False)
-        is_tokenhub = params.get("is_tokenhub", False)
         reasoning_config = params.get("reasoning_config")
 
         if ephemeral is not None and max_tokens_fn:
             api_kwargs.update(max_tokens_fn(ephemeral))
         elif max_tokens is not None and max_tokens_fn:
             api_kwargs.update(max_tokens_fn(max_tokens))
-        elif anthropic_max_out is not None:
-            api_kwargs["max_tokens"] = anthropic_max_out
-
-        # Kimi: top-level reasoning_effort (unless thinking disabled)
-        if is_kimi:
-            _kimi_thinking_off = bool(
-                reasoning_config
-                and isinstance(reasoning_config, dict)
-                and reasoning_config.get("enabled") is False
-            )
-            if not _kimi_thinking_off:
-                _kimi_effort = "medium"
-                if reasoning_config and isinstance(reasoning_config, dict):
-                    _e = (reasoning_config.get("effort") or "").strip().lower()
-                    if _e in {"low", "medium", "high"}:
-                        _kimi_effort = _e
-                api_kwargs["reasoning_effort"] = _kimi_effort
-
-        # Tencent TokenHub: top-level reasoning_effort (unless thinking disabled)
-        if is_tokenhub:
-            _tokenhub_thinking_off = bool(
-                reasoning_config
-                and isinstance(reasoning_config, dict)
-                and reasoning_config.get("enabled") is False
-            )
-            if not _tokenhub_thinking_off:
-                _tokenhub_effort = "high"
-                if reasoning_config and isinstance(reasoning_config, dict):
-                    _e = (reasoning_config.get("effort") or "").strip().lower()
-                    if _e in {"low", "medium", "high"}:
-                        _tokenhub_effort = _e
-                api_kwargs["reasoning_effort"] = _tokenhub_effort
 
         # LM Studio: top-level reasoning_effort. Only emit when the model
         # declares reasoning support via /api/v1/models capabilities (gated
@@ -345,67 +205,10 @@ class ChatCompletionsTransport(ProviderTransport):
         # extra_body assembly
         extra_body: dict[str, Any] = {}
 
-        is_openrouter = params.get("is_openrouter", False)
-        is_nous = params.get("is_nous", False)
-        is_github_models = params.get("is_github_models", False)
-        provider_name = str(params.get("provider_name") or "").strip().lower()
-        base_url = params.get("base_url")
-
-        provider_prefs = params.get("provider_preferences")
-        if provider_prefs and is_openrouter:
-            extra_body["provider"] = provider_prefs
-
-        # Pareto Code router plugin — model-gated. Same shape as the
-        # profile path in plugins/model-providers/openrouter/__init__.py;
-        # this branch only runs when the OpenRouter profile isn't loaded.
-        if is_openrouter and model == "openrouter/pareto-code":
-            _pareto_score = params.get("openrouter_min_coding_score")
-            if _pareto_score is not None and _pareto_score != "":
-                try:
-                    _pareto_score_f = float(_pareto_score)
-                except (TypeError, ValueError):
-                    _pareto_score_f = None
-                if _pareto_score_f is not None and 0.0 <= _pareto_score_f <= 1.0:
-                    extra_body["plugins"] = [
-                        {"id": "pareto-router", "min_coding_score": _pareto_score_f}
-                    ]
-
-        # Kimi extra_body.thinking
-        if is_kimi:
-            _kimi_thinking_enabled = True
-            if reasoning_config and isinstance(reasoning_config, dict):
-                if reasoning_config.get("enabled") is False:
-                    _kimi_thinking_enabled = False
-            extra_body["thinking"] = {
-                "type": "enabled" if _kimi_thinking_enabled else "disabled",
-            }
-
         # Reasoning. LM Studio is handled above via top-level reasoning_effort,
         # so skip emitting extra_body.reasoning for it.
         if params.get("supports_reasoning", False) and not params.get("is_lmstudio", False):
-            if is_github_models:
-                gh_reasoning = params.get("github_reasoning_extra")
-                if gh_reasoning is not None:
-                    extra_body["reasoning"] = gh_reasoning
-            else:
-                extra_body["reasoning"] = {"enabled": True, "effort": "medium"}
-
-        if provider_name == "gemini":
-            raw_thinking_config = _build_gemini_thinking_config(model, reasoning_config)
-            if _is_gemini_openai_compat_base_url(base_url):
-                thinking_config = _snake_case_gemini_thinking_config(raw_thinking_config)
-                if thinking_config:
-                    openai_compat_extra = extra_body.get("extra_body", {})
-                    google_extra = openai_compat_extra.get("google", {})
-                    google_extra["thinking_config"] = thinking_config
-                    openai_compat_extra["google"] = google_extra
-                    extra_body["extra_body"] = openai_compat_extra
-            elif raw_thinking_config:
-                extra_body["thinking_config"] = raw_thinking_config
-        elif provider_name == "google-gemini-cli":
-            thinking_config = _build_gemini_thinking_config(model, reasoning_config)
-            if thinking_config:
-                extra_body["thinking_config"] = thinking_config
+            extra_body["reasoning"] = {"enabled": True, "effort": "medium"}
 
         # Merge any pre-built extra_body additions
         additions = params.get("extra_body_additions")
@@ -415,7 +218,7 @@ class ChatCompletionsTransport(ProviderTransport):
         if extra_body:
             api_kwargs["extra_body"] = extra_body
 
-        # Request overrides last (service_tier etc.)
+        # Request overrides are applied last.
         overrides = params.get("request_overrides")
         if overrides:
             api_kwargs.update(overrides)
@@ -465,17 +268,14 @@ class ChatCompletionsTransport(ProviderTransport):
         if timeout is not None:
             api_kwargs["timeout"] = timeout
 
-        # Tools — apply Moonshot/Kimi schema sanitization regardless of path
+        # Tools are already OpenAI-compatible schemas.
         if tools:
-            if is_moonshot_model(model):
-                tools = sanitize_moonshot_tools(tools)
             api_kwargs["tools"] = tools
 
         # max_tokens resolution — priority: ephemeral > user > profile default
         max_tokens_fn = params.get("max_tokens_param_fn")
         ephemeral = params.get("ephemeral_max_output_tokens")
         user_max = params.get("max_tokens")
-        anthropic_max = params.get("anthropic_max_output")
         # Per-model default cap — profiles override get_max_tokens() when
         # they front several backends with different completion-token limits
         # (e.g. opencode-go: mimo-v2.5-pro = 131072).
@@ -487,8 +287,6 @@ class ChatCompletionsTransport(ProviderTransport):
             api_kwargs.update(max_tokens_fn(user_max))
         elif profile_max and max_tokens_fn:
             api_kwargs.update(max_tokens_fn(profile_max))
-        elif anthropic_max is not None:
-            api_kwargs["max_tokens"] = anthropic_max
 
         # Provider-specific api_kwargs extras (reasoning_effort, metadata, etc.)
         reasoning_config = params.get("reasoning_config")
@@ -496,7 +294,6 @@ class ChatCompletionsTransport(ProviderTransport):
             profile.build_api_kwargs_extras(
                 reasoning_config=reasoning_config,
                 supports_reasoning=params.get("supports_reasoning", False),
-                qwen_session_metadata=params.get("qwen_session_metadata"),
                 model=model,
                 ollama_num_ctx=params.get("ollama_num_ctx"),
                 session_id=params.get("session_id"),
@@ -510,11 +307,9 @@ class ChatCompletionsTransport(ProviderTransport):
         # Profile's extra_body (tags, provider prefs, vl_high_resolution, etc.)
         profile_body = profile.build_extra_body(
             session_id=params.get("session_id"),
-            provider_preferences=params.get("provider_preferences"),
             model=model,
             base_url=params.get("base_url"),
             reasoning_config=reasoning_config,
-            openrouter_min_coding_score=params.get("openrouter_min_coding_score"),
         )
         if profile_body:
             extra_body.update(profile_body)

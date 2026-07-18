@@ -1,6 +1,6 @@
 """File passthrough registry for remote terminal backends.
 
-Remote backends (Docker, Modal, SSH) create sandboxes with no host files.
+Remote backends (Docker and SSH) create sandboxes with no host files.
 This module ensures that credential files, skill directories, and host-side
 cache directories (documents, images, audio, screenshots) are mounted or
 synced into those sandboxes so the agent can access them.
@@ -15,7 +15,7 @@ reference files the host side created (e.g. ``unzip`` an uploaded archive).
 Remote backends call :func:`get_credential_file_mounts`,
 :func:`get_skills_directory_mount` / :func:`iter_skills_files`, and
 :func:`get_cache_directory_mounts` / :func:`iter_cache_files` at sandbox
-creation time and before each command (for resync on Modal).
+creation time and before each SSH command that needs resyncing.
 """
 
 from __future__ import annotations
@@ -296,9 +296,7 @@ def iter_skills_files(
     """Yield individual (host_path, container_path) entries for skills files.
 
     Includes both the local skills dir and any external dirs configured via
-    skills.external_dirs.  Skips symlinks entirely.  Preferred for backends
-    that upload files individually (Daytona, Modal) rather than mounting a
-    directory.
+    skills.external_dirs. Skips symlinks entirely. Used by SSH file sync.
     """
     result: List[Dict[str, str]] = []
 
@@ -384,9 +382,8 @@ def to_agent_visible_cache_path(
     directory, or if the active terminal backend does not require path
     translation (only Docker for now).
     """
-    # Only Docker backend requires translation at this time.  Other backends
-    # (Modal, Daytona) use different mount semantics and will be
-    # addressed separately if needed.  Backend is identified by TERMINAL_ENV
+    # Only Docker requires path translation; SSH uses explicit file sync.
+    # Backend is identified by TERMINAL_ENV
     # (same env var tools/terminal_tool.py reads in _get_environment_config).
     if os.environ.get("TERMINAL_ENV", "local") != "docker":
         return host_path
@@ -407,7 +404,7 @@ def iter_cache_files(
 ) -> List[Dict[str, str]]:
     """Return individual (host_path, container_path) entries for cache files.
 
-    Used by Modal to upload files individually and resync before each command.
+    Used by SSH to upload files individually and resync before each command.
     Skips symlinks.  The container paths use the new ``cache/<subdir>`` layout.
     """
     from hermes_constants import get_hermes_dir
@@ -432,5 +429,4 @@ def iter_cache_files(
 def clear_credential_files() -> None:
     """Reset the skill-scoped registry (e.g. on session reset)."""
     _get_registered().clear()
-
 

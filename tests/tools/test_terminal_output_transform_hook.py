@@ -18,9 +18,6 @@ def _make_env_config(tmp_path, **overrides):
         "host_cwd": None,
         "modal_mode": "auto",
         "docker_image": "",
-        "singularity_image": "",
-        "modal_image": "",
-        "daytona_image": "",
     }
     config.update(overrides)
     return config

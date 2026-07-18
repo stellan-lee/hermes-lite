@@ -73,8 +73,8 @@ class TestNormalizeVoiceRecordKeyForPromptToolkit:
 
         assert normalize_voice_record_key_for_prompt_toolkit("") == "c-b"
 
-    def test_super_win_fall_back_to_default_in_cli(self):
-        """prompt_toolkit has no super modifier, so ``super+b`` / ``win+o``
+    def test_super_falls_back_to_default_in_cli(self):
+        """prompt_toolkit has no super modifier, so ``super+b``
         would crash the classic CLI at startup if passed through. Fall
         back to the documented default; the CLI binding site is
         expected to warn so users know the shortcut is TUI-only
@@ -82,8 +82,6 @@ class TestNormalizeVoiceRecordKeyForPromptToolkit:
         from hermes_cli.voice import normalize_voice_record_key_for_prompt_toolkit
 
         assert normalize_voice_record_key_for_prompt_toolkit("super+b") == "c-b"
-        assert normalize_voice_record_key_for_prompt_toolkit("win+o") == "c-b"
-        assert normalize_voice_record_key_for_prompt_toolkit("windows+o") == "c-b"
 
     # Round-10 Copilot review regressions on #19835.
     def test_strips_whitespace_within_and_around(self):

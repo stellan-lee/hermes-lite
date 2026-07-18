@@ -64,13 +64,11 @@ from agent.model_metadata import (
     save_context_length,
 )
 from agent.process_bootstrap import _install_safe_stdio
-from agent.prompt_caching import apply_anthropic_cache_control
 from agent.retry_utils import jittered_backoff
 from agent.trajectory import has_incomplete_scratchpad
 from agent.usage_pricing import estimate_usage_cost, normalize_usage
 from hermes_constants import PARTIAL_STREAM_STUB_ID
 from hermes_logging import set_session_context
-from tools.skill_provenance import set_current_write_origin
 from utils import base_url_host_matches, env_var_enabled
 
 logger = logging.getLogger(__name__)
@@ -129,43 +127,6 @@ def _ra():
     return run_agent
 
 
-def _nous_entitlement_message(capability: str) -> str:
-    try:
-        from hermes_cli.nous_account import (
-            format_nous_portal_entitlement_message,
-            get_nous_portal_account_info,
-        )
-
-        account_info = get_nous_portal_account_info(force_fresh=True)
-        message = format_nous_portal_entitlement_message(
-            account_info,
-            capability=capability,
-        )
-        return message or ""
-    except Exception:
-        return ""
-
-
-def _print_nous_entitlement_guidance(agent, capability: str) -> bool:
-    message = _nous_entitlement_message(capability)
-    if not message:
-        return False
-    for line in message.splitlines():
-        agent._vprint(f"{agent.log_prefix}   💡 {line}", force=True)
-    return True
-
-
-def _is_nous_inference_route(provider: str, base_url: str) -> bool:
-    provider = (provider or "").strip().lower()
-    if provider == "nous":
-        return True
-    base = str(base_url or "")
-    return (
-        base_url_host_matches(base, "inference-api.nousresearch.com")
-        or base_url_host_matches(base, "inference.nousresearch.com")
-    )
-
-
 def _billing_or_entitlement_message(
     *,
     capability: str,
@@ -173,9 +134,6 @@ def _billing_or_entitlement_message(
     base_url: str,
     model: str,
 ) -> str:
-    if _is_nous_inference_route(provider, base_url):
-        return _nous_entitlement_message(capability)
-
     provider_label = (provider or "").strip() or "the selected provider"
     model_label = (model or "").strip() or "the selected model"
     lines = [
@@ -185,8 +143,6 @@ def _billing_or_entitlement_message(
         ),
         "Add credits or update billing with that provider, then retry.",
     ]
-    if base_url_host_matches(str(base_url or ""), "openrouter.ai"):
-        lines.append("OpenRouter credits: https://openrouter.ai/settings/credits")
     lines.append("You can switch providers temporarily with /model <model> --provider <provider>.")
     return "\n".join(lines)
 
@@ -210,21 +166,6 @@ def _print_billing_or_entitlement_guidance(
     for line in message.splitlines():
         agent._vprint(f"{agent.log_prefix}   💡 {line}", force=True)
     return True
-
-
-def _try_refresh_nous_paid_entitlement_credentials(agent) -> bool:
-    """Refresh Nous runtime credentials after a fresh paid-entitlement check."""
-    try:
-        from hermes_cli.nous_account import get_nous_portal_account_info
-
-        account_info = get_nous_portal_account_info(force_fresh=True)
-        if account_info.paid_service_access is not True:
-            return False
-        return agent._try_refresh_nous_client_credentials(
-            force=True,
-        )
-    except Exception:
-        return False
 
 
 def _restore_or_build_system_prompt(agent, system_message, conversation_history):
@@ -517,7 +458,6 @@ def run_conversation(
     # a foreground user-directed turn. Set at the top of each call;
     # the review fork runs on its own thread with a fresh context,
     # so the foreground value here does not leak into it.
-    set_current_write_origin(getattr(agent, "_memory_write_origin", "assistant_tool"))
 
     # If the previous turn activated fallback, restore the primary
     # runtime so this turn gets a fresh attempt with the preferred model.
@@ -576,16 +516,15 @@ def run_conversation(
     # Pre-turn connection health check: detect and clean up dead TCP
     # connections left over from provider outages or dropped streams.
     # This prevents the next API call from hanging on a zombie socket.
-    if agent.api_mode != "anthropic_messages":
-        try:
-            if agent._cleanup_dead_connections():
-                agent._emit_status(
-                    "🔌 Detected stale connections from a previous provider "
-                    "issue — cleaned up automatically. Proceeding with fresh "
-                    "connection."
-                )
-        except Exception:
-            pass
+    try:
+        if agent._cleanup_dead_connections():
+            agent._emit_status(
+                "🔌 Detected stale connections from a previous provider "
+                "issue — cleaned up automatically. Proceeding with fresh "
+                "connection."
+            )
+    except Exception:
+        pass
     # Replay compression warning through status_callback for gateway
     # platforms (the callback was not wired during __init__).
     if agent._compression_warning:
@@ -736,7 +675,7 @@ def run_conversation(
         _preflight_deferred = _defer_preflight(_preflight_tokens)
 
         if not _preflight_deferred:
-            # Keep the CLI/ACP context display in sync with what preflight
+            # Keep interactive context displays in sync with what preflight
             # actually measured.  The status bar reads
             # ``compressor.last_prompt_tokens``, which otherwise only updates
             # from a *successful* API response.  When the conversation has grown
@@ -1227,19 +1166,6 @@ def run_conversation(
             for idx, pfm in enumerate(agent.prefill_messages):
                 api_messages.insert(sys_offset + idx, pfm.copy())
 
-        # Apply Anthropic prompt caching for Claude models on native
-        # Anthropic, OpenRouter, and third-party Anthropic-compatible
-        # gateways. Auto-detected: if ``_use_prompt_caching`` is set,
-        # inject cache_control breakpoints (system + last 3 messages)
-        # to reduce input token costs by ~75% on multi-turn
-        # conversations.
-        if agent._use_prompt_caching:
-            api_messages = apply_anthropic_cache_control(
-                api_messages,
-                cache_ttl=agent._cache_ttl,
-                native_anthropic=agent._use_native_cache_layout,
-            )
-
         # Safety net: strip orphaned tool results / add stubs for missing
         # results before sending to the API.  Runs unconditionally — not
         # gated on context_compressor — so orphans from session loading or
@@ -1363,17 +1289,10 @@ def run_conversation(
         primary_recovery_attempted = False
         max_compression_attempts = 3
         codex_auth_retry_attempted=False
-        anthropic_auth_retry_attempted=False
-        nous_auth_retry_attempted=False
-        nous_paid_entitlement_refresh_attempted=False
-        copilot_auth_retry_attempted=False
-        thinking_sig_retry_attempted = False
         invalid_encrypted_content_retry_attempted = False
         image_shrink_retry_attempted = False
         multimodal_tool_content_retry_attempted = False
-        oauth_1m_beta_retry_attempted = False
         llama_cpp_grammar_retry_attempted = False
-        has_retried_429 = False
         restart_with_compressed_messages = False
         restart_with_length_continuation = False
 
@@ -1382,54 +1301,6 @@ def run_conversation(
         api_kwargs = None  # Guard against UnboundLocalError in except handler
 
         while retry_count < max_retries:
-            # ── Nous Portal rate limit guard ──────────────────────
-            # If another session already recorded that Nous is rate-
-            # limited, skip the API call entirely.  Each attempt
-            # (including SDK-level retries) counts against RPH and
-            # deepens the rate limit hole.
-            if agent.provider == "nous":
-                try:
-                    from agent.nous_rate_guard import (
-                        nous_rate_limit_remaining,
-                        format_remaining as _fmt_nous_remaining,
-                    )
-                    _nous_remaining = nous_rate_limit_remaining()
-                    if _nous_remaining is not None and _nous_remaining > 0:
-                        _nous_msg = (
-                            f"Nous Portal rate limit active — "
-                            f"resets in {_fmt_nous_remaining(_nous_remaining)}."
-                        )
-                        agent._buffer_vprint(
-                            f"⏳ {_nous_msg} Trying fallback..."
-                        )
-                        agent._buffer_status(f"⏳ {_nous_msg}")
-                        if agent._try_activate_fallback():
-                            retry_count = 0
-                            compression_attempts = 0
-                            primary_recovery_attempted = False
-                            continue
-                        # No fallback available — surface buffered context
-                        # so user sees the rate-limit message that led here.
-                        agent._flush_status_buffer()
-                        agent._persist_session(messages, conversation_history)
-                        return {
-                            "final_response": (
-                                f"⏳ {_nous_msg}\n\n"
-                                "No fallback provider available. "
-                                "Try again after the reset, or add a "
-                                "fallback provider in config.yaml."
-                            ),
-                            "messages": messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "failed": True,
-                            "error": _nous_msg,
-                        }
-                except ImportError:
-                    pass
-                except Exception:
-                    pass  # Never let rate guard break the agent loop
-
             try:
                 agent._reset_stream_delivery_tracking()
                 # Rebuild the wire-only copy for EVERY retry. Provider fallback
@@ -1540,16 +1411,6 @@ def run_conversation(
                 # session instead of re-failing every retry.
                 if getattr(agent, "_disable_streaming", False):
                     _use_streaming = False
-                # CopilotACPClient communicates via subprocess stdio and
-                # returns a plain SimpleNamespace — not an iterable
-                # stream.  Mirror the ACP exclusion used for Responses
-                # API upgrade (lines ~1083-1085).
-                elif (
-                    agent.provider == "copilot-acp"
-                    or str(agent.base_url or "").lower().startswith("acp://copilot")
-                    or str(agent.base_url or "").lower().startswith("acp+tcp://")
-                ):
-                    _use_streaming = False
                 elif not agent._has_stream_consumers():
                     # No display/TTS consumer. Still prefer streaming for
                     # health checking, but skip for Mock clients in tests
@@ -1639,22 +1500,6 @@ def run_conversation(
                                     )
                                     response_invalid = True
                                     error_details.append("response.output is empty")
-                elif agent.api_mode == "anthropic_messages":
-                    _tv = agent._get_transport()
-                    if not _tv.validate_response(response):
-                        response_invalid = True
-                        if response is None:
-                            error_details.append("response is None")
-                        else:
-                            error_details.append("response.content invalid (not a non-empty list)")
-                elif agent.api_mode == "bedrock_converse":
-                    _btv = agent._get_transport()
-                    if not _btv.validate_response(response):
-                        response_invalid = True
-                        if response is None:
-                            error_details.append("response is None")
-                        else:
-                            error_details.append("Bedrock response invalid (no output or choices)")
                 else:
                     _ctv = agent._get_transport()
                     if not _ctv.validate_response(response):
@@ -1719,7 +1564,7 @@ def run_conversation(
                             fallback="model=unknown",
                         )
                     
-                    # Check for x-openrouter-provider or similar metadata
+                    # Check for provider metadata when available.
                     if provider_name == "Unknown" and response:
                         # Log all response attributes for debugging
                         resp_attrs = {
@@ -1835,14 +1680,6 @@ def run_conversation(
                         finish_reason = "length"
                     else:
                         finish_reason = "stop"
-                elif agent.api_mode == "anthropic_messages":
-                    _tfr = agent._get_transport()
-                    finish_reason = _tfr.map_finish_reason(response.stop_reason)
-                elif agent.api_mode == "bedrock_converse":
-                    # Bedrock response already normalized at dispatch — use transport
-                    _bt_fr = agent._get_transport()
-                    _bedrock_result = _bt_fr.normalize_response(response)
-                    finish_reason = _bedrock_result.finish_reason
                 else:
                     _cc_fr = agent._get_transport()
                     _finish_result = _cc_fr.normalize_response(response)
@@ -1875,19 +1712,9 @@ def run_conversation(
 
                     # Normalize the truncated response to a single OpenAI-style
                     # message shape so text-continuation and tool-call retry
-                    # work uniformly across chat_completions, bedrock_converse,
-                    # and anthropic_messages.  For Anthropic we use the same
-                    # adapter the agent loop already relies on so the rebuilt
-                    # interim assistant message is byte-identical to what
-                    # would have been appended in the non-truncated path.
-                    _trunc_msg = None
+                    # work uniformly across retained transports.
                     _trunc_transport = agent._get_transport()
-                    if agent.api_mode == "anthropic_messages":
-                        _trunc_result = _trunc_transport.normalize_response(
-                            response, strip_tool_prefix=agent._is_anthropic_oauth
-                        )
-                    else:
-                        _trunc_result = _trunc_transport.normalize_response(response)
+                    _trunc_result = _trunc_transport.normalize_response(response)
                     _trunc_msg = _trunc_result
 
                     _trunc_content = getattr(_trunc_msg, "content", None) if _trunc_msg else None
@@ -1901,7 +1728,7 @@ def run_conversation(
                     # A response is "thinking exhausted" only when the model
                     # actually produced reasoning blocks but no visible text after
                     # them.  Models that do not use <think> tags (e.g. GLM-4.7 on
-                    # NVIDIA Build, minimax) may return content=None or an empty
+                    # Some OpenAI-compatible endpoints may return content=None or an empty
                     # string for unrelated reasons — treat those as normal
                     # truncations that deserve continuation retries, not as
                     # thinking-budget exhaustion.
@@ -1954,7 +1781,7 @@ def run_conversation(
                             "error": _exhaust_error,
                         }
 
-                    if agent.api_mode in {"chat_completions", "bedrock_converse", "anthropic_messages"}:
+                    if agent.api_mode == "chat_completions":
                         assistant_message = _trunc_msg
                         if assistant_message is not None and not _trunc_has_tool_calls:
                             length_continue_retries += 1
@@ -2015,7 +1842,7 @@ def run_conversation(
                                 "error": "Response remained truncated after 3 continuation attempts",
                             }
 
-                    if agent.api_mode in {"chat_completions", "bedrock_converse", "anthropic_messages"}:
+                    if agent.api_mode == "chat_completions":
                         assistant_message = _trunc_msg
                         if assistant_message is not None and _trunc_has_tool_calls:
                             _is_stub_stall = (
@@ -2227,17 +2054,9 @@ def run_conversation(
                     if agent.verbose_logging:
                         logging.debug(f"Token usage: prompt={usage_dict['prompt_tokens']:,}, completion={usage_dict['completion_tokens']:,}, total={usage_dict['total_tokens']:,}")
                     
-                    # Surface cache hit stats for any provider that reports
-                    # them — not just those where we inject cache_control
-                    # markers.  OpenAI/Kimi/DeepSeek/Qwen all do automatic
-                    # server-side prefix caching and return
-                    # ``prompt_tokens_details.cached_tokens``; users
-                    # previously could not see their cache % because this
-                    # line was gated on ``_use_prompt_caching``, which is
-                    # only True for Anthropic-style marker injection.
-                    # ``canonical_usage`` is already normalised from all
-                    # three API shapes (Anthropic / Codex / OpenAI-chat)
-                    # so we can rely on its values directly.
+                    # Surface cache-hit stats when a compatible endpoint or
+                    # Codex reports them. ``canonical_usage`` normalizes both
+                    # retained response shapes.
                     cached = canonical_usage.cache_read_tokens
                     written = canonical_usage.cache_write_tokens
                     prompt = usage_dict["prompt_tokens"]
@@ -2249,21 +2068,11 @@ def run_conversation(
                             f"({hit_pct:.0f}% hit, {written:,} written)"
                         )
                 
-                has_retried_429 = False  # Reset on success
                 # Note: don't clear the retry buffer here — an "API call
                 # success" only means we got bytes back, not that we got
                 # usable content. Empty responses still loop through the
                 # empty-retry path below; the buffer is cleared when
                 # genuinely successful content is detected later (~L4127).
-                # Clear Nous rate limit state on successful request —
-                # proves the limit has reset and other sessions can
-                # resume hitting Nous.
-                if agent.provider == "nous":
-                    try:
-                        from agent.nous_rate_guard import clear_nous_rate_limit
-                        clear_nous_rate_limit()
-                    except Exception:
-                        pass
                 agent._touch_activity(f"API call #{api_call_count} completed")
                 break  # Success, exit retry loop
 
@@ -2552,37 +2361,11 @@ def run_conversation(
                     num_messages=len(api_messages) if api_messages else 0,
                 )
                 logger.debug(
-                    "Error classified: reason=%s status=%s retryable=%s compress=%s rotate=%s fallback=%s",
+                    "Error classified: reason=%s status=%s retryable=%s compress=%s fallback=%s",
                     classified.reason.value, classified.status_code,
                     classified.retryable, classified.should_compress,
-                    classified.should_rotate_credential, classified.should_fallback,
+                    classified.should_fallback,
                 )
-
-                if (
-                    classified.reason == FailoverReason.billing
-                    and _is_nous_inference_route(
-                        getattr(agent, "provider", "") or "",
-                        getattr(agent, "base_url", "") or "",
-                    )
-                    and not nous_paid_entitlement_refresh_attempted
-                ):
-                    nous_paid_entitlement_refresh_attempted = True
-                    if _try_refresh_nous_paid_entitlement_credentials(agent):
-                        agent._vprint(
-                            f"{agent.log_prefix}🔐 Nous paid access verified — "
-                            "refreshed runtime credentials and retrying request...",
-                            force=True,
-                        )
-                        continue
-
-                recovered_with_pool, has_retried_429 = agent._recover_with_credential_pool(
-                    status_code=status_code,
-                    has_retried_429=has_retried_429,
-                    classified_reason=classified.reason,
-                    error_context=error_context,
-                )
-                if recovered_with_pool:
-                    continue
 
                 # Image-too-large recovery: shrink oversized native image
                 # parts in-place and retry once.  Triggered by Anthropic's
@@ -2633,169 +2416,16 @@ def run_conversation(
                             "messages with image parts found; surfacing original error."
                         )
 
-                # Anthropic OAuth subscription rejected the 1M-context beta
-                # header ("long context beta is not yet available for this
-                # subscription"). Disable the beta for the rest of this
-                # session, rebuild the client, and retry once.  1M-capable
-                # subscriptions never hit this branch — they accept the
-                # beta and keep full 1M context.  See PR #17680 for the
-                # original report (we chose reactive recovery over the
-                # proposed unconditional omit so capable subscriptions
-                # don't silently lose the capability).
-                if (
-                    classified.reason == FailoverReason.oauth_long_context_beta_forbidden
-                    and agent.api_mode == "anthropic_messages"
-                    and agent._is_anthropic_oauth
-                    and not oauth_1m_beta_retry_attempted
-                ):
-                    oauth_1m_beta_retry_attempted = True
-                    if not getattr(agent, "_oauth_1m_beta_disabled", False):
-                        agent._oauth_1m_beta_disabled = True
-                        try:
-                            agent._anthropic_client.close()
-                        except Exception:
-                            pass
-                        agent._rebuild_anthropic_client()
-                        agent._vprint(
-                            f"{agent.log_prefix}🔕 OAuth subscription doesn't support "
-                            f"the 1M-context beta — disabled for this session and retrying...",
-                            force=True,
-                        )
-                        continue
-
                 if (
                     agent.api_mode == "codex_responses"
-                    and agent.provider in {"openai-codex", "xai-oauth"}
+                    and agent.provider == "openai-codex"
                     and status_code in (401, 403)
                     and not codex_auth_retry_attempted
-                    # The OAuth-backed Codex backend (Cloudflare-fronted) returns
-                    # 403 for expired/rejected tokens — refresh_codex_oauth_pure
-                    # itself treats 401 and 403 as relogin-worthy. But an
-                    # xai-oauth 403 is often an *entitlement* failure (no API
-                    # access), which a token refresh can't fix; skip refresh in
-                    # that case so we don't waste an attempt + emit a misleading
-                    # "refreshed" message. The retry flag bounds 403s to one
-                    # attempt regardless.
-                    and not (
-                        agent.provider == "xai-oauth"
-                        and status_code == 403
-                        and agent._is_entitlement_failure(error_context, status_code)
-                    )
                 ):
                     codex_auth_retry_attempted = True
                     if agent._try_refresh_codex_client_credentials(force=True):
-                        _label = "xAI OAuth" if agent.provider == "xai-oauth" else "Codex"
-                        agent._buffer_vprint(f"🔐 {_label} auth refreshed after {status_code}. Retrying request...")
+                        agent._buffer_vprint(f"🔐 Codex auth refreshed after {status_code}. Retrying request...")
                         continue
-                if (
-                    agent.api_mode == "chat_completions"
-                    and agent.provider == "nous"
-                    and status_code == 401
-                    and not nous_auth_retry_attempted
-                ):
-                    nous_auth_retry_attempted = True
-                    if agent._try_refresh_nous_client_credentials(force=True):
-                        print(f"{agent.log_prefix}🔐 Nous agent key refreshed after 401. Retrying request...")
-                        continue
-                    # Credential refresh didn't help — show diagnostic info.
-                    # Most common causes: Portal OAuth expired/revoked,
-                    # account out of credits, or agent key blocked.
-                    from hermes_constants import display_hermes_home as _dhh_fn
-                    _dhh = _dhh_fn()
-                    _body_text = ""
-                    try:
-                        _body = getattr(api_error, "body", None) or getattr(api_error, "response", None)
-                        if _body is not None:
-                            _body_text = agent._sanitize_api_error_text(
-                                _body,
-                                fallback="<provider details omitted>",
-                            )[:200]
-                    except Exception:
-                        pass
-                    print(f"{agent.log_prefix}🔐 Nous 401 — Portal authentication failed.")
-                    if _body_text:
-                        print(f"{agent.log_prefix}   Response: {_body_text}")
-                    if not _print_nous_entitlement_guidance(agent, "Nous model access"):
-                        print(f"{agent.log_prefix}   Most likely: Portal OAuth expired, account out of credits, or agent key revoked.")
-                    print(f"{agent.log_prefix}   Troubleshooting:")
-                    print(f"{agent.log_prefix}     • Re-authenticate: hermes auth add nous")
-                    print(f"{agent.log_prefix}     • Check credits / billing: https://portal.nousresearch.com")
-                    print(f"{agent.log_prefix}     • Verify stored credentials: {_dhh}/auth.json")
-                    print(f"{agent.log_prefix}     • Switch providers temporarily: /model <model> --provider openrouter")
-                if (
-                    agent.provider == "copilot"
-                    and status_code == 401
-                    and not copilot_auth_retry_attempted
-                ):
-                    copilot_auth_retry_attempted = True
-                    if agent._try_refresh_copilot_client_credentials():
-                        agent._buffer_vprint(f"🔐 Copilot credentials refreshed after 401. Retrying request...")
-                        continue
-                if (
-                    agent.api_mode == "anthropic_messages"
-                    and status_code == 401
-                    and hasattr(agent, '_anthropic_api_key')
-                    and not anthropic_auth_retry_attempted
-                ):
-                    anthropic_auth_retry_attempted = True
-                    from agent.anthropic_adapter import _is_oauth_token
-                    from agent.azure_identity_adapter import is_token_provider
-                    if agent._try_refresh_anthropic_client_credentials():
-                        print(f"{agent.log_prefix}🔐 Anthropic credentials refreshed after 401. Retrying request...")
-                        continue
-                    # Credential refresh didn't help — show diagnostic info
-                    key = agent._anthropic_api_key
-                    print(f"{agent.log_prefix}🔐 Anthropic 401 — authentication failed.")
-                    if is_token_provider(key):
-                        # Azure Foundry Entra ID — the bearer token is
-                        # minted per-request by an httpx event hook on a
-                        # custom http_client passed to the SDK. The 401
-                        # means Azure rejected the JWT (RBAC role missing,
-                        # az login expired, IMDS unreachable, etc.).
-                        print(f"{agent.log_prefix}   Auth method: Microsoft Entra ID (httpx event hook)")
-                        print(f"{agent.log_prefix}   Run `hermes doctor` for credential-chain diagnostics, or")
-                        print(f"{agent.log_prefix}   `az login` if your developer session expired.")
-                    else:
-                        auth_method = "Bearer (OAuth/setup-token)" if _is_oauth_token(key) else "x-api-key (API key)"
-                        print(f"{agent.log_prefix}   Auth method: {auth_method}")
-                        print(f"{agent.log_prefix}   Token prefix: {key[:12]}..." if isinstance(key, str) and len(key) > 12 else f"{agent.log_prefix}   Token: (empty or short)")
-                    print(f"{agent.log_prefix}   Troubleshooting:")
-                    from hermes_constants import display_hermes_home as _dhh_fn
-                    _dhh = _dhh_fn()
-                    print(f"{agent.log_prefix}     • Check ANTHROPIC_TOKEN in {_dhh}/.env for Hermes-managed OAuth/setup tokens")
-                    print(f"{agent.log_prefix}     • Check ANTHROPIC_API_KEY in {_dhh}/.env for API keys or legacy token values")
-                    print(f"{agent.log_prefix}     • For API keys: verify at https://platform.claude.com/settings/keys")
-                    print(f"{agent.log_prefix}     • For Claude Code: run 'claude /login' to refresh, then retry")
-                    print(f"{agent.log_prefix}     • Legacy cleanup: hermes config set ANTHROPIC_TOKEN \"\"")
-                    print(f"{agent.log_prefix}     • Clear stale keys: hermes config set ANTHROPIC_API_KEY \"\"")
-
-                # ── Thinking block signature recovery ─────────────────
-                # Anthropic signs thinking blocks against the full turn
-                # content.  Any upstream mutation (context compression,
-                # session truncation, message merging) invalidates the
-                # signature → HTTP 400.  Recovery: strip reasoning_details
-                # from all messages so the next retry sends no thinking
-                # blocks at all.  One-shot — don't retry infinitely.
-                if (
-                    classified.reason == FailoverReason.thinking_signature
-                    and not thinking_sig_retry_attempted
-                ):
-                    thinking_sig_retry_attempted = True
-                    for _m in messages:
-                        if isinstance(_m, dict):
-                            _m.pop("reasoning_details", None)
-                    agent._vprint(
-                        f"{agent.log_prefix}⚠️  Thinking block signature invalid — "
-                        f"stripped all thinking blocks, retrying...",
-                        force=True,
-                    )
-                    logger.warning(
-                        "%sThinking block signature recovery: stripped "
-                        "reasoning_details from %d messages",
-                        agent.log_prefix, len(messages),
-                    )
-                    continue
-
                 # ── Invalid encrypted reasoning replay recovery ───────
                 # OpenAI Responses API surfaces (and some compatible relays)
                 # return HTTP 400 ``invalid_encrypted_content`` when a
@@ -2922,28 +2552,6 @@ def run_conversation(
                         agent._buffer_vprint(f"   📋 Details: {_err_body_str}")
                 agent._buffer_vprint(f"   ⏱️  Elapsed: {elapsed_time:.2f}s  Context: {len(api_messages)} msgs, ~{approx_tokens:,} tokens")
 
-                # Actionable hint for OpenRouter "no tool endpoints" error.
-                # Buffered like the rest of the retry trace — surfaced only
-                # if every retry+fallback exhausts.  Avoids spamming users
-                # who recover automatically via fallback.
-                if (
-                    agent._is_openrouter_url()
-                    and "support tool use" in error_msg
-                ):
-                    agent._buffer_vprint(
-                        f"   💡 No OpenRouter providers for {_model} support tool calling with your current settings."
-                    )
-                    if agent.providers_allowed:
-                        agent._buffer_vprint(
-                            f"      Your provider_routing.only restriction is filtering out tool-capable providers."
-                        )
-                        agent._buffer_vprint(
-                            f"      Try removing the restriction or adding providers that support tools for this model."
-                        )
-                    agent._buffer_vprint(
-                        f"      Check which providers support tools: https://openrouter.ai/models/{_model}"
-                    )
-
                 # Check for interrupt before deciding to retry
                 if agent._interrupt_requested:
                     agent._vprint(f"{agent.log_prefix}⚡ Interrupt detected during error handling, aborting retries.", force=True)
@@ -2962,64 +2570,6 @@ def run_conversation(
                 # compress history and retry, not abort immediately.
                 status_code = getattr(api_error, "status_code", None)
 
-                # ── Anthropic Sonnet long-context tier gate ───────────
-                # Anthropic returns HTTP 429 "Extra usage is required for
-                # long context requests" when a Claude Max (or similar)
-                # subscription doesn't include the 1M-context tier.  This
-                # is NOT a transient rate limit — retrying or switching
-                # credentials won't help.  Reduce context to 200k (the
-                # standard tier) and compress.
-                if classified.reason == FailoverReason.long_context_tier:
-                    _reduced_ctx = 200000
-                    compressor = agent.context_compressor
-                    old_ctx = compressor.context_length
-                    if old_ctx > _reduced_ctx:
-                        compressor.update_model(
-                            model=agent.model,
-                            context_length=_reduced_ctx,
-                            base_url=agent.base_url,
-                            api_key=getattr(agent, "api_key", ""),
-                            provider=agent.provider,
-                            api_mode=agent.api_mode,
-                        )
-                        # Context probing flags — only set on built-in
-                        # compressor (plugin engines manage their own).
-                        if hasattr(compressor, "_context_probed"):
-                            compressor._context_probed = True
-                            # Don't persist — this is a subscription-tier
-                            # limitation, not a model capability.  If the
-                            # user later enables extra usage the 1M limit
-                            # should come back automatically.
-                            compressor._context_probe_persistable = False
-                        agent._buffer_vprint(
-                            f"⚠️  Anthropic long-context tier "
-                            f"requires extra usage — reducing context: "
-                            f"{old_ctx:,} → {_reduced_ctx:,} tokens"
-                        )
-
-                    compression_attempts += 1
-                    if compression_attempts <= max_compression_attempts:
-                        original_len = len(messages)
-                        messages, active_system_prompt = agent._compress_context(
-                            messages, system_message,
-                            approx_tokens=approx_tokens,
-                            task_id=effective_task_id,
-                        )
-                        # Compression created a new session — clear history
-                        # so _flush_messages_to_session_db writes compressed
-                        # messages to the new session, not skipping them.
-                        conversation_history = None
-                        if len(messages) < original_len or old_ctx > _reduced_ctx:
-                            agent._buffer_status(
-                                f"🗜️ Context reduced to {_reduced_ctx:,} tokens "
-                                f"(was {old_ctx:,}), retrying..."
-                            )
-                            time.sleep(2)
-                            restart_with_compressed_messages = True
-                            break
-                    # Fall through to normal error handling if compression
-                    # is exhausted or didn't help.
-
                 # Eager fallback for rate-limit errors (429 or quota exhaustion).
                 # When a fallback model is configured, switch immediately instead
                 # of burning through retries with exponential backoff -- the
@@ -3029,129 +2579,21 @@ def run_conversation(
                     FailoverReason.billing,
                 }
                 if is_rate_limited and agent._fallback_index < len(agent._fallback_chain):
-                    # Don't eagerly fallback if credential pool rotation may
-                    # still recover.  See _pool_may_recover_from_rate_limit
-                    # for the single-credential-pool and CloudCode-quota
-                    # exceptions.  Fixes #11314 and #13636.
-                    pool_may_recover = _ra()._pool_may_recover_from_rate_limit(
-                        agent._credential_pool,
-                        provider=agent.provider,
-                        base_url=getattr(agent, "base_url", None),
-                    )
-                    if not pool_may_recover:
-                        if classified.reason == FailoverReason.billing:
-                            agent._buffer_status(
-                                "⚠️ Billing or credits exhausted — switching to fallback provider..."
-                            )
-                        else:
-                            agent._buffer_status("⚠️ Rate limited — switching to fallback provider...")
-                        if agent._try_activate_fallback(reason=classified.reason):
-                            retry_count = 0
-                            compression_attempts = 0
-                            primary_recovery_attempted = False
-                            continue
-
-                # ── Nous Portal: record rate limit & skip retries ─────
-                # When Nous returns a 429 that is a genuine account-
-                # level rate limit, record the reset time to a shared
-                # file so ALL sessions (cron, gateway, auxiliary) know
-                # not to pile on, then skip further retries -- each
-                # one burns another RPH request and deepens the hole.
-                # The retry loop's top-of-iteration guard will catch
-                # this on the next pass and try fallback or bail.
-                #
-                # IMPORTANT: Nous Portal multiplexes multiple upstream
-                # providers (DeepSeek, Kimi, MiMo, Hermes).  A 429 can
-                # also mean an UPSTREAM provider is out of capacity
-                # for one specific model -- transient, clears in
-                # seconds, nothing to do with the caller's quota.
-                # Tripping the cross-session breaker on that would
-                # block every Nous model for minutes.  We use
-                # ``is_genuine_nous_rate_limit`` to tell the two
-                # apart via the 429's own x-ratelimit-* headers and
-                # the last-known-good state captured on the previous
-                # successful response.
-                if (
-                    is_rate_limited
-                    and agent.provider == "nous"
-                    and classified.reason == FailoverReason.rate_limit
-                    and not recovered_with_pool
-                ):
-                    _genuine_nous_rate_limit = False
-                    try:
-                        from agent.nous_rate_guard import (
-                            is_genuine_nous_rate_limit,
-                            record_nous_rate_limit,
+                    if classified.reason == FailoverReason.billing:
+                        agent._buffer_status(
+                            "⚠️ Billing or credits exhausted — switching to fallback provider..."
                         )
-                        _err_resp = getattr(api_error, "response", None)
-                        _err_hdrs = (
-                            getattr(_err_resp, "headers", None)
-                            if _err_resp else None
-                        )
-                        _genuine_nous_rate_limit = is_genuine_nous_rate_limit(
-                            headers=_err_hdrs,
-                            last_known_state=agent._rate_limit_state,
-                        )
-                        if _genuine_nous_rate_limit:
-                            record_nous_rate_limit(
-                                headers=_err_hdrs,
-                                error_context=error_context,
-                            )
-                        else:
-                            logger.info(
-                                "Nous 429 looks like upstream capacity "
-                                "(no exhausted bucket in headers or "
-                                "last-known state) -- not tripping "
-                                "cross-session breaker."
-                            )
-                    except Exception:
-                        pass
-                    if _genuine_nous_rate_limit:
-                        # Skip straight to max_retries -- the
-                        # top-of-loop guard will handle fallback or
-                        # bail cleanly.
-                        retry_count = max_retries
+                    else:
+                        agent._buffer_status("⚠️ Rate limited — switching to fallback provider...")
+                    if agent._try_activate_fallback(reason=classified.reason):
+                        retry_count = 0
+                        compression_attempts = 0
+                        primary_recovery_attempted = False
                         continue
-                    # Upstream capacity 429: fall through to normal
-                    # retry logic.  A different model (or the same
-                    # model a moment later) will typically succeed.
 
                 is_payload_too_large = (
                     classified.reason == FailoverReason.payload_too_large
                 )
-
-                # Actionable hint for GitHub Models (Azure) 413 errors.
-                # The free tier enforces a hard 8K token cap per request,
-                # which Hermes' system prompt + tool schemas alone exceed.
-                # Compression can't help — the floor is the system prompt
-                # itself, not the conversation — so surface a clear "not
-                # compatible" message instead of looping into three futile
-                # compression attempts.
-                if (
-                    status_code == 413
-                    and isinstance(agent.base_url, str)
-                    and "models.inference.ai.azure.com" in agent.base_url
-                ):
-                    agent._vprint(
-                        f"{agent.log_prefix}   💡 GitHub Models free tier (models.inference.ai.azure.com) caps every",
-                        force=True,
-                    )
-                    agent._vprint(
-                        f"{agent.log_prefix}      request at ~8K tokens. Hermes' system prompt + tool schemas baseline",
-                        force=True,
-                    )
-                    agent._vprint(
-                        f"{agent.log_prefix}      exceeds that floor, so this endpoint cannot run an agentic loop.",
-                        force=True,
-                    )
-                    agent._vprint(
-                        f"{agent.log_prefix}      Use the `copilot` provider with a Copilot subscription token (`hermes",
-                        force=True,
-                    )
-                    agent._vprint(
-                        f"{agent.log_prefix}      setup` → GitHub Copilot), or pick any other provider.",
-                        force=True,
-                    )
 
                 if is_payload_too_large:
                     compression_attempts += 1
@@ -3268,21 +2710,6 @@ def run_conversation(
                     # and try compression; guessing probe tiers can incorrectly
                     # turn a user-configured 1M window into 256K/128K/64K.
                     new_ctx = get_context_length_from_provider_error(error_msg, old_ctx)
-                    _provider_lower = (getattr(agent, "provider", "") or "").lower()
-                    _base_lower = (getattr(agent, "base_url", "") or "").rstrip("/").lower()
-                    is_minimax_provider = (
-                        _provider_lower in {"minimax", "minimax-cn"}
-                        or _base_lower.startswith((
-                            "https://api.minimax.io/anthropic",
-                            "https://api.minimaxi.com/anthropic",
-                        ))
-                    )
-                    minimax_delta_only_overflow = (
-                        is_minimax_provider
-                        and new_ctx is None
-                        and "context window exceeds limit (" in error_msg
-                    )
-
                     if new_ctx is not None:
                         agent._buffer_vprint(f"Context limit detected from API: {new_ctx:,} tokens (was {old_ctx:,})")
                         compressor.update_model(
@@ -3300,11 +2727,6 @@ def run_conversation(
                             compressor._context_probed = True
                             compressor._context_probe_persistable = True
                         agent._buffer_vprint(f"⚠️  Context length exceeded — using provider limit: {old_ctx:,} → {new_ctx:,} tokens")
-                    elif minimax_delta_only_overflow:
-                        agent._buffer_vprint(
-                            f"Provider reported overflow amount only; "
-                            f"keeping context_length at {old_ctx:,} tokens and compressing."
-                        )
                     else:
                         agent._buffer_vprint(
                             f"⚠️  Context length exceeded, but provider did not report a max context length; "
@@ -3427,8 +2849,6 @@ def run_conversation(
                             FailoverReason.overloaded,
                             FailoverReason.context_overflow,
                             FailoverReason.payload_too_large,
-                            FailoverReason.long_context_tier,
-                            FailoverReason.thinking_signature,
                         }
                     )
                 ) and not is_context_length_error
@@ -3480,37 +2900,15 @@ def run_conversation(
                             model=_model,
                         ):
                             pass
-                        elif _provider == "nous" and _print_nous_entitlement_guidance(
-                            agent,
-                            "Nous model access",
-                        ):
-                            pass
-                        elif _provider in {"openai-codex", "xai-oauth", "nous"} and status_code in (401, 403):
-                            if _provider == "openai-codex":
-                                agent._vprint(f"{agent.log_prefix}   💡 Codex OAuth token was rejected (HTTP {status_code}). Your token may have been", force=True)
-                                agent._vprint(f"{agent.log_prefix}      refreshed by another client (Codex CLI, VS Code). To fix:", force=True)
-                                agent._vprint(f"{agent.log_prefix}      1. Run `codex` in your terminal to generate fresh tokens.", force=True)
-                                agent._vprint(f"{agent.log_prefix}      2. Then run `hermes auth` to re-authenticate.", force=True)
-                            elif _provider == "xai-oauth":
-                                agent._vprint(f"{agent.log_prefix}   💡 xAI OAuth token was rejected (HTTP {status_code}). To fix:", force=True)
-                                agent._vprint(f"{agent.log_prefix}      re-authenticate with xAI Grok OAuth (SuperGrok / Premium+) from `hermes model`.", force=True)
-                            else:  # nous
-                                agent._vprint(f"{agent.log_prefix}   💡 Nous Portal OAuth token was rejected (HTTP {status_code}). Your token may be", force=True)
-                                agent._vprint(f"{agent.log_prefix}      expired, revoked, or your account may be out of credits. To fix:", force=True)
-                                agent._vprint(f"{agent.log_prefix}      1. Re-authenticate: hermes auth add nous --type oauth", force=True)
-                                agent._vprint(f"{agent.log_prefix}      2. Check your portal account: https://portal.nousresearch.com", force=True)
-                                # ``:free`` is OpenRouter slug syntax; Nous Portal will reject
-                                # the model name even after a successful re-auth.
-                                if isinstance(_model, str) and _model.endswith(":free"):
-                                    agent._vprint(f"{agent.log_prefix}      ⚠️  Note: `{_model}` looks like an OpenRouter slug (`:free` suffix).", force=True)
-                                    agent._vprint(f"{agent.log_prefix}         Nous Portal won't recognize that model name. Either switch to a", force=True)
-                                    agent._vprint(f"{agent.log_prefix}         Nous catalog model, or run `/model openrouter:{_model}` to use OpenRouter.", force=True)
+                        elif _provider == "openai-codex" and status_code in (401, 403):
+                            agent._vprint(f"{agent.log_prefix}   💡 Codex OAuth token was rejected (HTTP {status_code}). Your token may have been", force=True)
+                            agent._vprint(f"{agent.log_prefix}      refreshed by another client (Codex CLI, VS Code). To fix:", force=True)
+                            agent._vprint(f"{agent.log_prefix}      1. Run `codex` in your terminal to generate fresh tokens.", force=True)
+                            agent._vprint(f"{agent.log_prefix}      2. Then run `hermes auth` to re-authenticate.", force=True)
                         else:
                             agent._vprint(f"{agent.log_prefix}   💡 Your API key was rejected by the provider. Check:", force=True)
                             agent._vprint(f"{agent.log_prefix}      • Is the key valid? Run: hermes setup", force=True)
                             agent._vprint(f"{agent.log_prefix}      • Does your account have access to {_model}?", force=True)
-                            if base_url_host_matches(str(_base), "openrouter.ai"):
-                                agent._vprint(f"{agent.log_prefix}      • Check credits: https://openrouter.ai/settings/credits", force=True)
                     else:
                         agent._vprint(f"{agent.log_prefix}   💡 This type of error won't be fixed by retrying.", force=True)
                     # Content-policy blocks deserve their own actionable
@@ -3778,10 +3176,7 @@ def run_conversation(
 
         try:
             _transport = agent._get_transport()
-            _normalize_kwargs = {}
-            if agent.api_mode == "anthropic_messages":
-                _normalize_kwargs["strip_tool_prefix"] = agent._is_anthropic_oauth
-            normalized = _transport.normalize_response(response, **_normalize_kwargs)
+            normalized = _transport.normalize_response(response)
             assistant_message = normalized
             finish_reason = normalized.finish_reason
             

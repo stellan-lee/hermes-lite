@@ -2,24 +2,13 @@
 
 import os
 import struct
+import tempfile
 import time
 import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-
-def _non_wsl_proc_version(real_open):
-    """Return an open() shim that makes host WSL detection deterministic."""
-    def _fake_open(file, *args, **kwargs):
-        if file == "/proc/version":
-            from io import StringIO
-
-            return StringIO("Linux test-kernel")
-        return real_open(file, *args, **kwargs)
-
-    return _fake_open
 
 
 # ============================================================================
@@ -68,8 +57,15 @@ def mock_sd(monkeypatch):
     return mock
 
 
+@pytest.fixture
+def short_socket_dir():
+    """Keep AF_UNIX paths below macOS's 104-byte limit."""
+    with tempfile.TemporaryDirectory(prefix="hv-", dir="/tmp") as path:
+        yield Path(path)
+
+
 # ============================================================================
-# detect_audio_environment — WSL / SSH / Docker detection
+# detect_audio_environment — SSH / Docker detection
 # ============================================================================
 
 class TestPulseSocketReachable:
@@ -80,10 +76,10 @@ class TestPulseSocketReachable:
         from tools.voice_mode import _pulse_socket_reachable
         assert _pulse_socket_reachable() is False
 
-    def test_stale_socket_file_not_reachable(self, monkeypatch, tmp_path):
+    def test_stale_socket_file_not_reachable(self, monkeypatch, short_socket_dir):
         """A socket file with no listener should not count as reachable."""
         import socket as _socket
-        sock_path = tmp_path / "pulse" / "native"
+        sock_path = short_socket_dir / "pulse" / "native"
         sock_path.parent.mkdir(parents=True)
         # Create + bind, then close so the path is a stale socket file.
         s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
@@ -91,14 +87,14 @@ class TestPulseSocketReachable:
         s.close()
         monkeypatch.delenv("PULSE_SERVER", raising=False)
         monkeypatch.delenv("PULSE_RUNTIME_PATH", raising=False)
-        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(short_socket_dir))
         from tools.voice_mode import _pulse_socket_reachable
         assert _pulse_socket_reachable() is False
 
-    def test_listening_socket_reachable_via_xdg_runtime(self, monkeypatch, tmp_path):
+    def test_listening_socket_reachable_via_xdg_runtime(self, monkeypatch, short_socket_dir):
         """A live PulseAudio-style socket under XDG_RUNTIME_DIR is reachable (#35622)."""
         import socket as _socket
-        sock_path = tmp_path / "pulse" / "native"
+        sock_path = short_socket_dir / "pulse" / "native"
         sock_path.parent.mkdir(parents=True)
         server = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
         server.bind(str(sock_path))
@@ -106,15 +102,15 @@ class TestPulseSocketReachable:
         try:
             monkeypatch.delenv("PULSE_SERVER", raising=False)
             monkeypatch.delenv("PULSE_RUNTIME_PATH", raising=False)
-            monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+            monkeypatch.setenv("XDG_RUNTIME_DIR", str(short_socket_dir))
             from tools.voice_mode import _pulse_socket_reachable
             assert _pulse_socket_reachable() is True
         finally:
             server.close()
 
-    def test_listening_socket_reachable_via_pulse_server_env(self, monkeypatch, tmp_path):
+    def test_listening_socket_reachable_via_pulse_server_env(self, monkeypatch, short_socket_dir):
         import socket as _socket
-        sock_path = tmp_path / "native"
+        sock_path = short_socket_dir / "native"
         server = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
         server.bind(str(sock_path))
         server.listen(1)
@@ -130,13 +126,12 @@ class TestPulseSocketReachable:
 
 class TestDetectAudioEnvironment:
     def test_clean_environment_is_available(self, monkeypatch):
-        """No SSH, Docker, or WSL — should be available."""
+        """No SSH or Docker should be available."""
         monkeypatch.delenv("SSH_CLIENT", raising=False)
         monkeypatch.delenv("SSH_TTY", raising=False)
         monkeypatch.delenv("SSH_CONNECTION", raising=False)
         monkeypatch.setattr("tools.voice_mode._import_audio",
                             lambda: (MagicMock(), MagicMock()))
-        monkeypatch.setattr("builtins.open", _non_wsl_proc_version(open))
 
         from tools.voice_mode import detect_audio_environment
         result = detect_audio_environment()
@@ -164,7 +159,6 @@ class TestDetectAudioEnvironment:
         monkeypatch.delenv("PIPEWIRE_REMOTE", raising=False)
         monkeypatch.setattr("tools.voice_mode._import_audio",
                             lambda: (MagicMock(), MagicMock()))
-        monkeypatch.setattr("builtins.open", _non_wsl_proc_version(open))
 
         from tools.voice_mode import detect_audio_environment
         result = detect_audio_environment()
@@ -182,7 +176,6 @@ class TestDetectAudioEnvironment:
         monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: True)
         monkeypatch.setattr("tools.voice_mode._import_audio",
                             lambda: (MagicMock(), MagicMock()))
-        monkeypatch.setattr("builtins.open", _non_wsl_proc_version(open))
 
         from tools.voice_mode import detect_audio_environment
         result = detect_audio_environment()
@@ -190,86 +183,8 @@ class TestDetectAudioEnvironment:
         assert result["warnings"] == []
         assert any("SSH" in n for n in result.get("notices", []))
 
-    def test_wsl_without_pulse_blocks_voice(self, monkeypatch, tmp_path):
-        """WSL without PULSE_SERVER should block voice mode."""
-        monkeypatch.delenv("SSH_CLIENT", raising=False)
-        monkeypatch.delenv("SSH_TTY", raising=False)
-        monkeypatch.delenv("SSH_CONNECTION", raising=False)
-        monkeypatch.delenv("PULSE_SERVER", raising=False)
-        monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: False)
-        monkeypatch.setattr("tools.voice_mode._import_audio",
-                            lambda: (MagicMock(), MagicMock()))
 
-        proc_version = tmp_path / "proc_version"
-        proc_version.write_text("Linux 5.15.0-microsoft-standard-WSL2")
 
-        _real_open = open
-        def _fake_open(f, *a, **kw):
-            if f == "/proc/version":
-                return _real_open(str(proc_version), *a, **kw)
-            return _real_open(f, *a, **kw)
-
-        with patch("builtins.open", side_effect=_fake_open):
-            from tools.voice_mode import detect_audio_environment
-            result = detect_audio_environment()
-
-        assert result["available"] is False
-        assert any("WSL" in w for w in result["warnings"])
-        assert any("PulseAudio" in w for w in result["warnings"])
-
-    def test_wsl_with_pulse_allows_voice(self, monkeypatch, tmp_path):
-        """WSL with PULSE_SERVER set should NOT block voice mode."""
-        monkeypatch.delenv("SSH_CLIENT", raising=False)
-        monkeypatch.delenv("SSH_TTY", raising=False)
-        monkeypatch.delenv("SSH_CONNECTION", raising=False)
-        monkeypatch.setenv("PULSE_SERVER", "unix:/mnt/wslg/PulseServer")
-        monkeypatch.setattr("tools.voice_mode._import_audio",
-                            lambda: (MagicMock(), MagicMock()))
-
-        proc_version = tmp_path / "proc_version"
-        proc_version.write_text("Linux 5.15.0-microsoft-standard-WSL2")
-
-        _real_open = open
-        def _fake_open(f, *a, **kw):
-            if f == "/proc/version":
-                return _real_open(str(proc_version), *a, **kw)
-            return _real_open(f, *a, **kw)
-
-        with patch("builtins.open", side_effect=_fake_open):
-            from tools.voice_mode import detect_audio_environment
-            result = detect_audio_environment()
-
-        assert result["available"] is True
-        assert result["warnings"] == []
-        assert any("WSL" in n for n in result.get("notices", []))
-
-    def test_wsl_device_query_fails_with_pulse_continues(self, monkeypatch, tmp_path):
-        """WSL device query failure should not block if PULSE_SERVER is set."""
-        monkeypatch.delenv("SSH_CLIENT", raising=False)
-        monkeypatch.delenv("SSH_TTY", raising=False)
-        monkeypatch.delenv("SSH_CONNECTION", raising=False)
-        monkeypatch.setenv("PULSE_SERVER", "unix:/mnt/wslg/PulseServer")
-
-        mock_sd = MagicMock()
-        mock_sd.query_devices.side_effect = Exception("device query failed")
-        monkeypatch.setattr("tools.voice_mode._import_audio",
-                            lambda: (mock_sd, MagicMock()))
-
-        proc_version = tmp_path / "proc_version"
-        proc_version.write_text("Linux 5.15.0-microsoft-standard-WSL2")
-
-        _real_open = open
-        def _fake_open(f, *a, **kw):
-            if f == "/proc/version":
-                return _real_open(str(proc_version), *a, **kw)
-            return _real_open(f, *a, **kw)
-
-        with patch("builtins.open", side_effect=_fake_open):
-            from tools.voice_mode import detect_audio_environment
-            result = detect_audio_environment()
-
-        assert result["available"] is True
-        assert any("device query failed" in n for n in result.get("notices", []))
 
     def test_device_query_fails_without_pulse_blocks(self, monkeypatch):
         """Device query failure without PULSE_SERVER should block."""
@@ -290,37 +205,7 @@ class TestDetectAudioEnvironment:
         assert result["available"] is False
         assert any("PortAudio" in w for w in result["warnings"])
 
-    def test_termux_import_error_shows_termux_install_guidance(self, monkeypatch):
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.delenv("SSH_CLIENT", raising=False)
-        monkeypatch.delenv("SSH_TTY", raising=False)
-        monkeypatch.delenv("SSH_CONNECTION", raising=False)
-        monkeypatch.setattr("tools.voice_mode._import_audio", lambda: (_ for _ in ()).throw(ImportError("no audio libs")))
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: None)
 
-        from tools.voice_mode import detect_audio_environment
-        result = detect_audio_environment()
-
-        assert result["available"] is False
-        assert any("pkg install python-numpy portaudio" in w for w in result["warnings"])
-        assert any("python -m pip install sounddevice" in w for w in result["warnings"])
-
-    def test_termux_api_package_without_android_app_blocks_voice(self, monkeypatch):
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.delenv("SSH_CLIENT", raising=False)
-        monkeypatch.delenv("SSH_TTY", raising=False)
-        monkeypatch.delenv("SSH_CONNECTION", raising=False)
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: False)
-        monkeypatch.setattr("tools.voice_mode._import_audio", lambda: (_ for _ in ()).throw(ImportError("no audio libs")))
-
-        from tools.voice_mode import detect_audio_environment
-        result = detect_audio_environment()
-
-        assert result["available"] is False
-        assert any("Termux:API Android app is not installed" in w for w in result["warnings"])
 
 
     def test_docker_with_pulse_server_allows_voice(self, monkeypatch):
@@ -418,23 +303,6 @@ class TestDetectAudioEnvironment:
         assert any("container" in w.lower() for w in result["warnings"])
         assert any("PULSE_SERVER" in w or "PIPEWIRE_REMOTE" in w for w in result["warnings"])
 
-    def test_termux_api_microphone_allows_voice_without_sounddevice(self, monkeypatch):
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.delenv("SSH_CLIENT", raising=False)
-        monkeypatch.delenv("SSH_TTY", raising=False)
-        monkeypatch.delenv("SSH_CONNECTION", raising=False)
-        monkeypatch.setattr("tools.voice_mode.shutil.which", lambda cmd: "/data/data/com.termux/files/usr/bin/termux-microphone-record" if cmd == "termux-microphone-record" else None)
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
-        monkeypatch.setattr("tools.voice_mode._import_audio", lambda: (_ for _ in ()).throw(ImportError("no audio libs")))
-        monkeypatch.setattr("builtins.open", _non_wsl_proc_version(open))
-
-        from tools.voice_mode import detect_audio_environment
-        result = detect_audio_environment()
-
-        assert result["available"] is True
-        assert any("Termux:API microphone recording available" in n for n in result.get("notices", []))
-        assert result["warnings"] == []
 
 
 # ============================================================================
@@ -442,20 +310,6 @@ class TestDetectAudioEnvironment:
 # ============================================================================
 
 class TestCheckVoiceRequirements:
-    def test_termux_api_capture_counts_as_audio_available(self, monkeypatch):
-        monkeypatch.setattr("tools.voice_mode._audio_available", lambda: False)
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
-        monkeypatch.setattr("tools.voice_mode.detect_audio_environment", lambda: {"available": True, "warnings": [], "notices": ["Termux:API microphone recording available"]})
-        monkeypatch.setattr("tools.transcription_tools._get_provider", lambda cfg: "openai")
-
-        from tools.voice_mode import check_voice_requirements
-        result = check_voice_requirements()
-
-        assert result["available"] is True
-        assert result["audio_available"] is True
-        assert result["missing_packages"] == []
-        assert "Termux:API microphone" in result["details"]
 
     def test_all_requirements_met(self, monkeypatch):
         monkeypatch.setattr("tools.voice_mode._audio_available", lambda: True)
@@ -502,83 +356,6 @@ class TestCheckVoiceRequirements:
 # ============================================================================
 # AudioRecorder
 # ============================================================================
-
-class TestCreateAudioRecorder:
-    def test_termux_uses_termux_audio_recorder_when_api_present(self, monkeypatch):
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
-
-        from tools.voice_mode import create_audio_recorder, TermuxAudioRecorder
-        recorder = create_audio_recorder()
-
-        assert isinstance(recorder, TermuxAudioRecorder)
-        assert recorder.supports_silence_autostop is False
-
-    def test_termux_without_android_app_falls_back_to_audio_recorder(self, monkeypatch):
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: False)
-
-        from tools.voice_mode import create_audio_recorder, AudioRecorder
-        recorder = create_audio_recorder()
-
-        assert isinstance(recorder, AudioRecorder)
-
-
-class TestTermuxAudioRecorder:
-    def test_start_and_stop_use_termux_microphone_commands(self, monkeypatch, temp_voice_dir):
-        command_calls = []
-        output_path = Path(temp_voice_dir) / "recording_20260409_120000.aac"
-
-        def fake_run(cmd, **kwargs):
-            command_calls.append(cmd)
-            if cmd[1] == "-f":
-                Path(cmd[2]).write_bytes(b"aac-bytes")
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
-        monkeypatch.setattr("tools.voice_mode.time.strftime", lambda fmt: "20260409_120000")
-        monkeypatch.setattr("tools.voice_mode.subprocess.run", fake_run)
-
-        from tools.voice_mode import TermuxAudioRecorder
-        recorder = TermuxAudioRecorder()
-        recorder.start()
-        recorder._start_time = time.monotonic() - 1.0
-        result = recorder.stop()
-
-        assert result == str(output_path)
-        assert command_calls[0][:2] == ["/data/data/com.termux/files/usr/bin/termux-microphone-record", "-f"]
-        assert command_calls[1] == ["/data/data/com.termux/files/usr/bin/termux-microphone-record", "-q"]
-
-    def test_cancel_removes_partial_termux_recording(self, monkeypatch, temp_voice_dir):
-        output_path = Path(temp_voice_dir) / "recording_20260409_120000.aac"
-
-        def fake_run(cmd, **kwargs):
-            if cmd[1] == "-f":
-                Path(cmd[2]).write_bytes(b"aac-bytes")
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
-        monkeypatch.setattr("tools.voice_mode.time.strftime", lambda fmt: "20260409_120000")
-        monkeypatch.setattr("tools.voice_mode.subprocess.run", fake_run)
-
-        from tools.voice_mode import TermuxAudioRecorder
-        recorder = TermuxAudioRecorder()
-        recorder.start()
-        recorder.cancel()
-
-        assert output_path.exists() is False
-        assert recorder.is_recording is False
-
 
 class TestAudioRecorder:
     def test_start_raises_without_audio_libs(self, monkeypatch):

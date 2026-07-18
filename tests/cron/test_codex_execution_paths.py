@@ -5,8 +5,6 @@ from types import SimpleNamespace
 
 
 sys.modules.setdefault("fire", types.SimpleNamespace(Fire=lambda *a, **k: None))
-sys.modules.setdefault("firecrawl", types.SimpleNamespace(Firecrawl=object))
-sys.modules.setdefault("fal_client", types.SimpleNamespace())
 
 import cron.scheduler as cron_scheduler
 import gateway.run as gateway_run
@@ -149,7 +147,7 @@ def test_gateway_run_agent_codex_path_handles_internal_401_refresh(monkeypatch):
     runner._prefill_messages = []
     runner._reasoning_config = None
     runner._provider_routing = {}
-    runner._fallback_model = None
+    runner._fallback_providers = None
     runner._running_agents = {}
     from unittest.mock import MagicMock, AsyncMock
     runner.hooks = MagicMock()

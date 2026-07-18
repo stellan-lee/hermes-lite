@@ -1,5 +1,4 @@
 """Tests for cmd_update — branch fallback when remote branch doesn't exist."""
-
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -219,14 +218,7 @@ class TestCmdUpdateBranchFallback:
         mock_run.side_effect = _make_run_side_effect(
             branch="main", verify_ok=True, commit_count="1"
         )
-        # The web UI build runs through _run_with_idle_timeout now (issue
-        # #33788) so it no longer appears in subprocess.run's call list.
-        # Mock it so the test doesn't actually shell out to ``tsc``.
-        import subprocess as _subprocess
-        build_ok = _subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        with patch.object(hm, "_is_termux_env", return_value=False), \
-             patch.object(hm, "_run_with_idle_timeout", return_value=build_ok) as mock_idle:
-            cmd_update(mock_args)
+        cmd_update(mock_args)
 
         npm_calls = [
             (call.args[0], call.kwargs.get("cwd"))
@@ -236,10 +228,7 @@ class TestCmdUpdateBranchFallback:
 
         # cmd_update runs npm commands in these locations:
         #   1. repo root  — root-only install (--workspaces=false)
-        #   2. repo root  — workspace install (--workspace ui-tui --workspace web)
-        #   3. web/       — npm ci --silent (if lockfile not at root)
-        #                  via _build_web_ui (subprocess.run)
-        #   4. web/       — npm run build (_run_with_idle_timeout)
+        #   2. repo root  — workspace install (--workspace ui-tui)
         #
         # With a single workspace lockfile at the repo root, the root
         # install covers all workspaces.  The web/ ci call runs from the
@@ -248,7 +237,7 @@ class TestCmdUpdateBranchFallback:
         #
         # The root install omits `--silent` and runs without
         # `capture_output` so optional postinstall scripts (e.g.
-        # `@askjo/camofox-browser`'s browser-binary fetch) print progress —
+        # optional dependency installers can print progress —
         # otherwise long downloads look like a hang (#18840).
         root_flags = [
             "/usr/bin/npm",
@@ -266,30 +255,14 @@ class TestCmdUpdateBranchFallback:
             "--progress=false",
             "--workspace",
             "ui-tui",
-            "--workspace",
-            "web",
         ]
         assert npm_calls[:2] == [
             (root_flags, PROJECT_ROOT),
             (ws_flags, PROJECT_ROOT),
         ]
-        if len(npm_calls) > 2:
-            # The web/ install runs from the workspace root when the root
-            # lockfile exists (npm workspaces hoist node_modules upward).
-            assert npm_calls[2:] == [
-                (["/usr/bin/npm", "ci", "--silent"], PROJECT_ROOT),
-            ]
-
-        # The web UI build itself went through the streaming helper.
-        mock_idle.assert_called_once()
-        idle_args, idle_kwargs = mock_idle.call_args
-        assert idle_args[0] == ["/usr/bin/npm", "run", "build"]
-        assert idle_kwargs["cwd"] == PROJECT_ROOT / "web"
-
+        assert len(npm_calls) == 2
         # Regression for #18840: root npm installs must stream output
-        # (capture_output=False) so postinstall progress is visible
-        # to the user.  The _build_web_ui install uses --silent and
-        # capture_output=True, so exclude it.
+        # (capture_output=False) so postinstall progress is visible.
         root_install_calls = [
             call
             for call in mock_run.call_args_list
@@ -307,7 +280,7 @@ class TestCmdUpdateBranchFallback:
             )
 
     def test_update_non_interactive_runs_safe_config_migrations(self, mock_args, capsys):
-        """Dashboard/web updates apply non-interactive migrations before restart."""
+        """Non-interactive updates apply safe migrations before restart."""
         with patch("shutil.which", return_value=None), patch(
             "subprocess.run"
         ) as mock_run, patch("builtins.input") as mock_input, patch(
@@ -771,62 +744,3 @@ class TestCmdUpdateCheckBranchFlag:
         out = capsys.readouterr().out
         assert "--branch is ignored for PyPI installs" in out
         assert "bb/gui" in out
-
-
-class TestCmdUpdateZipBranchRefusal:
-    """``hermes update --branch=<non-main>`` must refuse on the ZIP fallback path.
-
-    The ZIP fallback hard-codes a GitHub archive URL for main.zip; honoring
-    --branch arbitrarily would require remote-branch existence checks the
-    fallback can't easily do. Refusing is the right move — silently lying
-    about which branch got installed is the bug --branch was meant to prevent.
-    """
-
-    def test_zip_fallback_refuses_non_main_branch(self, capsys):
-        from hermes_cli.main import _update_via_zip
-
-        args = SimpleNamespace(branch="bb/gui")
-        with pytest.raises(SystemExit) as exc_info:
-            _update_via_zip(args)
-        assert exc_info.value.code == 1
-
-        out = capsys.readouterr().out
-        assert "bb/gui" in out
-        assert "not supported" in out
-        # No actual download attempted.
-        assert "Downloading latest version" not in out
-
-
-def test_is_termux_env_true_for_termux_prefix():
-    from hermes_cli import main as hm
-
-    assert hm._is_termux_env({"PREFIX": "/data/data/com.termux/files/usr"}) is True
-
-
-def test_is_termux_env_false_for_non_termux_prefix():
-    from hermes_cli import main as hm
-
-    assert hm._is_termux_env({"PREFIX": "/usr/local"}) is False
-
-
-def test_load_installable_optional_extras_supports_termux_group(tmp_path, monkeypatch):
-    from hermes_cli import main as hm
-
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        """
-[project]
-name = "x"
-version = "0.0.0"
-
-[project.optional-dependencies]
-all = ["x[mcp]"]
-termux-all = ["x[termux]", "x[mcp]"]
-mcp = ["mcp>=1"]
-termux = ["rich>=14"]
-""".strip()
-    )
-    monkeypatch.setattr(hm, "PROJECT_ROOT", tmp_path)
-
-    assert hm._load_installable_optional_extras(group="all") == ["mcp"]
-    assert hm._load_installable_optional_extras(group="termux-all") == ["termux", "mcp"]

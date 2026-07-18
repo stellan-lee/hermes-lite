@@ -86,7 +86,7 @@ def test_session_search_lazily_opens_db_when_entrypoint_did_not_pass_one(monkeyp
     session_search_mod.session_search = fake_session_search
     monkeypatch.setitem(sys.modules, "tools.session_search_tool", session_search_mod)
 
-    agent = _make_agent(None, platform="acp")
+    agent = _make_agent(None, platform="telegram")
     result = json.loads(agent._invoke_tool("session_search", {"query": "Hermes"}, "task-id"))
 
     assert result["success"] is True

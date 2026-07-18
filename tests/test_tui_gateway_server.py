@@ -723,82 +723,64 @@ def test_status_callback_accepts_single_message_argument():
 
 def test_resolve_model_uses_inference_model_env(monkeypatch):
     monkeypatch.delenv("HERMES_MODEL", raising=False)
-    monkeypatch.setenv("HERMES_INFERENCE_MODEL", " anthropic/claude-sonnet-4.6\n")
+    monkeypatch.setenv("HERMES_INFERENCE_MODEL", " local/test-model\n")
 
-    assert server._resolve_model() == "anthropic/claude-sonnet-4.6"
+    assert server._resolve_model() == "local/test-model"
 
 
 def test_resolve_model_strips_config_model(monkeypatch):
     monkeypatch.delenv("HERMES_MODEL", raising=False)
     monkeypatch.delenv("HERMES_INFERENCE_MODEL", raising=False)
     monkeypatch.setattr(
-        server, "_load_cfg", lambda: {"model": {"default": " nous/hermes-test "}}
+        server, "_load_cfg", lambda: {"model": {"default": " local/test-model "}}
     )
 
-    assert server._resolve_model() == "nous/hermes-test"
+    assert server._resolve_model() == "local/test-model"
 
 
 def test_startup_runtime_uses_tui_provider_env(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "nous/hermes-test")
-    monkeypatch.setenv("HERMES_TUI_PROVIDER", "nous")
+    monkeypatch.setenv("HERMES_MODEL", "local/test-model")
+    monkeypatch.setenv("HERMES_TUI_PROVIDER", "custom")
     monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
 
-    assert server._resolve_startup_runtime() == ("nous/hermes-test", "nous")
+    assert server._resolve_startup_runtime() == ("local/test-model", "custom")
 
 
 def test_startup_runtime_does_not_treat_inference_provider_as_explicit(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "nous/hermes-test")
+    monkeypatch.setenv("HERMES_MODEL", "local/test-model")
     monkeypatch.delenv("HERMES_TUI_PROVIDER", raising=False)
-    monkeypatch.setenv("HERMES_INFERENCE_PROVIDER", "nous")
+    monkeypatch.setenv("HERMES_INFERENCE_PROVIDER", "custom")
     monkeypatch.setattr(
         "hermes_cli.models.detect_static_provider_for_model",
         lambda model, provider: None,
     )
 
-    assert server._resolve_startup_runtime() == ("nous/hermes-test", None)
+    assert server._resolve_startup_runtime() == ("local/test-model", None)
 
 
 def test_startup_runtime_detects_provider_for_model_env(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "sonnet")
+    monkeypatch.setenv("HERMES_MODEL", "gpt-5.3-codex")
     monkeypatch.delenv("HERMES_TUI_PROVIDER", raising=False)
     monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
     monkeypatch.setattr(server, "_load_cfg", lambda: {"model": {"provider": "auto"}})
 
     def fake_detect(model, current_provider):
-        assert model == "sonnet"
+        assert model == "gpt-5.3-codex"
         assert current_provider == "auto"
-        return "anthropic", "anthropic/claude-sonnet-4.6"
+        return "openai-codex", "gpt-5.3-codex"
 
     monkeypatch.setattr(
         "hermes_cli.models.detect_static_provider_for_model", fake_detect
     )
 
     assert server._resolve_startup_runtime() == (
-        "anthropic/claude-sonnet-4.6",
-        "anthropic",
+        "gpt-5.3-codex",
+        "openai-codex",
     )
-
-
-def test_startup_runtime_resolves_short_alias_without_network(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "sonnet")
-    monkeypatch.delenv("HERMES_TUI_PROVIDER", raising=False)
-    monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
-    monkeypatch.setattr(server, "_load_cfg", lambda: {"model": {"provider": "auto"}})
-    monkeypatch.setattr(
-        "hermes_cli.models.fetch_openrouter_models",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("network lookup should not run")
-        ),
-    )
-
-    model, provider = server._resolve_startup_runtime()
-
-    assert provider == "anthropic"
-    assert model.startswith("claude-sonnet")
 
 
 def test_startup_runtime_does_not_call_network_detector(monkeypatch):
-    monkeypatch.setenv("HERMES_MODEL", "sonnet")
+    monkeypatch.setenv("HERMES_MODEL", "local/test-model")
     monkeypatch.delenv("HERMES_TUI_PROVIDER", raising=False)
     monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
     monkeypatch.setattr(server, "_load_cfg", lambda: {"model": {"provider": "auto"}})
@@ -812,7 +794,7 @@ def test_startup_runtime_does_not_call_network_detector(monkeypatch):
     model, provider = server._resolve_startup_runtime()
 
     assert model
-    assert provider in {None, "anthropic"}
+    assert provider is None
 
 
 def _session(agent=None, **extra):
@@ -1347,148 +1329,6 @@ def test_config_set_yolo_toggles_session_scope():
         server._sessions.clear()
 
 
-def test_config_set_fast_updates_live_agent_and_config(monkeypatch):
-    writes = []
-    emits = []
-    agent = types.SimpleNamespace(
-        model="openai/gpt-5.4",
-        request_overrides={"foo": "bar", "speed": "slow"},
-        service_tier=None,
-    )
-    server._sessions["sid"] = _session(agent=agent)
-
-    monkeypatch.setattr(
-        server, "_write_config_key", lambda path, value: writes.append((path, value))
-    )
-    monkeypatch.setattr(server, "_session_info", lambda _agent, *a: {"model": "x"})
-    monkeypatch.setattr(server, "_emit", lambda *args: emits.append(args))
-    monkeypatch.setattr(
-        "hermes_cli.models.resolve_fast_mode_overrides",
-        lambda _model_id: {"service_tier": "priority"},
-    )
-
-    try:
-        resp = server.handle_request(
-            {
-                "id": "1",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "fast"},
-            }
-        )
-        assert resp["result"]["value"] == "fast"
-        assert agent.service_tier == "priority"
-        assert agent.request_overrides == {
-            "foo": "bar",
-            "service_tier": "priority",
-        }
-        assert ("agent.service_tier", "fast") in writes
-        assert ("session.info", "sid", {"model": "x"}) in emits
-
-        resp_normal = server.handle_request(
-            {
-                "id": "2",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "normal"},
-            }
-        )
-        assert resp_normal["result"]["value"] == "normal"
-        assert agent.service_tier is None
-        assert agent.request_overrides == {"foo": "bar"}
-        assert ("agent.service_tier", "normal") in writes
-    finally:
-        server._sessions.pop("sid", None)
-
-
-def test_config_set_fast_status_is_non_mutating(monkeypatch):
-    writes = []
-    emits = []
-    agent = types.SimpleNamespace(service_tier="priority")
-    server._sessions["sid"] = _session(agent=agent)
-
-    monkeypatch.setattr(
-        server, "_write_config_key", lambda path, value: writes.append((path, value))
-    )
-    monkeypatch.setattr(server, "_emit", lambda *args: emits.append(args))
-
-    try:
-        resp = server.handle_request(
-            {
-                "id": "1",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "status"},
-            }
-        )
-        assert resp["result"]["value"] == "fast"
-        assert writes == []
-        assert emits == []
-    finally:
-        server._sessions.pop("sid", None)
-
-
-def test_config_set_fast_rejects_unsupported_model(monkeypatch):
-    writes = []
-    agent = types.SimpleNamespace(
-        model="unsupported-model",
-        request_overrides={},
-        service_tier=None,
-    )
-    server._sessions["sid"] = _session(agent=agent)
-
-    monkeypatch.setattr(
-        server, "_write_config_key", lambda path, value: writes.append((path, value))
-    )
-    monkeypatch.setattr(
-        "hermes_cli.models.resolve_fast_mode_overrides",
-        lambda _model_id: None,
-    )
-
-    try:
-        resp = server.handle_request(
-            {
-                "id": "1",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "fast"},
-            }
-        )
-        assert resp["error"]["code"] == 4002
-        assert "not available" in resp["error"]["message"]
-        assert agent.service_tier is None
-        assert agent.request_overrides == {}
-        assert writes == []
-    finally:
-        server._sessions.pop("sid", None)
-
-
-def test_config_set_fast_rejects_missing_model(monkeypatch):
-    writes = []
-    agent = types.SimpleNamespace(
-        model="",
-        request_overrides={},
-        service_tier=None,
-    )
-    server._sessions["sid"] = _session(agent=agent)
-
-    monkeypatch.setattr(
-        server, "_write_config_key", lambda path, value: writes.append((path, value))
-    )
-
-    try:
-        resp = server.handle_request(
-            {
-                "id": "1",
-                "method": "config.set",
-                "params": {"session_id": "sid", "key": "fast", "value": "fast"},
-            }
-        )
-        assert resp["error"]["code"] == 4002
-        assert "without a selected model" in resp["error"]["message"]
-        assert agent.service_tier is None
-        assert agent.request_overrides == {}
-        assert writes == []
-    finally:
-        server._sessions.pop("sid", None)
-
-
 def test_config_busy_get_and_set(monkeypatch):
     writes = []
 
@@ -1798,23 +1638,6 @@ def test_setup_runtime_check_allows_no_key_custom_runtime(monkeypatch):
 
     assert resp["result"]["ok"] is True
     assert resp["result"]["provider"] == "custom"
-
-
-def test_setup_runtime_check_rejects_implicit_bedrock_when_unconfigured(monkeypatch):
-    monkeypatch.setattr("hermes_cli.main._has_any_provider_configured", lambda: False)
-    monkeypatch.setattr(
-        "hermes_cli.runtime_provider.resolve_runtime_provider",
-        lambda requested=None: {
-            "provider": "bedrock",
-            "api_key": "aws-sdk",
-            "source": "iam-role",
-        },
-    )
-
-    resp = server.handle_request({"id": "1", "method": "setup.runtime_check", "params": {}})
-
-    assert resp["result"]["ok"] is False
-    assert resp["result"]["provider"] == "bedrock"
 
 
 def test_complete_slash_drops_removed_provider_alias():
@@ -3930,16 +3753,15 @@ def test_model_options_does_not_overwrite_curated_models(monkeypatch):
     Regression: earlier versions of this handler unconditionally replaced
     each provider's curated ``models`` field with ``provider_model_ids()``
     (live /models catalog).  That pulled in hundreds of non-agentic models
-    for providers like Nous whose /models endpoint returns image/video
-    generators, rerankers, embeddings, and TTS models alongside chat models.
+    for custom providers whose /models endpoint returns non-chat models too.
     """
     curated_providers = [
         {
-            "slug": "nous",
-            "name": "Nous",
-            "models": ["moonshotai/kimi-k2.5", "anthropic/claude-opus-4.7"],
-            "total_models": 30,
-            "source": "built-in",
+            "slug": "custom",
+            "name": "Custom",
+            "models": ["local/agent-a", "local/agent-b"],
+            "total_models": 2,
+            "source": "user-config",
             "is_current": False,
             "is_user_defined": False,
         },
@@ -3963,13 +3785,13 @@ def test_model_options_does_not_overwrite_curated_models(monkeypatch):
 
     assert "result" in resp, resp
     providers = resp["result"]["providers"]
-    nous = next((p for p in providers if p.get("slug") == "nous"), None)
-    assert nous is not None
-    assert nous["models"] == [
-        "moonshotai/kimi-k2.5",
-        "anthropic/claude-opus-4.7",
+    custom = next((p for p in providers if p.get("slug") == "custom"), None)
+    assert custom is not None
+    assert custom["models"] == [
+        "local/agent-a",
+        "local/agent-b",
     ]
-    assert nous["total_models"] == 30
+    assert custom["total_models"] == 2
     # Handler must not consult the live catalog — curated is the truth.
     live_fetch.assert_not_called()
     # list_authenticated_providers is the single source.
@@ -4645,7 +4467,7 @@ def test_browser_manage_connect_default_local_reports_launch_hint(monkeypatch):
         == "Chromium-family browser isn't running with remote debugging — attempting to launch..."
     )
     assert any(
-        "No supported Chromium-family browser executable was found" in line
+        "remote debugging" in line
         for line in resp["result"]["messages"]
     )
     assert any(
@@ -4855,14 +4677,14 @@ def test_browser_manage_connect_strips_discovery_path(monkeypatch):
 
 
 def test_browser_manage_connect_preserves_devtools_browser_endpoint(monkeypatch):
-    """Concrete devtools websocket endpoints (e.g. Browserbase) must
+    """Concrete DevTools websocket endpoints must
     survive verbatim — we only collapse discovery-style paths."""
     monkeypatch.delenv("BROWSER_CDP_URL", raising=False)
     fake = types.SimpleNamespace(
         cleanup_all_browsers=lambda: None,
         _get_cdp_override=lambda: os.environ.get("BROWSER_CDP_URL", ""),
     )
-    concrete = "ws://browserbase.example/devtools/browser/abc123"
+    concrete = "ws://browser.example/devtools/browser/abc123"
 
     class _OkSocket:
         def __enter__(self):
@@ -5199,12 +5021,10 @@ def _setup_make_agent_mocks(monkeypatch, cfg):
             "api_mode": None,
             "command": None,
             "args": None,
-            "credential_pool": None,
         },
     )
     monkeypatch.setattr(server, "_load_tool_progress_mode", lambda: "off")
     monkeypatch.setattr(server, "_load_reasoning_config", lambda: None)
-    monkeypatch.setattr(server, "_load_service_tier", lambda: None)
     monkeypatch.setattr(server, "_load_enabled_toolsets", lambda: None)
     monkeypatch.setattr(server, "_get_db", lambda: None)
     monkeypatch.setattr(server, "_agent_cbs", lambda sid: {})
@@ -5245,7 +5065,7 @@ def test_make_agent_handles_null_agent_config(monkeypatch):
     with patch("run_agent.AIAgent") as mock_agent:
         server._make_agent("sid1", "key1")
 
-    assert mock_agent.call_args.kwargs["max_iterations"] == 80
+    assert mock_agent.call_args.kwargs["max_iterations"] == 90
 
 
 class _FakeAgentForBackground:
@@ -5253,21 +5073,12 @@ class _FakeAgentForBackground:
     api_key = None
     provider = None
     api_mode = None
-    acp_command = None
-    acp_args = None
     model = "test-model"
     enabled_toolsets = None
     ephemeral_system_prompt = None
-    providers_allowed = None
-    providers_ignored = None
-    providers_order = None
-    provider_sort = None
-    provider_require_parameters = False
-    provider_data_collection = None
     reasoning_config = None
-    service_tier = None
     request_overrides = {}
-    _fallback_model = None
+    _fallback_chain = []
 
 
 def test_background_agent_kwargs_reads_nested_max_turns(monkeypatch):
@@ -5278,12 +5089,12 @@ def test_background_agent_kwargs_reads_nested_max_turns(monkeypatch):
     assert kwargs["max_iterations"] == 300
 
 
-def test_background_agent_kwargs_falls_back_to_root_max_turns(monkeypatch):
+def test_background_agent_kwargs_ignores_legacy_root_max_turns(monkeypatch):
     monkeypatch.setattr(server, "_load_cfg", lambda: {"max_turns": 50})
 
     kwargs = server._background_agent_kwargs(_FakeAgentForBackground(), "task_1")
 
-    assert kwargs["max_iterations"] == 50
+    assert kwargs["max_iterations"] == 25
 
 
 def test_background_agent_kwargs_defaults_to_25(monkeypatch):
@@ -5299,7 +5110,7 @@ def test_background_agent_kwargs_handles_null_agent_config(monkeypatch):
 
     kwargs = server._background_agent_kwargs(_FakeAgentForBackground(), "task_1")
 
-    assert kwargs["max_iterations"] == 40
+    assert kwargs["max_iterations"] == 25
 
 
 def test_config_show_displays_nested_max_turns(monkeypatch):

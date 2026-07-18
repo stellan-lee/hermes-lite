@@ -146,7 +146,7 @@ class TestGetCustomProviderContextLength:
 class TestGetModelContextLengthHonorsOverride:
     """agent.model_metadata.get_model_context_length must honor the
     custom_providers override at step 0b — before any probe, cache hit,
-    or models.dev lookup can override it.
+    or endpoint metadata lookup can override it.
     """
 
     def _mock_all_probes(self):
@@ -155,9 +155,7 @@ class TestGetModelContextLengthHonorsOverride:
         return [
             patch.object(_mm, "get_cached_context_length", return_value=None),
             patch.object(_mm, "fetch_endpoint_model_metadata", return_value={}),
-            patch.object(_mm, "fetch_model_metadata", return_value={}),
             patch.object(_mm, "is_local_endpoint", return_value=False),
-            patch.object(_mm, "_is_known_provider_base_url", return_value=False),
         ]
 
     def test_custom_providers_override_wins_over_default_fallback(self):

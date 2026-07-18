@@ -174,7 +174,6 @@ class TestResetPolicyNotify:
 
     def test_notify_exclude_defaults(self):
         policy = SessionResetPolicy()
-        assert "api_server" in policy.notify_exclude_platforms
         assert "webhook" in policy.notify_exclude_platforms
 
     def test_from_dict_with_notify_false(self):
@@ -183,20 +182,20 @@ class TestResetPolicyNotify:
 
     def test_from_dict_with_custom_excludes(self):
         policy = SessionResetPolicy.from_dict({
-            "notify_exclude_platforms": ["api_server", "webhook", "homeassistant"],
+            "notify_exclude_platforms": ["webhook", "custom-platform"],
         })
-        assert "homeassistant" in policy.notify_exclude_platforms
+        assert "custom-platform" in policy.notify_exclude_platforms
 
     def test_from_dict_preserves_defaults_on_missing_keys(self):
         policy = SessionResetPolicy.from_dict({})
         assert policy.notify is True
-        assert "api_server" in policy.notify_exclude_platforms
+        assert "webhook" in policy.notify_exclude_platforms
 
     def test_to_dict_roundtrip(self):
         original = SessionResetPolicy(
             mode="idle",
             notify=False,
-            notify_exclude_platforms=("api_server",),
+            notify_exclude_platforms=("webhook",),
         )
         restored = SessionResetPolicy.from_dict(original.to_dict())
         assert restored.notify == original.notify

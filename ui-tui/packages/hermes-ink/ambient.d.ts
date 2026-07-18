@@ -4,11 +4,6 @@ declare module 'react/compiler-runtime' {
   export function c(size: number): any[]
 }
 
-declare module 'bidi-js' {
-  const bidiFactory: () => Record<string, any>
-  export default bidiFactory
-}
-
 declare module 'stack-utils' {
   class StackUtils {
     static nodeInternals(): RegExp[]

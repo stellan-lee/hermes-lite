@@ -1,6 +1,6 @@
 """Tests for parent→subparser flag propagation.
 
-When flags like --yolo, -w, -s exist on both the parent parser and the 'chat'
+When flags like --yolo and -w exist on both the parent parser and the 'chat'
 subparser, placing the flag BEFORE the subcommand (e.g. 'hermes --yolo chat')
 must not silently drop the flag value.
 
@@ -32,7 +32,6 @@ def _build_parser():
         const=True, default=None, metavar="SESSION_NAME",
     )
     parser.add_argument("--worktree", "-w", action="store_true", default=False)
-    parser.add_argument("--skills", "-s", action="append", default=None)
     parser.add_argument("--yolo", action="store_true", default=False)
     parser.add_argument("--pass-session-id", action="store_true", default=False)
 
@@ -42,8 +41,6 @@ def _build_parser():
     chat.add_argument("--yolo", action="store_true",
                       default=argparse.SUPPRESS)
     chat.add_argument("--worktree", "-w", action="store_true",
-                      default=argparse.SUPPRESS)
-    chat.add_argument("--skills", "-s", action="append",
                       default=argparse.SUPPRESS)
     chat.add_argument("--pass-session-id", action="store_true",
                       default=argparse.SUPPRESS)
@@ -147,7 +144,7 @@ class TestYoloEnvVar:
 class TestAcceptHooksOnAgentSubparsers:
     """Verify --accept-hooks is accepted at every agent-subcommand
     position (before the subcommand, between group/subcommand, and
-    after the leaf subcommand) for gateway/cron/mcp/acp.  Regression
+    after the leaf subcommand) for gateway/cron/mcp.  Regression
     against prior behaviour where the flag only worked on the root
     parser and `chat`, so `hermes gateway run --accept-hooks` failed
     with `unrecognized arguments`."""
@@ -163,7 +160,6 @@ class TestAcceptHooksOnAgentSubparsers:
         ["--accept-hooks", "mcp", "serve", "--help"],
         ["mcp", "--accept-hooks", "serve", "--help"],
         ["mcp", "serve", "--accept-hooks", "--help"],
-        ["acp", "--accept-hooks", "--help"],
     ])
     def test_accepted_at_every_position(self, argv):
         """Invoking `hermes <argv>` must exit 0 (help) rather than

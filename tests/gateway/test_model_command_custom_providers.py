@@ -1,4 +1,4 @@
-"""Regression tests for gateway /model support of config.yaml custom_providers."""
+"""Gateway /model support for canonical compatible providers."""
 
 import yaml
 import pytest
@@ -37,14 +37,13 @@ async def test_handle_model_command_lists_saved_custom_provider(tmp_path, monkey
                     "provider": "openai-codex",
                     "base_url": "https://chatgpt.com/backend-api/codex",
                 },
-                "providers": {},
-                "custom_providers": [
-                    {
+                "providers": {
+                    "local-rotator": {
                         "name": "Local (127.0.0.1:4141)",
                         "base_url": "http://127.0.0.1:4141/v1",
                         "model": "rotator-openrouter-coding",
                     }
-                ],
+                },
             }
         ),
         encoding="utf-8",
@@ -53,11 +52,9 @@ async def test_handle_model_command_lists_saved_custom_provider(tmp_path, monkey
     import gateway.run as gateway_run
 
     monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
-
     result = await _make_runner()._handle_model_command(_make_event())
 
     assert result is not None
     assert "Local (127.0.0.1:4141)" in result
-    assert "custom:local-(127.0.0.1:4141)" in result
+    assert "--provider local-rotator" in result
     assert "rotator-openrouter-coding" in result

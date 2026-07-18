@@ -3,7 +3,7 @@
 These cover the bug where `/model ...` stored a session override, but fresh
 agent constructions still resolved model/provider from global config/runtime.
 That let helper agents (and cache-miss main agents) route GPT-5.4 to the wrong
-provider, e.g. Nous instead of OpenAI Codex.
+provider, e.g. a custom endpoint instead of OpenAI Codex.
 """
 
 import asyncio
@@ -47,8 +47,7 @@ def _make_runner():
     runner._reasoning_config = None
     runner._show_reasoning = False
     runner._provider_routing = {}
-    runner._fallback_model = None
-    runner._service_tier = None
+    runner._fallback_providers = None
     runner._running_agents = {}
     runner._running_agents_ts = {}
     runner._background_tasks = set()
@@ -164,11 +163,11 @@ async def test_background_task_prefers_session_override_over_global_runtime(monk
     assert _CapturingAgent.last_init["api_key"] == "***"
     assert _CapturingAgent.last_init["reasoning_config"] == {"enabled": True, "effort": "high"}
 
-def test_gateway_auth_fallback_uses_fallback_model_from_config(tmp_path, monkeypatch):
+def test_gateway_auth_fallback_uses_fallback_provider_model(tmp_path, monkeypatch):
     """Regression: fallback provider must not inherit the primary model.
 
-    If primary openai-codex auth fails and fallback_providers selects
-    OpenRouter/minimax, the gateway must instantiate AIAgent with the fallback
+    If primary openai-codex auth fails and fallback_providers selects a custom
+    endpoint, the gateway must instantiate AIAgent with the fallback
     model, not the primary config model (e.g. gpt-5.5). Otherwise OpenRouter
     receives an unintended GPT request.
     """
@@ -179,8 +178,9 @@ model:
   default: gpt-5.5
   provider: openai-codex
 fallback_providers:
-  - provider: openrouter
-    model: minimax/minimax-m2.7
+  - provider: custom
+    model: local-backup
+    base_url: http://localhost:11434/v1
 """.lstrip(),
         encoding="utf-8",
     )
@@ -190,15 +190,14 @@ fallback_providers:
         if requested in {None, "", "openai-codex"}:
             from hermes_cli.auth import AuthError
             raise AuthError("No Codex credentials stored. Run `hermes auth` to authenticate.")
-        assert requested == "openrouter"
+        assert requested == "custom"
         return {
-            "api_key": "sk-openrouter",
-            "base_url": "https://openrouter.ai/api/v1",
-            "provider": "openrouter",
+            "api_key": "local-key",
+            "base_url": explicit_base_url,
+            "provider": "custom",
             "api_mode": "chat_completions",
             "command": None,
             "args": [],
-            "credential_pool": None,
         }
 
     import hermes_cli.runtime_provider as runtime_provider
@@ -210,13 +209,17 @@ fallback_providers:
         session_key="agent:main:telegram:group:-1003715515980:63",
         user_config={
             "model": {"default": "gpt-5.5", "provider": "openai-codex"},
-            "fallback_providers": [{"provider": "openrouter", "model": "minimax/minimax-m2.7"}],
+            "fallback_providers": [{
+                "provider": "custom",
+                "model": "local-backup",
+                "base_url": "http://localhost:11434/v1",
+            }],
         },
     )
 
-    assert model == "minimax/minimax-m2.7"
-    assert runtime_kwargs["provider"] == "openrouter"
-    assert runtime_kwargs["api_key"] == "sk-openrouter"
+    assert model == "local-backup"
+    assert runtime_kwargs["provider"] == "custom"
+    assert runtime_kwargs["api_key"] == "local-key"
 
 
 def test_gateway_auth_fallback_resolves_key_env_for_custom_provider(tmp_path, monkeypatch):
@@ -246,7 +249,6 @@ fallback_providers:
             "api_mode": "chat_completions",
             "command": None,
             "args": [],
-            "credential_pool": None,
         }
 
     import hermes_cli.runtime_provider as runtime_provider
@@ -260,4 +262,3 @@ fallback_providers:
     assert runtime_kwargs["api_key"] == "env-secret"
     assert runtime_kwargs["base_url"] == "https://fallback.example/v1"
     assert runtime_kwargs["model"] == "fallback-model"
-

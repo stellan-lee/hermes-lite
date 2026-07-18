@@ -16,7 +16,7 @@ Architecture (two transports):
   **Remote backends (file-based RPC):**
   1. Parent generates `hermes_tools.py` with file-based RPC stubs
   2. Parent ships both files to the remote environment
-  3. Script runs inside the terminal backend (Docker/SSH/Modal/Daytona/etc.)
+  3. Script runs inside the terminal backend (Docker or SSH)
   4. Tool calls are written as request files; a polling thread on the parent
      reads them via env.execute(), dispatches, and writes response files
   5. The script polls for response files and continues
@@ -24,7 +24,7 @@ Architecture (two transports):
 In both cases, only the script's stdout is returned to the LLM; intermediate
 tool results never enter the context window.
 
-Platform: Linux / macOS only (Unix domain sockets for local). Disabled on Windows.
+Platform: Linux / macOS only.
 Remote execution additionally requires Python 3 in the terminal backend.
 """
 
@@ -33,7 +33,6 @@ import functools
 import json
 import logging
 import os
-import platform
 import shlex
 import socket
 import subprocess
@@ -43,15 +42,10 @@ import threading
 import time
 import uuid
 
-_IS_WINDOWS = platform.system() == "Windows"
 from typing import Any, Dict, List, Optional
 
 from tools.thread_context import propagate_context_to_thread
 
-# Availability gate.  On Windows we fall back to loopback TCP for the
-# sandbox RPC transport (AF_UNIX is unreliable on Windows Python) — see
-# ``_use_tcp_rpc`` in ``_execute_local`` below.  That makes execute_code
-# available on every platform Hermes itself runs on.
 logger = logging.getLogger(__name__)
 
 SANDBOX_AVAILABLE = True
@@ -76,8 +70,7 @@ MAX_STDERR_BYTES = 10_000    # 10 KB
 
 # Environment variable scrubbing rules (shared between the local + remote
 # backends).  Secret-substring block is applied first; anything left must
-# match a safe prefix, the operational HERMES_ allowlist, or (on Windows) an
-# OS-essential name.
+# match a safe prefix or the operational HERMES_ allowlist.
 #
 # NB: the broad "HERMES_" prefix was deliberately removed (#27303) — it leaked
 # HERMES_*-named config that lacks a secret substring (e.g. HERMES_BASE_URL,
@@ -101,39 +94,7 @@ _HERMES_CHILD_ALLOWED = frozenset({
     "HERMES_ENV",
 })
 
-# Windows-only: a handful of variables are required by the OS/CRT itself.
-# Without them, even stdlib calls like ``socket.socket()`` fail with
-# WinError 10106 (Winsock can't locate mswsock.dll) and ``subprocess``
-# can't resolve cmd.exe.  These are well-known OS paths, not secrets, so
-# we allow them through by exact name.  The _SECRET_SUBSTRINGS block
-# still runs as a safety net (none of these names match those substrings).
-_WINDOWS_ESSENTIAL_ENV_VARS = frozenset({
-    "SYSTEMROOT",       # %SYSTEMROOT%\System32 — Winsock needs this
-    "SYSTEMDRIVE",      # C: (or wherever Windows lives)
-    "WINDIR",           # usually same as SYSTEMROOT
-    "COMSPEC",          # cmd.exe path — subprocess shell=True needs it
-    "PATHEXT",          # .COM;.EXE;.BAT;... — shell lookup
-    "OS",               # "Windows_NT" — some tools gate on this
-    "PROCESSOR_ARCHITECTURE",
-    "NUMBER_OF_PROCESSORS",
-    "PUBLIC",           # C:\Users\Public
-    "ALLUSERSPROFILE",  # C:\ProgramData — some stdlib paths use it
-    "PROGRAMDATA",      # C:\ProgramData
-    "PROGRAMFILES",
-    "PROGRAMFILES(X86)",
-    "PROGRAMW6432",
-    "APPDATA",          # %USERPROFILE%\AppData\Roaming — Python uses it
-    "LOCALAPPDATA",     # %USERPROFILE%\AppData\Local
-    "USERPROFILE",      # C:\Users\<name> — Python's expanduser uses it
-    "USERDOMAIN",
-    "USERNAME",
-    "HOMEDRIVE",        # C:
-    "HOMEPATH",         # \Users\<name>
-    "COMPUTERNAME",
-})
-
-
-def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
+def _scrub_child_env(source_env, is_passthrough=None):
     """Produce the scrubbed child-process env for execute_code.
 
     Rules (order matters):
@@ -141,9 +102,6 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
       2. Secret-substring names (KEY/TOKEN/DSN/WEBHOOK/etc.) are blocked.
       3. Names matching a safe prefix pass.
       4. Operational HERMES_* vars (_HERMES_CHILD_ALLOWED) pass by exact name.
-      5. On Windows, a small OS-essential allowlist passes by exact name
-         — without these the child can't even create a socket or spawn a
-         subprocess.
 
     Extracted into a helper so tests can exercise the logic without
     spawning a subprocess.
@@ -154,8 +112,6 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
         except Exception:
             _ep = lambda _: False  # noqa: E731
         is_passthrough = _ep
-    if is_windows is None:
-        is_windows = _IS_WINDOWS
 
     scrubbed = {}
     # Non-secret HERMES_* vars dropped by the tightened allowlist (#27303). The
@@ -176,9 +132,6 @@ def _scrub_child_env(source_env, is_passthrough=None, is_windows=None):
             scrubbed[k] = v
             continue
         if k in _HERMES_CHILD_ALLOWED:
-            scrubbed[k] = v
-            continue
-        if is_windows and k.upper() in _WINDOWS_ESSENTIAL_ENV_VARS:
             scrubbed[k] = v
             continue
         if k.startswith("HERMES_"):
@@ -346,27 +299,12 @@ _call_lock = threading.Lock()
 ''' + _COMMON_HELPERS + '''\
 
 def _connect():
-    """Connect to the parent's RPC server via the transport it picked.
-
-    HERMES_RPC_SOCKET can be either:
-      - a filesystem path (POSIX Unix domain socket — the default on
-        Linux and macOS)
-      - a string of the form ``tcp://127.0.0.1:<port>`` (Windows, where
-        AF_UNIX is unreliable — the parent falls back to loopback TCP)
-    """
+    """Connect to the parent's Unix-domain RPC socket."""
     global _sock
     if _sock is None:
         endpoint = os.environ["HERMES_RPC_SOCKET"]
-        if endpoint.startswith("tcp://"):
-            # tcp://host:port  (host is always 127.0.0.1 in practice — we
-            # only bind loopback server-side)
-            _host_port = endpoint[len("tcp://"):]
-            _host, _, _port = _host_port.rpartition(":")
-            _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            _sock.connect((_host or "127.0.0.1", int(_port)))
-        else:
-            _sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            _sock.connect(endpoint)
+        _sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        _sock.connect(endpoint)
         _sock.settimeout(300)
     return _sock
 
@@ -420,8 +358,7 @@ def _call(tool_name, args):
     res_file = os.path.join(_RPC_DIR, f"res_{seq_str}")
 
     # Write request atomically (write to .tmp, then rename).
-    # encoding="utf-8" is critical: on Windows-hosted remote backends
-    # (or any non-UTF-8 locale) the default open() mode would mangle
+    # encoding="utf-8" avoids non-UTF-8 locales mangling
     # non-ASCII chars in tool args when encoding them as JSON.
     tmp = req_file + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -629,19 +566,13 @@ def _get_or_create_env(task_id: str):
 
         if env_type == "docker":
             image = overrides.get("docker_image") or config["docker_image"]
-        elif env_type == "singularity":
-            image = overrides.get("singularity_image") or config["singularity_image"]
-        elif env_type == "modal":
-            image = overrides.get("modal_image") or config["modal_image"]
-        elif env_type == "daytona":
-            image = overrides.get("daytona_image") or config["daytona_image"]
         else:
             image = ""
 
         cwd = overrides.get("cwd") or config["cwd"]
 
         container_config = None
-        if env_type in {"docker", "singularity", "modal", "daytona"}:
+        if env_type == "docker":
             container_config = {
                 "container_cpu": config.get("container_cpu", 1),
                 "container_memory": config.get("container_memory", 5120),
@@ -694,9 +625,9 @@ def _get_or_create_env(task_id: str):
 def _ship_file_to_remote(env, remote_path: str, content: str) -> None:
     """Write *content* to *remote_path* on the remote environment.
 
-    Uses ``echo … | base64 -d`` rather than stdin piping because some
-    backends (Modal) don't reliably deliver stdin_data to chained
-    commands.  Base64 output is shell-safe ([A-Za-z0-9+/=]) so single
+    Uses ``echo … | base64 -d`` rather than stdin piping so chained commands
+    behave consistently across retained remote backends. Base64 output is
+    shell-safe ([A-Za-z0-9+/=]) so single
     quotes are fine.
     """
     encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
@@ -843,8 +774,8 @@ def _rpc_poll_loop(
                     })
 
                 # Write response atomically (tmp + rename).
-                # Use echo piping (not stdin_data) because Modal doesn't
-                # reliably deliver stdin to chained commands.
+                # Use echo piping so chained commands behave consistently
+                # across retained remote backends.
                 encoded_result = base64.b64encode(
                     tool_result.encode("utf-8")
                 ).decode("ascii")
@@ -1137,21 +1068,9 @@ def execute_code(
     # Unix domain socket paths past the 104-byte macOS AF_UNIX limit.
     # On Linux, tempfile.gettempdir() already returns /tmp.
     #
-    # Windows: Python 3.9+ added partial AF_UNIX support but the file-backed
-    # variant is flaky across Windows builds (requires Windows 10 1803+,
-    # still fails under some configurations, and the socket file can't live
-    # on the same temp drive as the script).  Fall back to loopback TCP —
-    # same ephemeral port, same 1-connection listen queue, same serialized
-    # request/response framing.  The generated client reads the transport
-    # selector from HERMES_RPC_SOCKET (path vs. ``tcp://host:port``).
     _sock_tmpdir = "/tmp" if sys.platform == "darwin" else tempfile.gettempdir()
-    _use_tcp_rpc = _IS_WINDOWS
-    if _use_tcp_rpc:
-        sock_path = None  # not used on Windows; TCP endpoint stored below
-        rpc_endpoint = None  # set after bind()
-    else:
-        sock_path = os.path.join(_sock_tmpdir, f"hermes_rpc_{uuid.uuid4().hex}.sock")
-        rpc_endpoint = sock_path
+    sock_path = os.path.join(_sock_tmpdir, f"hermes_rpc_{uuid.uuid4().hex}.sock")
+    rpc_endpoint = sock_path
 
     tool_call_log: list = []
     tool_call_counter = [0]  # mutable so the RPC thread can increment
@@ -1159,14 +1078,7 @@ def execute_code(
     server_sock = None
 
     try:
-        # Write the auto-generated hermes_tools module.
-        # encoding="utf-8" is required on Windows — the stub and user code
-        # both contain non-ASCII characters (em-dashes in docstrings, plus
-        # whatever the user script carries).  Python's default open() uses
-        # the system locale on Windows (cp1252 typically), which corrupts
-        # those bytes; the child then fails to import with a SyntaxError
-        # ("'utf-8' codec can't decode byte 0x97 in position ...") because
-        # Python source files are decoded as UTF-8 by default (PEP 3120).
+        # Write the auto-generated hermes_tools module as UTF-8.
         # sandbox_tools is already the correct set (intersection with session
         # tools, or SANDBOX_ALLOWED_TOOLS as fallback — see lines above).
         tools_src = generate_hermes_tools_module(list(sandbox_tools))
@@ -1178,23 +1090,9 @@ def execute_code(
             f.write(code)
 
         # --- Start RPC server ---
-        # Two transports:
-        #   POSIX: AF_UNIX stream socket on sock_path, chmod 0600 for
-        #   owner-only access.  Filesystem permissions gate the socket.
-        #   Windows: AF_INET stream socket on 127.0.0.1 with an ephemeral
-        #   port.  No filesystem permission story, but loopback-only bind
-        #   means only the current user's processes (not remote) can
-        #   connect.  HERMES_RPC_SOCKET is set to ``tcp://127.0.0.1:<port>``
-        #   which the generated client parses to pick AF_INET.
-        if _use_tcp_rpc:
-            server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_sock.bind(("127.0.0.1", 0))  # ephemeral port
-            _host, _port = server_sock.getsockname()[:2]
-            rpc_endpoint = f"tcp://{_host}:{_port}"
-        else:
-            server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            server_sock.bind(sock_path)
-            os.chmod(sock_path, 0o600)
+        server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server_sock.bind(sock_path)
+        os.chmod(sock_path, 0o600)
         server_sock.listen(1)
 
         # Wrapped so the thread inherits the turn's approval context + callbacks
@@ -1216,21 +1114,11 @@ def execute_code(
         # generated scripts. The child accesses tools via RPC, not direct API.
         # Exception: env vars declared by loaded skills (via env_passthrough
         # registry) or explicitly allowed by the user in config.yaml
-        # (terminal.env_passthrough) are passed through.  On Windows, a small
-        # OS-essential allowlist (SYSTEMROOT, WINDIR, COMSPEC, ...) is also
-        # passed through — without those, the child can't create a socket
-        # or spawn a subprocess.  See ``_scrub_child_env`` for the rules.
+        # (terminal.env_passthrough) are passed through.
         child_env = _scrub_child_env(os.environ)
         child_env["HERMES_RPC_SOCKET"] = rpc_endpoint
         child_env["PYTHONDONTWRITEBYTECODE"] = "1"
         # Force UTF-8 for the child's stdio and default file encoding.
-        #
-        # Without this, on Windows sys.stdout is bound to the console code
-        # page (cp1252 on US-locale installs), and any script that does
-        # ``print("café")`` or ``print("→")`` crashes with:
-        #
-        #   UnicodeEncodeError: 'charmap' codec can't encode character
-        #   '\u2192' in position N: character maps to <undefined>
         #
         # PYTHONIOENCODING fixes sys.stdin/stdout/stderr.
         # PYTHONUTF8=1 enables "UTF-8 mode" (PEP 540) which additionally
@@ -1285,8 +1173,7 @@ def execute_code(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
-            preexec_fn=None if _IS_WINDOWS else os.setsid,
-            creationflags=subprocess.CREATE_NO_WINDOW if _IS_WINDOWS else 0,
+            preexec_fn=os.setsid,
         )
 
         # --- Poll loop: watch for exit, timeout, and interrupt ---
@@ -1617,7 +1504,6 @@ def _is_usable_python(python_path: str) -> bool:
              "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)"],
             timeout=5,
             capture_output=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if _IS_WINDOWS else 0,
         )
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
@@ -1638,12 +1524,8 @@ def _resolve_child_python(mode: str) -> str:
     if mode != "project":
         return sys.executable
 
-    if _IS_WINDOWS:
-        exe_names = ("python.exe", "python3.exe")
-        subdirs = ("Scripts",)
-    else:
-        exe_names = ("python", "python3")
-        subdirs = ("bin",)
+    exe_names = ("python", "python3")
+    subdirs = ("bin",)
 
     for var in ("VIRTUAL_ENV", "CONDA_PREFIX"):
         root = os.environ.get(var, "").strip()

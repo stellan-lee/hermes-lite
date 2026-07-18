@@ -15,24 +15,20 @@ from hermes_cli import runtime_provider as rp
 # =============================================================================
 
 def test_list_authenticated_providers_includes_full_models_list_from_user_providers(monkeypatch):
-    """User-defined providers should expose both default_model and full models list.
-    
-    Regression test: previously only default_model was shown in /model picker.
-    """
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
+    """User-defined providers expose the selected model and model map."""
     monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
     
     user_providers = {
         "local-ollama": {
             "name": "Local Ollama",
-            "api": "http://localhost:11434/v1",
-            "default_model": "minimax-m2.7:cloud",
-            "models": [
-                "minimax-m2.7:cloud",
-                "kimi-k2.5:cloud",
-                "glm-5.1:cloud",
-                "qwen3.5:cloud",
-            ],
+            "base_url": "http://localhost:11434/v1",
+            "model": "minimax-m2.7:cloud",
+            "models": {
+                "minimax-m2.7:cloud": {},
+                "kimi-k2.5:cloud": {},
+                "glm-5.1:cloud": {},
+                "qwen3.5:cloud": {},
+            },
         }
     }
     
@@ -58,15 +54,14 @@ def test_list_authenticated_providers_includes_full_models_list_from_user_provid
 
 
 def test_list_authenticated_providers_dedupes_models_when_default_in_list(monkeypatch):
-    """When default_model is also in models list, don't duplicate."""
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
+    """When model is also in the models map, don't duplicate it."""
     monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
     
     user_providers = {
         "my-provider": {
-            "api": "http://example.com/v1",
-            "default_model": "model-a",  # Included in models list below
-            "models": ["model-a", "model-b", "model-c"],
+            "base_url": "http://example.com/v1",
+            "model": "model-a",
+            "models": {"model-a": {}, "model-b": {}, "model-c": {}},
         }
     }
     
@@ -94,14 +89,13 @@ def test_list_authenticated_providers_enumerates_dict_format_models(monkeypatch)
     list-format ``models:`` and silently dropped dict-format entries,
     even though Hermes's own writer and downstream readers use dict format.
     """
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
     monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
 
     user_providers = {
         "local-ollama": {
             "name": "Local Ollama",
-            "api": "http://localhost:11434/v1",
-            "default_model": "minimax-m2.7:cloud",
+            "base_url": "http://localhost:11434/v1",
+            "model": "minimax-m2.7:cloud",
             "models": {
                 "minimax-m2.7:cloud": {"context_length": 196608},
                 "kimi-k2.5:cloud": {"context_length": 200000},
@@ -138,7 +132,6 @@ def test_list_authenticated_providers_uses_live_models_for_user_provider(monkeyp
     showing only the configured subset in the /model picker, even though their
     /v1/models endpoint exposed newly added models.
     """
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
     monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
     monkeypatch.setenv("CRS_TEST_KEY", "sk-test")
 
@@ -180,15 +173,14 @@ def test_list_authenticated_providers_uses_live_models_for_user_provider(monkeyp
     assert user_prov["total_models"] == 2
 
 
-def test_list_authenticated_providers_dict_models_without_default_model(monkeypatch):
-    """Dict-format ``models:`` without a ``default_model`` must still expose
+def test_list_authenticated_providers_dict_models_without_selected_model(monkeypatch):
+    """Dict-format ``models:`` without a selected model must still expose
     every dict key, not collapse to an empty list."""
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
     monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
 
     user_providers = {
         "multimodel": {
-            "api": "http://example.com/v1",
+            "base_url": "http://example.com/v1",
             "models": {
                 "alpha": {"context_length": 8192},
                 "beta": {"context_length": 16384},
@@ -213,15 +205,13 @@ def test_list_authenticated_providers_dict_models_without_default_model(monkeypa
 
 
 def test_list_authenticated_providers_dict_models_dedupe_with_default(monkeypatch):
-    """When ``default_model`` is also a key in the ``models:`` dict, it must
-    appear exactly once (list already had this for list-format models)."""
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
+    """When ``model`` is also a key in ``models:``, it appears once."""
     monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
 
     user_providers = {
         "my-provider": {
-            "api": "http://example.com/v1",
-            "default_model": "model-a",
+            "base_url": "http://example.com/v1",
+            "model": "model-a",
             "models": {
                 "model-a": {"context_length": 8192},
                 "model-b": {"context_length": 16384},
@@ -246,128 +236,16 @@ def test_list_authenticated_providers_dict_models_dedupe_with_default(monkeypatc
     assert user_prov["models"].count("model-a") == 1
 
 
-def test_openai_native_curated_catalog_is_non_empty():
-    """Regression: built-in openai must have a static catalog for picker totals."""
-    from hermes_cli.models import _PROVIDER_MODELS
-
-    assert _PROVIDER_MODELS.get("openai")
-    assert len(_PROVIDER_MODELS["openai"]) >= 4
-
-
-def test_list_authenticated_providers_openai_alias_not_emitted_as_phantom(monkeypatch):
-    """Bare 'openai' is an alias to the OpenRouter aggregator, NOT a directly-
-    routable provider. It must NOT be emitted as its own picker row: selecting
-    such a row resolves via resolve_provider_full() to OpenRouter, silently
-    switching the user onto an endpoint they may have no key for (HTTP 401).
-    Real OpenAI access comes via 'openai-api' (direct) or a providers.openai
-    config entry — both of which carry api.openai.com. See model-picker bug."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setattr(
-        "agent.models_dev.fetch_models_dev",
-        lambda: {"openai": {"env": ["OPENAI_API_KEY"]}},
-    )
-    monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
-
-    providers = list_authenticated_providers(
-        current_provider="",
-        current_base_url="",
-        user_providers={},
-        custom_providers=[],
-        max_models=50,
-    )
-    row = next((p for p in providers if p.get("slug") == "openai"), None)
-    assert row is None, (
-        "bare 'openai' alias must not appear as a standalone picker row — "
-        "it routes through OpenRouter and traps users without an OR key"
-    )
-
-
-def test_resolve_provider_full_user_config_openai_beats_alias():
-    """A providers.openai config entry must win over the built-in
-    'openai' → 'openrouter' alias. Regression for the model-picker bug
-    where users with provider=openai-api + a providers.openai config block
-    had their OpenAI selection silently routed to OpenRouter (HTTP 401)."""
-    from hermes_cli.providers import resolve_provider_full
-
-    user_providers = {
-        "openai": {
-            "name": "OpenAI-API",
-            "api": "https://api.openai.com/v1",
-            "transport": "codex_responses",
-            "models": {"gpt-5.4-nano": {}},
-        }
-    }
-    pdef = resolve_provider_full("openai", user_providers, [])
-    assert pdef is not None
-    # Must resolve to the user's direct endpoint, NOT the OpenRouter aggregator.
-    assert pdef.id == "openai"
-    assert pdef.source == "user-config"
-    assert pdef.base_url == "https://api.openai.com/v1"
-    assert "openrouter" not in pdef.base_url
-
-
-def test_switch_model_user_config_openai_does_not_hop_to_openrouter(monkeypatch):
-    """End-to-end: selecting a providers.openai config row in the picker must
-    resolve to api.openai.com, never silently switch to OpenRouter."""
-    monkeypatch.setenv("CUSTOM_OPENAI_API_KEY", "sk-resolved")
-    user_providers = {
-        "openai": {
-            "name": "OpenAI-API",
-            "api": "https://api.openai.com/v1",
-            "api_key": "${CUSTOM_OPENAI_API_KEY}",
-            "transport": "codex_responses",
-            "models": {"gpt-5.4-nano": {}, "gpt-4o-mini": {}},
-        }
-    }
-    result = switch_model(
-        raw_input="gpt-4o-mini",
-        current_provider="openai-api",
-        current_model="gpt-5.4-nano",
-        current_base_url="https://api.openai.com/v1",
-        current_api_key="sk-test",
-        explicit_provider="openai",
-        user_providers=user_providers,
-        custom_providers=[],
-    )
-    assert result.success, result.error_message
-    assert result.target_provider != "openrouter"
-    assert "openrouter" not in (result.base_url or "")
-    assert result.base_url == "https://api.openai.com/v1"
-
-
-def test_list_authenticated_providers_user_openai_official_url_fallback(monkeypatch):
-    """User providers: api.openai.com with no models list uses native curated fallback."""
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
-    monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
-
-    user_providers = {
-        "openai-direct": {
-            "name": "OpenAI Direct",
-            "api": "https://api.openai.com/v1",
-        }
-    }
-    providers = list_authenticated_providers(
-        current_provider="",
-        current_base_url="",
-        user_providers=user_providers,
-        custom_providers=[],
-        max_models=50,
-    )
-    row = next((p for p in providers if p.get("slug") == "openai-direct"), None)
-    assert row is not None
-    assert row["total_models"] > 0
-
 
 def test_list_authenticated_providers_fallback_to_default_only(monkeypatch):
-    """When no models array is provided, should fall back to default_model."""
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
+    """When no models map is provided, fall back to the selected model."""
     monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
     
     user_providers = {
         "simple-provider": {
             "name": "Simple Provider",
-            "api": "http://example.com/v1",
-            "default_model": "single-model",
+            "base_url": "http://example.com/v1",
+            "model": "single-model",
             # No 'models' key
         }
     }
@@ -390,14 +268,8 @@ def test_list_authenticated_providers_fallback_to_default_only(monkeypatch):
 
 def test_list_authenticated_providers_accepts_base_url_and_singular_model(monkeypatch):
     """providers: dict entries written in canonical Hermes shape
-    (``base_url`` + singular ``model``) should resolve the same as the
-    legacy ``api`` + ``default_model`` shape.
-
-    Regression: section 3 previously only read ``api``/``url`` and
-    ``default_model``, so new-shape entries written by Hermes's own writer
-    surfaced with empty ``api_url`` and no default.
+    (``base_url`` + singular ``model``) should resolve directly.
     """
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
     monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
 
     user_providers = {
@@ -426,241 +298,14 @@ def test_list_authenticated_providers_accepts_base_url_and_singular_model(monkey
     assert custom["total_models"] == 3
 
 
-def test_list_authenticated_providers_dedupes_when_user_and_custom_overlap(monkeypatch):
-    """When the same slug appears in both ``providers:`` dict and
-    ``custom_providers:`` list, emit exactly one row (providers: dict wins
-    since it is processed first).
-
-    Regression: section 3 previously had no ``seen_slugs`` check, so
-    overlapping entries produced two picker rows for the same provider.
-    """
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
-    monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
-
-    providers = list_authenticated_providers(
-        current_provider="custom",
-        user_providers={
-            "custom": {
-                "base_url": "http://example.com/v1",
-                "model": "gpt-5.4",
-                "models": {
-                    "gpt-5.4": {},
-                    "grok-4.20-beta": {},
-                },
-            }
-        },
-        custom_providers=[
-            {
-                "name": "custom",
-                "base_url": "http://example.com/v1",
-                "model": "legacy-only-model",
-            }
-        ],
-        max_models=50,
-    )
-
-    matches = [p for p in providers if p["slug"] == "custom"]
-    assert len(matches) == 1
-    # providers: dict wins — legacy-only-model is suppressed.
-    assert matches[0]["models"] == ["gpt-5.4", "grok-4.20-beta"]
-
-
-def test_list_authenticated_providers_no_duplicate_labels_across_schemas(monkeypatch):
-    """Regression: same endpoint in both ``providers:`` dict AND ``custom_providers:``
-    list (e.g. via ``get_compatible_custom_providers()``) must not emit two picker
-    rows with identical display names.
-
-    Before the fix, section 3 emitted bare-slug rows ("openrouter") and section 4
-    emitted ``custom:openrouter`` rows for the same endpoint — both labelled
-    identically, bypassing ``seen_slugs`` dedup because the slug shapes differ.
-    """
-    monkeypatch.setattr("agent.models_dev.fetch_models_dev", lambda: {})
-    monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
-
-    shared_entries = [
-        ("endpoint-a", "http://a.local/v1"),
-        ("endpoint-b", "http://b.local/v1"),
-        ("endpoint-c", "http://c.local/v1"),
-    ]
-
-    user_providers = {
-        name: {"name": name, "base_url": url, "model": "m1"}
-        for name, url in shared_entries
-    }
-    custom_providers = [
-        {"name": name, "base_url": url, "model": "m1"}
-        for name, url in shared_entries
-    ]
-
-    providers = list_authenticated_providers(
-        current_provider="none",
-        user_providers=user_providers,
-        custom_providers=custom_providers,
-        max_models=50,
-    )
-
-    user_rows = [p for p in providers if p.get("source") == "user-config"]
-    # Expect one row per shared entry — not two.
-    assert len(user_rows) == len(shared_entries), (
-        f"Expected {len(shared_entries)} rows, got {len(user_rows)}: "
-        f"{[(p['slug'], p['name']) for p in user_rows]}"
-    )
-
-    # And zero duplicate display labels.
-    labels = [p["name"].lower() for p in user_rows]
-    assert len(labels) == len(set(labels)), (
-        f"Duplicate labels across picker rows: {labels}"
-    )
-
-
-def test_list_authenticated_providers_hides_custom_shadowing_builtin_endpoint(monkeypatch):
-    """#16970: a custom_providers entry whose ``base_url`` matches a built-in
-    provider's endpoint should be hidden. The built-in row already represents
-    that endpoint with its canonical slug, curated model list, and auth wiring.
-
-    Repro: user sets ``DASHSCOPE_API_KEY`` (triggers the built-in ``alibaba``
-    row pointing at the static ``inference_base_url``) AND defines a
-    ``my-alibaba`` custom provider pointing at the same URL. Before the fix,
-    the picker showed both rows for one endpoint.
-    """
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
-    monkeypatch.setattr(
-        "agent.models_dev.fetch_models_dev",
-        lambda: {
-            "alibaba": {
-                "name": "Alibaba Cloud (DashScope)",
-                "env": ["DASHSCOPE_API_KEY"],
-            }
-        },
-    )
-    monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
-
-    custom_providers = [
-        {
-            "name": "my-alibaba",
-            # Matches PROVIDER_REGISTRY['alibaba'].inference_base_url exactly.
-            "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-            "api_key": "sk-sp-test",
-            "model": "qwen3.6-plus",
-            "models": {"qwen3.6-plus": {"context_length": 500000}},
-        }
-    ]
-
-    providers = list_authenticated_providers(
-        current_provider="my-alibaba",
-        user_providers={},
-        custom_providers=custom_providers,
-        max_models=50,
-    )
-
-    slugs = [p["slug"] for p in providers]
-    # Built-in alibaba row should be present.
-    assert "alibaba" in slugs, (
-        f"Expected built-in alibaba row, got slugs: {slugs}"
-    )
-    # Custom shadow row should be hidden — its base_url matches the built-in's.
-    assert not any("my-alibaba" in s for s in slugs), (
-        f"Custom my-alibaba should have been dedup'd against the built-in "
-        f"alibaba endpoint, got slugs: {slugs}"
-    )
-
-
-def test_list_authenticated_providers_keeps_custom_with_distinct_endpoint(monkeypatch):
-    """Dedup must only apply when the endpoint matches a built-in. A custom
-    provider on a genuinely distinct endpoint stays visible even if a
-    built-in is also authenticated."""
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
-    monkeypatch.setattr(
-        "agent.models_dev.fetch_models_dev",
-        lambda: {
-            "alibaba": {
-                "name": "Alibaba Cloud (DashScope)",
-                "env": ["DASHSCOPE_API_KEY"],
-            }
-        },
-    )
-    monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
-
-    custom_providers = [
-        {
-            "name": "my-private-relay",
-            "base_url": "https://relay.example.internal/v1",
-            "api_key": "sk-relay-test",
-            "model": "qwen3.6-plus",
-            "models": {"qwen3.6-plus": {}},
-        }
-    ]
-
-    providers = list_authenticated_providers(
-        current_provider="my-private-relay",
-        user_providers={},
-        custom_providers=custom_providers,
-        max_models=50,
-    )
-
-    slugs = [p["slug"] for p in providers]
-    assert any("my-private-relay" in s for s in slugs), (
-        f"Custom provider on distinct endpoint must stay visible, got: {slugs}"
-    )
-
-
-def test_list_authenticated_providers_dedup_honors_base_url_env_override(monkeypatch):
-    """The dedup must track the EFFECTIVE endpoint — if DASHSCOPE_BASE_URL
-    overrides the static inference_base_url, a custom provider pointing at
-    the overridden URL (not the static one) should still be recognized as
-    a duplicate."""
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
-    monkeypatch.setenv(
-        "DASHSCOPE_BASE_URL",
-        "https://custom-dashscope.example.com/v1",
-    )
-    monkeypatch.setattr(
-        "agent.models_dev.fetch_models_dev",
-        lambda: {
-            "alibaba": {
-                "name": "Alibaba Cloud (DashScope)",
-                "env": ["DASHSCOPE_API_KEY"],
-            }
-        },
-    )
-    monkeypatch.setattr("hermes_cli.providers.HERMES_OVERLAYS", {})
-
-    custom_providers = [
-        {
-            "name": "my-dashscope-override",
-            # Same URL as DASHSCOPE_BASE_URL env override above.
-            "base_url": "https://custom-dashscope.example.com/v1",
-            "api_key": "sk-test",
-            "model": "qwen3.6-plus",
-        }
-    ]
-
-    providers = list_authenticated_providers(
-        current_provider="alibaba",
-        user_providers={},
-        custom_providers=custom_providers,
-        max_models=50,
-    )
-
-    slugs = [p["slug"] for p in providers]
-    assert not any("my-dashscope-override" in s for s in slugs), (
-        f"Custom entry matching env-overridden built-in endpoint should be "
-        f"dedup'd, got: {slugs}"
-    )
-
-
-# =============================================================================
-# Tests for _get_named_custom_provider with providers: dict
-# =============================================================================
-
 def test_get_named_custom_provider_finds_user_providers_by_key(monkeypatch, tmp_path):
-    """Should resolve providers from providers: dict (new-style), not just custom_providers."""
+    """Should resolve a canonical provider by its dictionary key."""
     config = {
         "providers": {
             "local-localhost:11434": {
-                "api": "http://localhost:11434/v1",
+                "base_url": "http://localhost:11434/v1",
                 "name": "Local (localhost:11434)",
-                "default_model": "minimax-m2.7:cloud",
+                "model": "minimax-m2.7:cloud",
             }
         }
     }
@@ -683,9 +328,9 @@ def test_get_named_custom_provider_finds_by_display_name(monkeypatch, tmp_path):
     config = {
         "providers": {
             "my-ollama-xyz": {
-                "api": "http://ollama.example.com/v1",
+                "base_url": "http://ollama.example.com/v1",
                 "name": "My Production Ollama",
-                "default_model": "llama3",
+                "model": "llama3",
             }
         }
     }
@@ -703,35 +348,12 @@ def test_get_named_custom_provider_finds_by_display_name(monkeypatch, tmp_path):
     assert result["base_url"] == "http://ollama.example.com/v1"
 
 
-def test_get_named_custom_provider_falls_back_to_legacy_format(monkeypatch, tmp_path):
-    """Should still work with custom_providers: list format."""
-    config = {
-        "providers": {},
-        "custom_providers": [
-            {
-                "name": "Custom Endpoint",
-                "base_url": "http://custom.example.com/v1",
-            }
-        ]
-    }
-    
-    import yaml
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text(yaml.dump(config))
-    
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    
-    result = rp._get_named_custom_provider("custom-endpoint")
-    
-    assert result is not None
-
-
 def test_get_named_custom_provider_returns_none_for_unknown(monkeypatch, tmp_path):
     """Should return None for providers that don't exist."""
     config = {
         "providers": {
             "known-provider": {
-                "api": "http://known.example.com/v1",
+                "base_url": "http://known.example.com/v1",
             }
         }
     }
@@ -783,9 +405,9 @@ def test_switch_model_resolves_user_provider_credentials(monkeypatch, tmp_path):
     config = {
         "providers": {
             "local-ollama": {
-                "api": "http://localhost:11434/v1",
+                "base_url": "http://localhost:11434/v1",
                 "name": "Local Ollama",
-                "default_model": "minimax-m2.7:cloud",
+                "model": "minimax-m2.7:cloud",
             }
         }
     }
@@ -814,31 +436,20 @@ def test_switch_model_resolves_user_provider_credentials(monkeypatch, tmp_path):
 
 
 # =============================================================================
-# Regression: providers: dict ``transport`` field must be honored
+# Canonical provider ``api_mode`` must be honored
 # =============================================================================
 
 
-def test_get_named_custom_provider_reads_transport_field(monkeypatch):
-    """v12+ ``providers:`` dict stores api mode under ``transport:`` (not the
-    legacy ``api_mode:``).  ``_get_named_custom_provider`` must accept both
-    field names.
-
-    Bug: this function read only ``entry.get("api_mode")`` for v12+ entries.
-    After ``migrate_config()`` writes ``transport`` on every entry, the
-    lookup returns None and ``_resolve_named_custom_runtime`` falls back
-    through ``_detect_api_mode_for_url(base_url) or "chat_completions"``
-    — silently downgrading every codex_responses / anthropic_messages
-    provider to chat_completions.
-    """
+def test_get_named_custom_provider_reads_api_mode(monkeypatch):
     config = {
         "_config_version": 12,
         "providers": {
             "my-codex-provider": {
                 "name": "my-codex-provider",
-                "api": "http://127.0.0.1:4000/v1",
+                "base_url": "http://127.0.0.1:4000/v1",
                 "api_key": "test-key",
-                "default_model": "gpt-5",
-                "transport": "codex_responses",
+                "model": "gpt-5",
+                "api_mode": "codex_responses",
             },
         },
     }
@@ -852,32 +463,8 @@ def test_get_named_custom_provider_reads_transport_field(monkeypatch):
     assert result["model"] == "gpt-5"
 
 
-def test_get_named_custom_provider_legacy_api_mode_field_still_works(monkeypatch):
-    """Hand-edited configs that used ``api_mode:`` (legacy spelling) inside
-    the v12+ providers: dict shape must keep working — the migration writer
-    produces ``transport:`` but human-edited configs may carry the older
-    spelling forward."""
-    config = {
-        "_config_version": 12,
-        "providers": {
-            "anthropic-proxy": {
-                "name": "anthropic-proxy",
-                "api": "http://127.0.0.1:8082",
-                "api_key": "test-key",
-                "default_model": "claude-opus-4-7",
-                "api_mode": "anthropic_messages",  # legacy spelling
-            },
-        },
-    }
 
-    monkeypatch.setattr(rp, "load_config", lambda: config)
-
-    result = rp._get_named_custom_provider("anthropic-proxy")
-    assert result is not None
-    assert result["api_mode"] == "anthropic_messages"
-
-
-def test_get_named_custom_provider_transport_resolves_via_display_name(monkeypatch):
+def test_get_named_custom_provider_api_mode_resolves_via_display_name(monkeypatch):
     """When the requested name matches the entry's ``name:`` field rather
     than its dict key, the same transport-vs-api_mode logic must apply
     (second branch in ``_get_named_custom_provider``)."""
@@ -886,10 +473,10 @@ def test_get_named_custom_provider_transport_resolves_via_display_name(monkeypat
         "providers": {
             "slug-different-from-name": {
                 "name": "Codex Provider",  # display name
-                "api": "http://127.0.0.1:4000/v1",
+                "base_url": "http://127.0.0.1:4000/v1",
                 "api_key": "test-key",
-                "default_model": "gpt-5",
-                "transport": "codex_responses",
+                "model": "gpt-5",
+                "api_mode": "codex_responses",
             },
         },
     }
@@ -933,20 +520,17 @@ def _run_user_provider_override_case(
     user_providers = {
         slug: {
             "name": name,
-            "api": base_url,
+            "base_url": base_url,
             "discover_models": False,
             "models": models,
         }
     }
 
     with patch("hermes_cli.model_switch.resolve_alias", return_value=None), \
-         patch("hermes_cli.model_switch.list_provider_models", return_value=[]), \
          patch("hermes_cli.model_switch.normalize_model_for_provider", side_effect=lambda model, provider: model), \
          patch("hermes_cli.models.validate_requested_model", return_value=_REJECTED_VALIDATION), \
          patch("hermes_cli.models.detect_provider_for_model", return_value=None), \
-         patch("hermes_cli.model_switch.get_model_info", return_value=None), \
-         patch("hermes_cli.model_switch.get_model_capabilities", return_value=None), \
-         patch("hermes_cli.runtime_provider.resolve_runtime_provider", return_value={"api_key": "***", "base_url": base_url, "api_mode": "anthropic_messages"}):
+         patch("hermes_cli.runtime_provider.resolve_runtime_provider", return_value={"api_key": "***", "base_url": base_url, "api_mode": "chat_completions"}):
         return switch_model(
             raw_input=raw_input,
             current_provider=slug,
@@ -961,23 +545,15 @@ def _run_user_provider_override_case(
     ("slug", "name", "base_url", "models", "raw_input", "expected_model"),
     [
         (
-            "kimi-coding",
-            "Kimi Coding Plan",
-            "https://api.kimi.com/coding",
-            {"kimi-k2.6": {}},
-            "kimi-k2.6",
-            "kimi-k2.6",
-        ),
-        (
-            "kimi-dedicated",
-            "Kimi Dedicated",
-            "https://api.kimi.com/v1",
-            [{"name": "moonshotai/Kimi-K2.6-ACED"}],
-            "moonshotai/Kimi-K2.6-ACED",
-            "moonshotai/Kimi-K2.6-ACED",
+            "private-local",
+            "Private Local",
+            "http://127.0.0.1:4000/v1",
+            {"private-model": {}},
+            "private-model",
+            "private-model",
         ),
     ],
-    ids=["kimi-coding-plan-dict", "kimi-k2-6-aced-list"],
+    ids=["configured-private-model"],
 )
 def test_user_provider_override_accepts_listed_private_models(
     slug,
@@ -989,9 +565,7 @@ def test_user_provider_override_accepts_listed_private_models(
 ):
     """Private models listed in providers: config should override /v1/models misses.
 
-    Covers both config shapes the fix now accepts:
-    - dict models for the Kimi Coding Plan K2p6 case
-    - list-of-dicts models for the Kimi-K2.6-ACED dedicated case
+    Covers the retained dict model schema for a configured endpoint.
     """
     result = _run_user_provider_override_case(
         slug=slug,
@@ -1010,21 +584,14 @@ def test_user_provider_override_accepts_listed_private_models(
     ("slug", "name", "base_url", "models", "raw_input"),
     [
         (
-            "kimi-coding",
-            "Kimi Coding Plan",
-            "https://api.kimi.com/coding",
-            {"kimi-k2.6": {}},
-            "kimi-k2.6-mangled",
-        ),
-        (
-            "kimi-dedicated",
-            "Kimi Dedicated",
-            "https://api.kimi.com/v1",
-            [{"name": "moonshotai/Kimi-K2.6-ACED"}],
-            "moonshotai/Kimi-K2.6-ACED!!!",
+            "private-local",
+            "Private Local",
+            "http://127.0.0.1:4000/v1",
+            {"private-model": {}},
+            "private-model-mangled",
         ),
     ],
-    ids=["kimi-coding-plan-dict-mangled", "kimi-k2-6-aced-list-mangled"],
+    ids=["private-dict-mangled"],
 )
 def test_user_provider_override_rejects_mangled_private_models(
     slug,

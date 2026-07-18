@@ -35,15 +35,8 @@ class TestExplicitAllowlist:
     """Keys in the hardcoded allowlist should always go to .env."""
 
     @pytest.mark.parametrize("key", [
-        "OPENROUTER_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
         "HONCHO_API_KEY",
-        "FIRECRAWL_API_KEY",
-        "BROWSERBASE_API_KEY",
-        "FAL_KEY",
         "SUDO_PASSWORD",
-        "GITHUB_TOKEN",
         "TELEGRAM_BOT_TOKEN",
         "DISCORD_BOT_TOKEN",
         "SLACK_BOT_TOKEN",
@@ -65,11 +58,11 @@ class TestCatchAllPatterns:
     """Any key ending in _API_KEY or _TOKEN should route to .env."""
 
     @pytest.mark.parametrize("key", [
-        "DAYTONA_API_KEY",
+        "CUSTOM_SERVICE_API_KEY",
         "ELEVENLABS_API_KEY",
         "SOME_FUTURE_SERVICE_API_KEY",
         "MY_CUSTOM_TOKEN",
-        "WHATSAPP_BOT_TOKEN",
+        "CUSTOM_BOT_TOKEN",
     ])
     def test_api_key_suffix_routes_to_env(self, key, _isolated_hermes_home):
         set_config_value(key, "secret-456")

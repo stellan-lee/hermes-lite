@@ -1,7 +1,7 @@
 """Codex Responses API adapter.
 
-Pure format-conversion and normalization logic for the OpenAI Responses API
-(used by OpenAI Codex, xAI, GitHub Models, and other Responses-compatible endpoints).
+Pure format-conversion and normalization logic for OpenAI Codex and custom
+Responses-compatible endpoints.
 
 Extracted from run_agent.py to isolate Responses API-specific logic from the
 core agent loop. All functions are stateless — they operate on the data passed
@@ -25,24 +25,18 @@ logger = logging.getLogger(__name__)
 
 def _classify_responses_issuer(
     *,
-    is_xai_responses: bool = False,
-    is_github_responses: bool = False,
     is_codex_backend: bool = False,
     base_url: Optional[str] = None,
 ) -> str:
     """Stable identifier for the Responses endpoint that mints encrypted_content.
 
     ``reasoning.encrypted_content`` is sealed to the endpoint that issued it:
-    replaying a Codex-minted blob against xAI (or vice versa) deterministically
-    returns HTTP 400 ``invalid_encrypted_content``. Stamping the issuer on
+    replaying a blob against a different endpoint can return HTTP 400
+    ``invalid_encrypted_content``. Stamping the issuer on
     persisted reasoning items and filtering at replay time lets a single
     conversation switch models without poisoning history with un-decryptable
     reasoning blocks.
     """
-    if is_xai_responses:
-        return "xai_responses"
-    if is_github_responses:
-        return "github_responses"
     if is_codex_backend:
         return "codex_backend"
     if base_url:
@@ -279,22 +273,10 @@ def _normalize_responses_message_status(value: Any, *, default: str = "completed
 def _chat_messages_to_responses_input(
     messages: List[Dict[str, Any]],
     *,
-    is_xai_responses: bool = False,
     replay_encrypted_reasoning: bool = True,
     current_issuer_kind: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Convert internal chat-style messages to Responses input items.
-
-    ``is_xai_responses`` is kept for transport signature compatibility but
-    no longer suppresses encrypted reasoning replay.  Earlier (PR #26644,
-    May 2026) we believed xAI's OAuth/SuperGrok ``/v1/responses`` surface
-    rejected replayed ``encrypted_content`` reasoning items minted by
-    prior turns, and we stripped them.  That decision was wrong — xAI
-    explicitly relies on Hermes threading encrypted reasoning back across
-    turns for cross-turn coherence (the whole point of their partnership
-    integration).  We now replay encrypted reasoning on every Responses
-    transport (xAI, native Codex, custom relays) and let xAI tell us
-    explicitly if a specific surface ever rejects a payload.
 
     ``replay_encrypted_reasoning`` is the per-session kill switch.  Some
     OpenAI-compatible relays accept the request but later reject the
@@ -306,8 +288,8 @@ def _chat_messages_to_responses_input(
 
     ``current_issuer_kind`` enables a per-item cross-issuer guard. The
     Responses API's ``encrypted_content`` blob is decryptable only by the
-    endpoint that minted it — replaying a Codex-issued blob against xAI
-    (or vice versa) always yields HTTP 400 ``invalid_encrypted_content``
+    endpoint that minted it — replaying a blob against another endpoint can
+    yield HTTP 400 ``invalid_encrypted_content``
     and breaks every subsequent turn in the same session.  When this
     argument is provided and a reasoning item carries an ``_issuer_kind``
     stamp from a different endpoint, the item is dropped from the replayed
@@ -342,9 +324,7 @@ def _chat_messages_to_responses_input(
             if role == "assistant":
                 # Replay encrypted reasoning items from previous turns
                 # so the API can maintain coherent reasoning chains.
-                # This applies to every Responses transport including
-                # xAI — see _chat_messages_to_responses_input docstring
-                # for the May 2026 reversal of the earlier xAI gate.
+                # This applies to Codex and custom Responses transports.
                 codex_reasoning = (
                     msg.get("codex_reasoning_items")
                     if replay_encrypted_reasoning
@@ -832,7 +812,7 @@ def _preflight_codex_api_kwargs(
     allowed_keys = {
         "model", "instructions", "input", "tools", "store",
         "reasoning", "include", "max_output_tokens", "temperature",
-        "tool_choice", "parallel_tool_calls", "prompt_cache_key", "service_tier",
+        "tool_choice", "parallel_tool_calls", "prompt_cache_key",
         "extra_headers", "extra_body", "timeout",
     }
     normalized: Dict[str, Any] = {
@@ -851,10 +831,6 @@ def _preflight_codex_api_kwargs(
     include = api_kwargs.get("include")
     if isinstance(include, list):
         normalized["include"] = include
-    service_tier = api_kwargs.get("service_tier")
-    if isinstance(service_tier, str) and service_tier.strip():
-        normalized["service_tier"] = service_tier.strip()
-
     # Pass through max_output_tokens and temperature
     max_output_tokens = api_kwargs.get("max_output_tokens")
     if isinstance(max_output_tokens, (int, float)) and max_output_tokens > 0:
@@ -894,9 +870,8 @@ def _preflight_codex_api_kwargs(
     if extra_body is not None:
         if not isinstance(extra_body, dict):
             raise ValueError("Codex Responses request 'extra_body' must be an object.")
-        # Pass extra_body through verbatim — used by xAI Responses to
-        # carry `prompt_cache_key` as a body-level field (the documented
-        # cache-routing surface on /v1/responses). The openai SDK
+        # Pass extra_body through verbatim for custom Responses endpoints.
+        # The OpenAI SDK
         # serializes extra_body into the JSON body without per-field
         # type checks, so it survives Responses.stream() kwarg-signature
         # changes that would otherwise raise TypeError before the wire.
@@ -912,26 +887,6 @@ def _preflight_codex_api_kwargs(
         allowed_keys.add("stream")
     elif "stream" in api_kwargs:
         raise ValueError("Codex Responses stream flag is only allowed in fallback streaming requests.")
-
-    # Safety-net sanitization for xAI Responses (#28490): defense-in-depth
-    # for the same slash-enum strip that ``chat_completion_helpers`` and
-    # ``auxiliary_client`` apply at request-build time.  If a future code
-    # path forgets to sanitize before calling us, this catches the bypass
-    # so xAI doesn't 400 with ``Invalid arguments passed to the model``
-    # (HuggingFace IDs like ``Qwen/Qwen3.5-0.8B`` from MCP tool schemas).
-    #
-    # Gated on the model name pattern because native Codex (OpenAI) DOES
-    # accept slash-containing enum values — stripping them there would
-    # silently degrade tool-schema constraints.  xAI is the only
-    # Responses-API surface that rejects the shape.
-    model_name_for_provider_check = str(api_kwargs.get("model") or "").lower()
-    is_xai_model = model_name_for_provider_check.startswith(("grok-", "x-ai/grok-"))
-    if is_xai_model and normalized.get("tools"):
-        try:
-            from tools.schema_sanitizer import strip_slash_enum
-            normalized["tools"], _ = strip_slash_enum(normalized["tools"])
-        except Exception:
-            pass  # Best-effort — the caller-level sanitization should have handled it
 
     unexpected = sorted(key for key in api_kwargs if key not in allowed_keys)
     if unexpected:

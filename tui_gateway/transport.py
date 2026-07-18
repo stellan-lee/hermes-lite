@@ -1,9 +1,8 @@
 """Transport abstraction for the tui_gateway JSON-RPC server.
 
 Historically the gateway wrote every JSON frame directly to real stdout.  This
-module decouples the I/O sink from the handler logic so the same dispatcher
-can be driven over stdio (``tui_gateway.entry``) or WebSocket
-(``tui_gateway.ws``) without duplicating code.
+module decouples the I/O sink from the handler logic so the dispatcher can be
+driven over stdio while tests and embedded callers supply alternate sinks.
 
 A :class:`Transport` is anything that can accept a JSON-serialisable dict and
 forward it to its peer.  The active transport for the current request is
@@ -38,9 +37,7 @@ _PEER_GONE_ERRNOS = frozenset({
     errno.ECONNRESET,   # peer reset the connection
     errno.EBADF,        # fd closed under us
     errno.ESHUTDOWN,    # transport endpoint shut down
-    getattr(errno, "WSAECONNRESET", -1),  # win32 mapping (no-op on POSIX)
-    getattr(errno, "WSAESHUTDOWN", -1),
-} - {-1})
+})
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +123,8 @@ class StdioTransport:
           * ``BrokenPipeError``
           * ``ValueError("...closed file...")``
           * ``OSError`` whose errno is in :data:`_PEER_GONE_ERRNOS`
-            (EPIPE / ECONNRESET / EBADF / ESHUTDOWN; plus WSA mappings
-            on Windows).  Other OSError errnos (ENOSPC, EACCES, ...) are
+            (EPIPE / ECONNRESET / EBADF / ESHUTDOWN). Other OSError errnos
+            (ENOSPC, EACCES, ...) are
             real host problems and re-raise.
         """
         # Serialization is OUTSIDE the lock so a large payload can't
@@ -181,39 +178,3 @@ class StdioTransport:
 
     def close(self) -> None:
         return None
-
-
-class TeeTransport:
-    """Mirrors writes to one primary plus N best-effort secondaries.
-
-    The primary's return value (and exceptions) determine the result —
-    secondaries swallow failures so a wedged sidecar never stalls the
-    main IO path.  Used by the PTY child so every dispatcher emit lands
-    on stdio (Ink) AND on a back-WS feeding the dashboard sidebar.
-    """
-
-    __slots__ = ("_primary", "_secondaries")
-
-    def __init__(self, primary: "Transport", *secondaries: "Transport") -> None:
-        self._primary = primary
-        self._secondaries = secondaries
-
-    def write(self, obj: dict) -> bool:
-        # Primary first so a slow sidecar (WS publisher) never delays Ink/stdio.
-        ok = self._primary.write(obj)
-        for sec in self._secondaries:
-            try:
-                sec.write(obj)
-            except Exception:
-                pass
-        return ok
-
-    def close(self) -> None:
-        try:
-            self._primary.close()
-        finally:
-            for sec in self._secondaries:
-                try:
-                    sec.close()
-                except Exception:
-                    pass

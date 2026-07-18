@@ -684,11 +684,6 @@ class TestSkillMatchesPlatform:
             mock_sys.platform = "darwin"
             assert skill_matches_platform({"platforms": ["linux"]}) is False
 
-    def test_windows_on_win32(self):
-        with patch("agent.skill_utils.sys") as mock_sys:
-            mock_sys.platform = "win32"
-            assert skill_matches_platform({"platforms": ["windows"]}) is True
-
     def test_windows_on_linux(self):
         with patch("agent.skill_utils.sys") as mock_sys:
             mock_sys.platform = "linux"
@@ -958,7 +953,7 @@ class TestSkillViewPrerequisites:
 
     @pytest.mark.parametrize(
         "backend",
-        ["ssh", "daytona", "docker", "singularity", "modal"],
+        ["ssh", "docker"],
     )
     def test_remote_backend_becomes_available_after_local_secret_capture(
         self, tmp_path, monkeypatch, backend
