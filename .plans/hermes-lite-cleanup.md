@@ -1,6 +1,11 @@
 # Hermes Lite Cleanup
 
-Status: approved by the user's direct-execution request on 2026-07-17.
+Status: superseded on 2026-07-18 by
+`.plans/preservation-first-cleanup.md` after the user clarified that working
+Hermes subsystems are foundational and must not be removed as cleanup.
+
+Historical status: approved by the user's direct-execution request on
+2026-07-17 under an incorrect interpretation of the desired product boundary.
 
 ## Intent declaration
 

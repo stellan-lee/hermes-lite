@@ -108,3 +108,39 @@ narrowest scoped Git restoration when that is the stated intent.
   migration, memory hooks, connectors, and unrelated provider branches removed.
 
 ---
+
+## [LRN-20260718-002] correction
+
+**Logged**: 2026-07-18T07:28:19+08:00
+**Priority**: critical
+**Status**: in_progress
+**Area**: backend
+
+### Summary
+
+“Clean unused parts” does not authorize removing working Hermes product
+families merely because they are optional or make the repository larger.
+
+### Details
+
+The cleanup treated gateways, messaging connectors, MCP, scheduling, memory,
+skills, plugins, and other working subsystems as removable product scope. The
+user clarified that these are basic Hermes capabilities and must remain. The
+intended cleanup is evidence-based dead-code and stale-config removal, not a
+conversion of Hermes into a different CLI-only product.
+
+### Suggested Action
+
+Restore the exact pre-cleanup functional baseline before attempting further
+cleanup. Preserve every working feature family by default. Remove an item only
+when its lack of runtime, dynamic-registry, manifest, compatibility, docs, and
+test responsibility is demonstrated and recorded in the cleanup review.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: gateway/, hermes_cli/, plugins/, tests/
+- Tags: cleanup, scope, gateway, connectors, mcp, preservation
+- See Also: LRN-20260718-001
+
+---

@@ -45,6 +45,50 @@ references from the external project instructions.
 
 ---
 
+## [ERR-20260718-007] create-goal-after-resume
+
+**Logged**: 2026-07-18T08:01:12+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+The goal service rejected a replacement goal after the user resumed a goal
+that had previously been marked blocked.
+
+### Error
+
+```
+cannot create a new goal because this thread has an unfinished goal;
+complete the existing goal first
+```
+
+### Context
+
+- The user explicitly asked to set the goal again with an approved checklist.
+- The prior goal was blocked only while waiting for that product decision.
+- Goal tooling exposes no manual resume operation and forbids falsely marking
+  incomplete work complete.
+
+### Suggested Fix
+
+Continue the user-resumed work under the existing goal and use the approved
+checklist as its authoritative scope.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .plans/approved-feature-cleanup.md
+
+### Resolution
+
+- **Resolved**: 2026-07-18T08:01:12+08:00
+- **Notes**: Kept the existing goal unfinished and resumed implementation
+  without misreporting its status.
+
+---
+
 ## [ERR-20260717-005] diff-whitespace-audit
 
 **Logged**: 2026-07-17T00:00:00+08:00
