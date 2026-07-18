@@ -82,10 +82,7 @@ def _write_to_sandbox(content: str, remote_path: str, env) -> bool:
     (32 * PAGE_SIZE), so the previous heredoc-in-the-command-string approach
     silently failed with ``OSError: [Errno 7] Argument list too long`` for any
     tool result over ~128 KB — exactly the case persistence exists to handle.
-    Routing through stdin removes that ceiling on local + ssh (``_stdin_mode
-    == "pipe"``); remote backends with ``_stdin_mode == "heredoc"`` keep their
-    existing API-body sized limit, which is orders of magnitude larger than
-    the exec-arg ceiling.
+    Routing through stdin removes that ceiling on local and SSH backends.
     """
     storage_dir = os.path.dirname(remote_path)
     cmd = f"mkdir -p {shlex.quote(storage_dir)} && cat > {shlex.quote(remote_path)}"

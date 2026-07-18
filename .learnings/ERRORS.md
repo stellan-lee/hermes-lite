@@ -1120,3 +1120,11 @@ after mechanical pruning.
 - **Error:** A broad multi-file patch failed while matching a browser CDP message.
 - **Resolution:** Split the cleanup into smaller exact file-level patches.
 - **Status:** Resolved
+
+## ERR-037: Removed-backend prose patch used an incomplete paragraph
+
+- **Date:** 2026-07-18
+- **Context:** Removing the last `_stdin_mode` documentation after deleting SDK backends.
+- **Error:** The patch omitted two live continuation lines and did not match.
+- **Resolution:** Re-read the exact paragraph and replaced it with a retained-backend description.
+- **Status:** Resolved

@@ -796,7 +796,7 @@ def _tui_need_npm_install(root: Path) -> bool:
     """True when @hermes/ink is missing or node_modules is behind package-lock.json.
 
     Prebuilt bundle mode: when ``dist/entry.js`` exists and there is no
-    ``package-lock.json`` (nix install layout only ships ``dist/`` +
+    ``package-lock.json`` (packaged layouts may ship only ``dist/`` +
     ``package.json``), skip reinstall entirely — the bundle is self-contained
     and there is nothing to install.
 
@@ -823,7 +823,7 @@ def _tui_need_npm_install(root: Path) -> bool:
     we'd rather not force a reinstall for them. Falls back to mtime
     comparison if either lockfile is unparseable.
     """
-    # Prebuilt self-contained bundle (nix / packaged release): no lockfile
+    # Prebuilt self-contained bundle: no lockfile
     # shipped, dist/entry.js is the single runtime artefact.
     entry = root / "dist" / "entry.js"
     # With npm workspaces the lockfile lives at the workspace root.
@@ -1036,7 +1036,7 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
         )
         sys.exit(1)
 
-    # 1. Prebuilt bundle (nix / packaged release): just run it.
+    # 1. Prebuilt bundle: just run it.
     if not tui_dev:
         if ext_dir:
             p = Path(ext_dir)

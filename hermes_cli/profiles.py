@@ -939,7 +939,7 @@ def delete_profile(name: str, yes: bool = False) -> Path:
         def _make_writable(func, path, exc):
             """onexc/onerror handler: add +w on PermissionError so rmtree can proceed.
 
-            Handles two cases on NixOS (and other systems with read-only
+            Handles two cases on systems with read-only
             copies from immutable stores):
             1. The path itself isn't writable (e.g. a file with mode 0444)
             2. The *parent* directory isn't writable (e.g. mode 0555)

@@ -467,9 +467,8 @@ class BaseEnvironment(ABC):
                     pass
 
         def _drain():
-            # Resolve a real OS file descriptor up front.  Real subprocesses and
-            # the SDK ``_ThreadedProcessHandle`` (os.pipe-backed) both return an
-            # integer fd here.  Mocks / iterator-style stdout streams either lack
+            # Resolve a real OS file descriptor up front. Subprocess pipes return
+            # an integer fd here. Mocks / iterator-style stdout streams either lack
             # ``fileno()`` entirely or return a non-integer — in that case fall
             # back to draining the stream as an iterable instead of crashing the
             # thread (issue: 'list_iterator' object has no attribute 'fileno').

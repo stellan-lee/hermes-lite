@@ -99,7 +99,7 @@ class TestWriteDenyPrefixes:
         assert _is_write_denied("/etc/sudoers.d/custom") is True
 
     def test_systemd_prefix(self, tmp_path):
-        # On NixOS, /etc/systemd is a symlink into /nix/store, so
+        # Some systems expose /etc/systemd through a symlink, so
         # realpath() resolves it to a store path that doesn't match
         # the /etc/systemd/ prefix.  Build a real directory tree so
         # realpath is a no-op and prefix matching works.

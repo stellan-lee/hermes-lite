@@ -99,7 +99,7 @@ all = [
   # Policy (2026-05-12): `[all]` includes only extras that genuinely
   # CAN'T be lazy-installed via `tools/lazy_deps.py` — i.e. things every
   # session can use, things needed before the agent loop is alive
-  # (terminal/CLI), and skill deps that packagers (Nix, AUR, Homebrew)
+  # (terminal/CLI), and skill deps that packagers (AUR, Homebrew)
   # need in the wheel. Anything an opt-in backend (provider, search,
   # TTS, image, memory, messaging platform, terminal sandbox) needs
   # MUST live exclusively in `LAZY_DEPS` and resolve at first use —
