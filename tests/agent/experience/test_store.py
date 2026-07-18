@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from agent.experience.store import ExperienceStore
-from hermes_state import SessionDB
+from marlow_state import SessionDB
 
 
 REPO_ID = "repo_test"

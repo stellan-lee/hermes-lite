@@ -1,7 +1,7 @@
 """Behavior contracts for journey node edit/delete (agent.learning_mutations).
 
 Exercises the real on-disk resolution (skills dir + MEMORY.md/USER.md chunking)
-against a temp HERMES_HOME, never mocks — the id→file mapping is the whole point.
+against a temp MARLOW_HOME, never mocks — the id→file mapping is the whole point.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import pytest
 import threading
 
 from agent import learning_mutations as lm
-from hermes_constants import get_hermes_home
+from marlow_constants import get_marlow_home
 
 _SKILL = """---
 name: my-skill
@@ -29,11 +29,11 @@ Body.
 
 def _edit_memory_process(home: str, node_id: str, value: str, barrier, results) -> None:
     """Spawn-safe worker that widens the read/write race around each edit."""
-    os.environ["HERMES_HOME"] = home
-    import hermes_constants
+    os.environ["MARLOW_HOME"] = home
+    import marlow_constants
     from agent import learning_mutations
 
-    importlib.reload(hermes_constants)
+    importlib.reload(marlow_constants)
     mutations = importlib.reload(learning_mutations)
     original_write = mutations._write_chunks
 
@@ -48,7 +48,7 @@ def _edit_memory_process(home: str, node_id: str, value: str, barrier, results) 
 
 @pytest.fixture
 def home():
-    base = get_hermes_home()
+    base = get_marlow_home()
     (base / "memories").mkdir(parents=True, exist_ok=True)
     (base / "memories" / "MEMORY.md").write_text("alpha note\nline two\n§\nbeta note", encoding="utf-8")
     (base / "memories" / "USER.md").write_text("user profile note", encoding="utf-8")
@@ -67,7 +67,7 @@ def _ids_by_content():
 def test_parse_node_kind():
     assert lm.parse_node_kind("memory:memory:0123456789abcdef") == "memory"
     assert lm.parse_node_kind("memory:profile:fedcba9876543210") == "memory"
-    assert lm.parse_node_kind("debugging-hermes") == "skill"
+    assert lm.parse_node_kind("debugging-marlow") == "skill"
 
 
 def test_memory_content_ids_map_across_files(home):

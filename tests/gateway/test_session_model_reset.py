@@ -107,7 +107,7 @@ async def test_new_command_no_override_is_noop():
 
 @pytest.mark.asyncio
 async def test_new_command_cancels_delegations_across_compression_lineage(tmp_path):
-    from hermes_state import SessionDB
+    from marlow_state import SessionDB
 
     runner = _make_runner()
     db = SessionDB(tmp_path / "state.db")

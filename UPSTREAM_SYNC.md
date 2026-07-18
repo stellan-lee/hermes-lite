@@ -2,7 +2,7 @@
 
 ## Provenance
 
-- Official upstream: https://github.com/NousResearch/hermes-agent
+- Official upstream: https://github.com/NousResearch/marlow-agent
 - Local starting baseline: `8a31768825a9fed37d7d0853a3d80b00cd1949f6`
 - Upstream inspected through: `d2c81eb681dea1382fbd1ed403f58320d5aef575`
 - Port branch: `codex/feat-upstream-feature-port`
@@ -33,7 +33,7 @@ Implemented the final standards-guided learning prompt and command routing in th
 - PR #55555
 - PR #55859
 
-Implemented the shared learning graph, terminal renderer, skill/memory edit and delete mutations, `hermes journey` (plus aliases), classic `/journey`, the full-screen TUI journey overlay, editor flow, RPC methods, and focused TUI tests.
+Implemented the shared learning graph, terminal renderer, skill/memory edit and delete mutations, `marlow journey` (plus aliases), classic `/journey`, the full-screen TUI journey overlay, editor flow, RPC methods, and focused TUI tests.
 
 ### Automation Blueprints
 
@@ -65,7 +65,7 @@ Implemented default-on in-place compaction with one durable session ID, non-dest
 
 - No desktop application code was imported from the journey, blueprint, or session changes.
 - The journey mutation HTTP endpoints used by upstream desktop were omitted; this port targets the requested CLI and TUI journey surfaces.
-- Upstream `gateway/slash_commands.py` behavior was integrated into this fork's `gateway/run.py`; upstream `hermes_cli/cli_commands_mixin.py` behavior was integrated into `cli.py` because those split modules do not exist here.
+- Upstream `gateway/slash_commands.py` behavior was integrated into this fork's `gateway/run.py`; upstream `marlow_cli/cli_commands_mixin.py` behavior was integrated into `cli.py` because those split modules do not exist here.
 - The older dashboard Skills page lacks upstream's editor/dialog composition. Its Learn entry uses a compact prompt and then hands the request to the same `/learn` chat path.
 - This checkout's website contains only `website/src`, not the upstream docs/catalog build tree. Documentation generators, Docusaurus catalog components, and website-only reference pages from PRs #41309, #48705, and #51506 were not imported.
 - Dashboard session endpoints in this fork are not profile-scoped. Session import therefore targets the active/default SessionDB and ignores an optional profile value.
@@ -104,7 +104,7 @@ Successful:
   venv/bin/python -m py_compile \
     utils.py agent/conversation_compression.py agent/image_gen_provider.py \
     agent/learning_graph.py agent/learning_mutations.py cli.py \
-    cron/suggestions.py gateway/run.py hermes_state.py \
+    cron/suggestions.py gateway/run.py marlow_state.py \
     plugins/image_gen/krea/__init__.py tools/delegate_tool.py \
     tui_gateway/server.py \
     tests/run_agent/test_860_dedup.py tests/agent/test_learning_mutations.py \
@@ -114,12 +114,12 @@ Successful:
     tests/cron/test_suggestions.py tests/cron/test_blueprint_catalog.py \
     tests/tools/test_async_delegation.py \
     tests/tools/test_image_generation_image_to_image.py \
-    tests/cli/test_cli_new_session.py tests/test_hermes_state.py \
-    tests/test_tui_gateway_server.py tests/hermes_cli/test_web_server.py
+    tests/cli/test_cli_new_session.py tests/test_marlow_state.py \
+    tests/test_tui_gateway_server.py tests/marlow_cli/test_web_server.py
   ```
-- Isolated-`HERMES_HOME` direct assertion smokes passed for cross-process suggestion claiming, concurrent journey edits without lost updates, in-place compression DB-failure rollback/lock release, gateway archived-row preservation, TUI completion success/failure signaling, and atomic image stream publication/cleanup. The standalone multiprocessing smoke used `fork`; the checked-in regressions use `spawn` from real pytest modules for supported-OS coverage.
+- Isolated-`MARLOW_HOME` direct assertion smokes passed for cross-process suggestion claiming, concurrent journey edits without lost updates, in-place compression DB-failure rollback/lock release, gateway archived-row preservation, TUI completion success/failure signaling, and atomic image stream publication/cleanup. The standalone multiprocessing smoke used `fork`; the checked-in regressions use `spawn` from real pytest modules for supported-OS coverage.
 - TUI focused tests after building the local Ink package:
-  - `cd ui-tui && npm run build --prefix packages/hermes-ink`
+  - `cd ui-tui && npm run build --prefix packages/marlow-ink`
   - `cd ui-tui && npm test -- --run src/__tests__/journeyCommand.test.ts src/__tests__/statusRule.test.ts`
   - Result: 2 files, 15 tests passed.
 - Dashboard session import: `cd web && npx vitest run src/lib/session-import.test.ts` — 1 file, 5 tests passed.
@@ -138,7 +138,7 @@ Environment/baseline limitations:
     tests/gateway/test_compress_command.py \
     tests/gateway/test_session_hygiene.py \
     tests/gateway/test_session_boundary_hooks.py \
-    tests/test_hermes_state.py \
+    tests/test_marlow_state.py \
     tests/tools/test_async_delegation.py \
     tests/agent/test_learning_mutations.py \
     tests/agent/test_save_url_image.py \
@@ -147,9 +147,9 @@ Environment/baseline limitations:
     tests/cron/test_blueprint_catalog.py \
     tests/cli/test_cli_new_session.py \
     tests/test_tui_gateway_server.py \
-    tests/hermes_cli/test_web_server.py -x
+    tests/marlow_cli/test_web_server.py -x
   ```
-- `ui-tui npm run type-check` is blocked by pre-existing type errors in `packages/hermes-ink/src/utils/execFileNoThrow.ts`.
+- `ui-tui npm run type-check` is blocked by pre-existing type errors in `packages/marlow-ink/src/utils/execFileNoThrow.ts`.
 - TUI ESLint is blocked by the absent local `eslint-plugin-react-compiler` package.
 - The default dashboard `npm run build` stops on the repository's TypeScript-6 `baseUrl` deprecation before application checking; the explicit no-emit command above bypassed that deprecation and isolated the unrelated ConfigPage error.
 - No live provider call, paid image operation, real messaging delivery, or Windows runtime execution was performed.

@@ -181,7 +181,7 @@ def test_non_retryable_api_error_is_safe_in_logs_status_dump_and_result(
     )
     hooks: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        "hermes_cli.plugins.invoke_hook",
+        "marlow_cli.plugins.invoke_hook",
         lambda name, **kwargs: hooks.append((name, kwargs)) or [],
     )
 

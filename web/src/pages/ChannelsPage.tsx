@@ -232,7 +232,7 @@ export default function ChannelsPage() {
             <WifiOff className="h-4 w-4 shrink-0" />
             <span>
               The gateway is not running. Configure channels here, then start the
-              gateway with <code className="font-courier">hermes gateway start</code>{" "}
+              gateway with <code className="font-courier">marlow gateway start</code>{" "}
               (or the Restart button above).
             </span>
           </CardContent>
@@ -241,7 +241,7 @@ export default function ChannelsPage() {
 
       <p className="text-xs text-muted-foreground">
         {configured} of {platforms.length} channels configured. Credentials are
-        written to <code className="font-courier">~/.hermes/.env</code>; the
+        written to <code className="font-courier">~/.marlow/.env</code>; the
         gateway connects each enabled channel on its next restart.
       </p>
 

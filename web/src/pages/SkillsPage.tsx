@@ -101,7 +101,7 @@ export default function SkillsPage() {
   const navigate = useNavigate();
   const openLearn = useCallback(() => {
     const description = window.prompt(
-      "What should Hermes learn from? Describe a local path, URL, pasted notes, or this conversation.",
+      "What should Marlow learn from? Describe a local path, URL, pasted notes, or this conversation.",
     )?.trim();
     if (description) {
       navigate(`/chat?learn=${encodeURIComponent(description.replace(/\s*\n\s*/g, " "))}`);
@@ -701,7 +701,7 @@ function HubBrowser({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Results come from the same sources as <span className="font-mono">hermes skills search</span>.
+            Results come from the same sources as <span className="font-mono">marlow skills search</span>.
             Installs run in the background; the log streams below.
           </p>
         </CardContent>

@@ -551,8 +551,8 @@ export default function SystemPage() {
                 <div>{stats?.python_impl} {stats?.python_version}</div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-wider text-muted-foreground">Hermes</div>
-                <div>v{stats?.hermes_version}</div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground">Marlow</div>
+                <div>v{stats?.marlow_version}</div>
               </div>
               <div>
                 <div className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1">
@@ -646,7 +646,7 @@ export default function SystemPage() {
             )}
             {!portal?.logged_in && (
               <p className="text-xs text-muted-foreground">
-                Log in with <span className="font-mono">hermes auth add nous --type oauth</span>.
+                Log in with <span className="font-mono">marlow auth add nous --type oauth</span>.
               </p>
             )}
           </CardContent>
@@ -754,7 +754,7 @@ export default function SystemPage() {
               </Link>
               <span className="ml-auto">
                 New credentials:{" "}
-                <span className="font-mono">hermes memory setup</span>
+                <span className="font-mono">marlow memory setup</span>
               </span>
             </div>
 
@@ -867,7 +867,7 @@ export default function SystemPage() {
           <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-end">
             <div className="grid gap-2 flex-1">
               <Label htmlFor="import-path">Restore from backup archive</Label>
-              <Input id="import-path" value={importPath} onChange={(e) => setImportPath(e.target.value)} placeholder="/path/to/hermes-backup.zip" />
+              <Input id="import-path" value={importPath} onChange={(e) => setImportPath(e.target.value)} placeholder="/path/to/marlow-backup.zip" />
             </div>
             <Button
               size="sm"

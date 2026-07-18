@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bootstrap Open WebUI against Hermes Agent's OpenAI-compatible API server.
+# Bootstrap Open WebUI against Marlow Agent's OpenAI-compatible API server.
 #
 # Idempotent by design:
-# - ensures ~/.hermes/.env has API server settings
+# - ensures ~/.marlow/.env has API server settings
 # - installs Open WebUI into ~/.local/open-webui-venv
-# - writes a reusable launcher at ~/.local/bin/start-open-webui-hermes.sh
+# - writes a reusable launcher at ~/.local/bin/start-open-webui-marlow.sh
 # - optionally installs a user service (launchd on macOS, systemd --user on Linux)
 #
 # Usage:
@@ -15,30 +15,30 @@ set -euo pipefail
 # Optional environment overrides:
 #   OPEN_WEBUI_PORT=8080
 #   OPEN_WEBUI_HOST=127.0.0.1
-#   OPEN_WEBUI_NAME='Johnny Hermes'
+#   OPEN_WEBUI_NAME='Johnny Marlow'
 #   OPEN_WEBUI_ENABLE_SIGNUP=true
 #   OPEN_WEBUI_ENABLE_SERVICE=auto   # auto|true|false
 #   OPEN_WEBUI_VENV=~/.local/open-webui-venv
 #   OPEN_WEBUI_DATA_DIR=~/.local/share/open-webui/data
-#   HERMES_API_PORT=8642
-#   HERMES_API_HOST=127.0.0.1
-#   HERMES_API_MODEL_NAME='Hermes Agent'
+#   MARLOW_API_PORT=8642
+#   MARLOW_API_HOST=127.0.0.1
+#   MARLOW_API_MODEL_NAME='Marlow Agent'
 
 OPEN_WEBUI_PORT="${OPEN_WEBUI_PORT:-8080}"
 OPEN_WEBUI_HOST="${OPEN_WEBUI_HOST:-127.0.0.1}"
-OPEN_WEBUI_NAME="${OPEN_WEBUI_NAME:-Hermes Agent WebUI}"
+OPEN_WEBUI_NAME="${OPEN_WEBUI_NAME:-Marlow Agent WebUI}"
 OPEN_WEBUI_ENABLE_SIGNUP="${OPEN_WEBUI_ENABLE_SIGNUP:-true}"
 OPEN_WEBUI_ENABLE_SERVICE="${OPEN_WEBUI_ENABLE_SERVICE:-auto}"
 OPEN_WEBUI_VENV="${OPEN_WEBUI_VENV:-$HOME/.local/open-webui-venv}"
 OPEN_WEBUI_DATA_DIR="${OPEN_WEBUI_DATA_DIR:-$HOME/.local/share/open-webui/data}"
-HERMES_ENV_FILE="${HERMES_ENV_FILE:-$HOME/.hermes/.env}"
-HERMES_API_PORT="${HERMES_API_PORT:-8642}"
-HERMES_API_HOST="${HERMES_API_HOST:-127.0.0.1}"
-HERMES_API_CONNECT_HOST="${HERMES_API_CONNECT_HOST:-127.0.0.1}"
-HERMES_API_MODEL_NAME="${HERMES_API_MODEL_NAME:-Hermes Agent}"
-HERMES_API_BASE_URL="http://${HERMES_API_CONNECT_HOST}:${HERMES_API_PORT}/v1"
-LAUNCHER_PATH="$HOME/.local/bin/start-open-webui-hermes.sh"
-LOG_DIR="$HOME/.hermes/logs"
+MARLOW_ENV_FILE="${MARLOW_ENV_FILE:-$HOME/.marlow/.env}"
+MARLOW_API_PORT="${MARLOW_API_PORT:-8642}"
+MARLOW_API_HOST="${MARLOW_API_HOST:-127.0.0.1}"
+MARLOW_API_CONNECT_HOST="${MARLOW_API_CONNECT_HOST:-127.0.0.1}"
+MARLOW_API_MODEL_NAME="${MARLOW_API_MODEL_NAME:-Marlow Agent}"
+MARLOW_API_BASE_URL="http://${MARLOW_API_CONNECT_HOST}:${MARLOW_API_PORT}/v1"
+LAUNCHER_PATH="$HOME/.local/bin/start-open-webui-marlow.sh"
+LOG_DIR="$HOME/.marlow/logs"
 
 log() {
   printf '[open-webui-bootstrap] %s\n' "$*"
@@ -173,7 +173,7 @@ write_launcher() {
   local quoted_data_dir quoted_name quoted_base_url quoted_host quoted_port quoted_venv
   quoted_data_dir="$(shell_quote "$OPEN_WEBUI_DATA_DIR")"
   quoted_name="$(shell_quote "$OPEN_WEBUI_NAME")"
-  quoted_base_url="$(shell_quote "$HERMES_API_BASE_URL")"
+  quoted_base_url="$(shell_quote "$MARLOW_API_BASE_URL")"
   quoted_host="$(shell_quote "$OPEN_WEBUI_HOST")"
   quoted_port="$(shell_quote "$OPEN_WEBUI_PORT")"
   quoted_venv="$(shell_quote "$OPEN_WEBUI_VENV")"
@@ -184,7 +184,7 @@ set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 API_KEY=\$(python3 - <<'PY'
 from pathlib import Path
-p = Path.home()/'.hermes'/'.env'
+p = Path.home()/'.marlow'/'.env'
 for raw in p.read_text().splitlines():
     line = raw.strip()
     if line.startswith('API_SERVER_KEY='):
@@ -218,11 +218,11 @@ EOF
 }
 
 ensure_env_permissions() {
-  chmod 600 "$HERMES_ENV_FILE" 2>/dev/null || true
+  chmod 600 "$MARLOW_ENV_FILE" 2>/dev/null || true
 }
 
 install_launchd_service() {
-  local plist="$HOME/Library/LaunchAgents/ai.openwebui.hermes.plist"
+  local plist="$HOME/Library/LaunchAgents/ai.openwebui.marlow.plist"
   mkdir -p "$(dirname "$plist")"
   cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -230,7 +230,7 @@ install_launchd_service() {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>ai.openwebui.hermes</string>
+  <string>ai.openwebui.marlow</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
@@ -251,34 +251,34 @@ install_launchd_service() {
 EOF
   launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$plist"
-  launchctl enable "gui/$(id -u)/ai.openwebui.hermes"
-  launchctl kickstart -k "gui/$(id -u)/ai.openwebui.hermes"
+  launchctl enable "gui/$(id -u)/ai.openwebui.marlow"
+  launchctl kickstart -k "gui/$(id -u)/ai.openwebui.marlow"
 }
 
 install_systemd_user_service() {
   require_cmd systemctl
   local unit_dir="$HOME/.config/systemd/user"
-  local unit="$unit_dir/openwebui-hermes.service"
+  local unit="$unit_dir/openwebui-marlow.service"
   mkdir -p "$unit_dir"
   cat > "$unit" <<EOF
 [Unit]
-Description=Open WebUI connected to Hermes Agent
+Description=Open WebUI connected to Marlow Agent
 After=default.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash %h/.local/bin/start-open-webui-hermes.sh
+ExecStart=/bin/bash %h/.local/bin/start-open-webui-marlow.sh
 Restart=always
 RestartSec=3
 WorkingDirectory=%h
-StandardOutput=append:%h/.hermes/logs/openwebui.log
-StandardError=append:%h/.hermes/logs/openwebui.error.log
+StandardOutput=append:%h/.marlow/logs/openwebui.log
+StandardError=append:%h/.marlow/logs/openwebui.error.log
 
 [Install]
 WantedBy=default.target
 EOF
   systemctl --user daemon-reload
-  systemctl --user enable --now openwebui-hermes.service
+  systemctl --user enable --now openwebui-marlow.service
 }
 
 start_foreground_hint() {
@@ -287,35 +287,35 @@ start_foreground_hint() {
 }
 
 main() {
-  require_cmd hermes
+  require_cmd marlow
   require_cmd curl
   require_cmd python3
 
   install_macos_dependencies
 
   local api_key
-  api_key="$(get_env_value API_SERVER_KEY "$HERMES_ENV_FILE")"
+  api_key="$(get_env_value API_SERVER_KEY "$MARLOW_ENV_FILE")"
   if [[ -z "$api_key" ]]; then
     api_key="$(generate_secret)"
   fi
 
-  log 'Ensuring Hermes API server is configured...'
-  upsert_env API_SERVER_ENABLED true "$HERMES_ENV_FILE"
-  upsert_env API_SERVER_HOST "$HERMES_API_HOST" "$HERMES_ENV_FILE"
-  upsert_env API_SERVER_PORT "$HERMES_API_PORT" "$HERMES_ENV_FILE"
-  upsert_env API_SERVER_MODEL_NAME "$HERMES_API_MODEL_NAME" "$HERMES_ENV_FILE"
-  upsert_env API_SERVER_KEY "$api_key" "$HERMES_ENV_FILE"
+  log 'Ensuring Marlow API server is configured...'
+  upsert_env API_SERVER_ENABLED true "$MARLOW_ENV_FILE"
+  upsert_env API_SERVER_HOST "$MARLOW_API_HOST" "$MARLOW_ENV_FILE"
+  upsert_env API_SERVER_PORT "$MARLOW_API_PORT" "$MARLOW_ENV_FILE"
+  upsert_env API_SERVER_MODEL_NAME "$MARLOW_API_MODEL_NAME" "$MARLOW_ENV_FILE"
+  upsert_env API_SERVER_KEY "$api_key" "$MARLOW_ENV_FILE"
   ensure_env_permissions
 
-  log 'Restarting Hermes gateway so API server settings take effect...'
-  hermes gateway restart >/dev/null 2>&1 || true
+  log 'Restarting Marlow gateway so API server settings take effect...'
+  marlow gateway restart >/dev/null 2>&1 || true
   sleep 4
-  if ! curl -fsS "http://${HERMES_API_CONNECT_HOST}:${HERMES_API_PORT}/health" >/dev/null; then
-    log 'Hermes API server did not answer on the first check. Trying to start gateway in the background...'
-    nohup hermes gateway run >/dev/null 2>&1 &
+  if ! curl -fsS "http://${MARLOW_API_CONNECT_HOST}:${MARLOW_API_PORT}/health" >/dev/null; then
+    log 'Marlow API server did not answer on the first check. Trying to start gateway in the background...'
+    nohup marlow gateway run >/dev/null 2>&1 &
     sleep 6
   fi
-  curl -fsS "http://${HERMES_API_CONNECT_HOST}:${HERMES_API_PORT}/health" >/dev/null
+  curl -fsS "http://${MARLOW_API_CONNECT_HOST}:${MARLOW_API_PORT}/health" >/dev/null
 
   log 'Installing Open WebUI into a dedicated virtualenv...'
   install_open_webui
@@ -342,7 +342,7 @@ main() {
   esac
 
   log "Done. Open WebUI should be available at: http://${OPEN_WEBUI_HOST}:${OPEN_WEBUI_PORT}"
-  log "Hermes API endpoint: ${HERMES_API_BASE_URL}"
+  log "Marlow API endpoint: ${MARLOW_API_BASE_URL}"
   log 'Important: Open WebUI persists connection settings after first launch. If you later save a wrong API key in the Admin UI, update/delete that connection there or reset its database.'
 }
 

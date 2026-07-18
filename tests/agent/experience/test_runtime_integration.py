@@ -65,7 +65,7 @@ def test_prepare_retrieves_once_and_builds_local_assist_context(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    home = tmp_path / "hermes-home"
+    home = tmp_path / "marlow-home"
     repository = tmp_path / "repository"
     home.mkdir()
     repository.mkdir()
@@ -78,9 +78,9 @@ def test_prepare_retrieves_once_and_builds_local_assist_context(
     )
     lesson_id = _seed_active_local_lesson(home, repository)
 
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("MARLOW_HOME", str(home))
     monkeypatch.setattr(
-        "hermes_cli.config.load_config",
+        "marlow_cli.config.load_config",
         lambda: {
             "experience": {
                 "mode": "assist",
@@ -139,7 +139,7 @@ def test_global_recall_mode_cannot_retrieve_from_capture_only_peer_project(
     monkeypatch,
     global_mode: str,
 ) -> None:
-    home = tmp_path / "hermes-home"
+    home = tmp_path / "marlow-home"
     repository = tmp_path / "repository"
     capture_project = repository / "apps" / "capture-only"
     assist_project = repository / "apps" / "assist"
@@ -193,9 +193,9 @@ def test_global_recall_mode_cannot_retrieve_from_capture_only_peer_project(
         )
         store.approve_lesson(lesson["id"], reason="fixture approval")
 
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("MARLOW_HOME", str(home))
     monkeypatch.setattr(
-        "hermes_cli.config.load_config",
+        "marlow_cli.config.load_config",
         lambda: {
             "experience": {
                 "mode": global_mode,

@@ -373,7 +373,7 @@ async def test_session_hygiene_messages_stay_in_originating_topic(monkeypatch, t
         }
     )
 
-    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
     monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "fake"})
     monkeypatch.setattr(
         "agent.model_metadata.get_model_context_length",
@@ -491,7 +491,7 @@ async def test_session_hygiene_retains_parent_route_on_persistence_failure(
         }
     )
 
-    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
     monkeypatch.setattr(
         gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "fake"}
     )
@@ -612,7 +612,7 @@ async def test_session_hygiene_warns_user_when_compression_aborts(monkeypatch, t
         }
     )
 
-    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
     monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
     monkeypatch.setattr(
         "agent.model_metadata.get_model_context_length",
@@ -740,7 +740,7 @@ async def test_session_hygiene_informs_user_when_aux_model_fails_but_recovers(mo
         }
     )
 
-    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
     monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
     monkeypatch.setattr(
         "agent.model_metadata.get_model_context_length",
@@ -800,7 +800,7 @@ async def test_session_hygiene_honors_configurable_hard_message_limit(
     fake_dotenv.load_dotenv = lambda *args, **kwargs: None
     monkeypatch.setitem(sys.modules, "dotenv", fake_dotenv)
 
-    from hermes_state import SessionDB
+    from marlow_state import SessionDB
 
     history = _make_history(12, content_size=40)
     db = SessionDB(db_path=tmp_path / "state.db")
@@ -879,7 +879,7 @@ async def test_session_hygiene_honors_configurable_hard_message_limit(
         }
     )
 
-    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
     monkeypatch.setattr(
         gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "fake"}
     )
@@ -988,7 +988,7 @@ async def test_session_hygiene_default_hard_message_limit_does_not_fire_at_12_me
         }
     )
 
-    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
     monkeypatch.setattr(
         gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "fake"}
     )

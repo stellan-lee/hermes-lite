@@ -1,10 +1,10 @@
-# nix/packages.nix — Hermes Agent package built with uv2nix
+# nix/packages.nix — Marlow Agent package built with uv2nix
 { inputs, ... }:
 {
   perSystem =
     { pkgs, lib, inputs', ... }:
     let
-      hermesAgent = pkgs.callPackage ./hermes-agent.nix {
+      marlowAgent = pkgs.callPackage ./marlow-agent.nix {
         inherit (inputs) uv2nix pyproject-nix pyproject-build-systems;
         npm-lockfile-fix = inputs'.npm-lockfile-fix.packages.default;
         # Only embed clean revs — dirtyRev doesn't represent any upstream
@@ -14,18 +14,18 @@
     in
     {
       packages = {
-        default = hermesAgent;
+        default = marlowAgent;
 
         # Ships discord.py + python-telegram-bot + slack-sdk so a plain
         # `nix profile install .#messaging` connects to Discord/Telegram/Slack
         # on first run — lazy-install can't write to the read-only /nix/store.
-        messaging = hermesAgent.override {
+        messaging = marlowAgent.override {
           extraDependencyGroups = [ "messaging" ];
         };
 
         # All platform-portable optional integrations pre-built.
         # matrix is Linux-only (oqs/liboqs lacks aarch64-darwin wheels).
-        full = hermesAgent.override {
+        full = marlowAgent.override {
           extraDependencyGroups = [
             "anthropic"
             "azure-identity"
@@ -47,10 +47,10 @@
           ] ++ lib.optionals pkgs.stdenv.isLinux [ "matrix" ];
         };
 
-        tui = hermesAgent.hermesTui;
-        web = hermesAgent.hermesWeb;
+        tui = marlowAgent.marlowTui;
+        web = marlowAgent.marlowWeb;
 
-        fix-lockfiles = hermesAgent.hermesNpmLib.mkFixLockfiles { attr = "tui"; };
+        fix-lockfiles = marlowAgent.marlowNpmLib.mkFixLockfiles { attr = "tui"; };
       };
     };
 }

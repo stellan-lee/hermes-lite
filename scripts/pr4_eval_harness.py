@@ -25,7 +25,7 @@ from agent.memory_cards import (
 from agent.memory_manager import MemoryManager
 from agent.memory_provider import MemoryProvider
 from agent.conversation_loop import _recall_multi_query
-from hermes_cli.config import DEFAULT_CONFIG
+from marlow_cli.config import DEFAULT_CONFIG
 
 
 SECRET = "SECRET_DO_NOT_WRITE"

@@ -1,11 +1,11 @@
-"""SimpleX Chat platform adapter (Hermes plugin).
+"""SimpleX Chat platform adapter (Marlow plugin).
 
 Connects to a simplex-chat daemon running in WebSocket mode.
 Inbound messages arrive via a persistent WebSocket connection.
 Outbound messages use the same WebSocket with JSON commands.
 
-This adapter ships as a Hermes platform plugin under
-``plugins/platforms/simplex/``. The Hermes plugin loader scans the
+This adapter ships as a Marlow platform plugin under
+``plugins/platforms/simplex/``. The Marlow plugin loader scans the
 directory at startup, calls ``register(ctx)``, and the platform
 becomes available to ``gateway/run.py`` and ``tools/send_message_tool``
 through the registry — no edits to core files are required.
@@ -26,7 +26,7 @@ Optional environment variables:
     SIMPLEX_HOME_CHANNEL_NAME  Human label for the home channel
 
 The ``websockets`` Python package is imported lazily — the plugin is
-discoverable and `hermes setup` can describe it even when websockets is
+discoverable and `marlow setup` can describe it even when websockets is
 not installed. ``check_requirements()`` returns False until the package
 is present, so the gateway will not attempt to instantiate the adapter.
 """
@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 # Lazy import: BasePlatformAdapter and friends live in the main repo.
-# Imported at module top because they're stdlib-only inside Hermes — no
+# Imported at module top because they're stdlib-only inside Marlow — no
 # external dependency that would block the plugin from loading.
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
@@ -67,7 +67,7 @@ HEALTH_CHECK_INTERVAL = 30.0
 HEALTH_CHECK_STALE_THRESHOLD = 120.0
 
 # Correlation ID prefix for requests we send so we can ignore our own echoes.
-_CORR_PREFIX = "hermes-"
+_CORR_PREFIX = "marlow-"
 
 
 # ---------------------------------------------------------------------------
@@ -627,8 +627,8 @@ async def _standalone_send(
     """Open an ephemeral WebSocket to the daemon, send, and close.
 
     Used by ``tools/send_message_tool._send_via_adapter`` when the gateway
-    runner is not in this process (e.g. ``hermes cron`` running as a
-    separate process from ``hermes gateway``). Without this hook,
+    runner is not in this process (e.g. ``marlow cron`` running as a
+    separate process from ``marlow gateway``). Without this hook,
     ``deliver=simplex`` cron jobs fail with "No live adapter for platform".
 
     ``thread_id`` and ``force_document`` are accepted for signature parity
@@ -656,7 +656,7 @@ async def _standalone_send(
             cmd_str = f"@{chat_id} {message}"
 
         payload = {
-            "corrId": f"hermes-snd-{int(time.time() * 1000)}",
+            "corrId": f"marlow-snd-{int(time.time() * 1000)}",
             "cmd": cmd_str,
         }
 
@@ -671,10 +671,10 @@ async def _standalone_send(
 
 
 def interactive_setup() -> None:
-    """Minimal stdin wizard for ``hermes setup gateway`` → SimpleX.
+    """Minimal stdin wizard for ``marlow setup gateway`` → SimpleX.
 
     Prompts for the WebSocket URL and the optional allowlist / home channel.
-    Writes to ``~/.hermes/.env`` via ``hermes_cli.config``.
+    Writes to ``~/.marlow/.env`` via ``marlow_cli.config``.
     """
     print()
     print("SimpleX Chat setup")
@@ -685,9 +685,9 @@ def interactive_setup() -> None:
     print()
 
     try:
-        from hermes_cli.config import get_env_value, save_env_value
+        from marlow_cli.config import get_env_value, save_env_value
     except ImportError:
-        print("hermes_cli.config not available; set SIMPLEX_* vars manually in ~/.hermes/.env")
+        print("marlow_cli.config not available; set SIMPLEX_* vars manually in ~/.marlow/.env")
         return
 
     def _prompt(var: str, prompt: str, *, secret: bool = False) -> None:
@@ -695,7 +695,7 @@ def interactive_setup() -> None:
         suffix = " [keep current]" if existing else ""
         try:
             if secret:
-                from hermes_cli.secret_prompt import masked_secret_prompt
+                from marlow_cli.secret_prompt import masked_secret_prompt
                 value = masked_secret_prompt(f"{prompt}{suffix}: ")
             else:
                 value = input(f"{prompt}{suffix}: ").strip()
@@ -712,7 +712,7 @@ def interactive_setup() -> None:
 
 
 def register(ctx) -> None:
-    """Plugin entry point — called by the Hermes plugin system at startup."""
+    """Plugin entry point — called by the Marlow plugin system at startup."""
     ctx.register_platform(
         name="simplex",
         label="SimpleX Chat",
@@ -724,7 +724,7 @@ def register(ctx) -> None:
         install_hint="pip install websockets   # SimpleX adapter requires the websockets package",
         setup_fn=interactive_setup,
         # Env-driven auto-configuration: seeds PlatformConfig.extra so
-        # env-only setups show up in `hermes gateway status` without
+        # env-only setups show up in `marlow gateway status` without
         # instantiating the adapter.
         env_enablement_fn=_env_enablement,
         # Cron home-channel delivery support — `deliver=simplex` cron jobs

@@ -1,6 +1,6 @@
 """Suggested cron jobs — proposed automations the user accepts with one tap.
 
-A *suggestion* is a ready-to-run cron job spec that Hermes surfaces to the
+A *suggestion* is a ready-to-run cron job spec that Marlow surfaces to the
 user, who accepts it (creates the real cron job) or dismisses it (latched so
 it is never re-offered). This is the single surface every automation proposal
 flows through, regardless of where it came from:
@@ -21,7 +21,7 @@ auto-create jobs; acceptance is always explicit (consent-first). Dismissed
 suggestions latch by a stable ``dedup_key`` so the same proposal is not
 re-offered after the user says no.
 
-Storage mirrors ``cron/jobs.py``: ``~/.hermes/cron/suggestions.json``, atomic
+Storage mirrors ``cron/jobs.py``: ``~/.marlow/cron/suggestions.json``, atomic
 writes, thread + cross-process locking, and 0600 perms.
 """
 
@@ -36,13 +36,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from hermes_constants import get_hermes_home
-from hermes_time import now as _hermes_now
+from marlow_constants import get_marlow_home
+from marlow_time import now as _marlow_now
 from utils import atomic_replace, interprocess_file_lock
 
 logger = logging.getLogger(__name__)
 
-CRON_DIR = get_hermes_home().resolve() / "cron"
+CRON_DIR = get_marlow_home().resolve() / "cron"
 SUGGESTIONS_FILE = CRON_DIR / "suggestions.json"
 
 # In-process lock protecting load->modify->save cycles (the background review
@@ -98,7 +98,7 @@ def _save_raw(suggestions: List[Dict[str, Any]]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(
-                {"suggestions": suggestions, "updated_at": _hermes_now().isoformat()},
+                {"suggestions": suggestions, "updated_at": _marlow_now().isoformat()},
                 f,
                 indent=2,
             )
@@ -172,7 +172,7 @@ def add_suggestion(
             "job_spec": job_spec,
             "dedup_key": dedup_key.strip(),
             "status": _STATUS_PENDING,
-            "created_at": _hermes_now().isoformat(),
+            "created_at": _marlow_now().isoformat(),
         }
         suggestions.append(record)
         _save_raw(suggestions)
@@ -208,7 +208,7 @@ def _set_status(suggestion_id: str, status: str, *, expected: Optional[str] = No
                 if expected is not None and s.get("status") != expected:
                     return False
                 s["status"] = status
-                s["resolved_at"] = _hermes_now().isoformat()
+                s["resolved_at"] = _marlow_now().isoformat()
                 changed = True
                 break
         if changed:
@@ -233,7 +233,7 @@ def _claim_pending(ref: str) -> Optional[Dict[str, Any]]:
         if claimed is None or claimed.get("status") != _STATUS_PENDING:
             return None
         claimed["status"] = _STATUS_ACCEPTING
-        claimed["accepting_at"] = _hermes_now().isoformat()
+        claimed["accepting_at"] = _marlow_now().isoformat()
         _save_raw(suggestions)
         return dict(claimed)
 
@@ -255,7 +255,7 @@ def dismiss_suggestion(ref: str) -> bool:
         if resolved is None or resolved.get("status") != _STATUS_PENDING:
             return False
         resolved["status"] = _STATUS_DISMISSED
-        resolved["resolved_at"] = _hermes_now().isoformat()
+        resolved["resolved_at"] = _marlow_now().isoformat()
         _save_raw(suggestions)
         return True
 

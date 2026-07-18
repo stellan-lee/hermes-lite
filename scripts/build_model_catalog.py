@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build the Hermes Model Catalog — a centralized JSON manifest of curated models.
+"""Build the Marlow Model Catalog — a centralized JSON manifest of curated models.
 
 This script reads the in-repo hardcoded curated lists (``OPENROUTER_MODELS``)
-and writes them to a JSON manifest that the Hermes CLI fetches at runtime.
+and writes them to a JSON manifest that the Marlow CLI fetches at runtime.
 Publishing the catalog through the docs site lets maintainers update model
-lists without shipping a Hermes release.
+lists without shipping a Marlow release.
 
 The runtime fetcher falls back to the same in-repo hardcoded lists if the
 manifest is unreachable, so this script is a convenience for keeping the
@@ -14,8 +14,8 @@ Usage::
 
     python scripts/build_model_catalog.py
 
-Output: ``hermes_cli/data/model-catalog.json`` — the snapshot bundled with the
-package and used by ``hermes_cli/model_catalog.py`` as the offline fallback.
+Output: ``marlow_cli/data/model-catalog.json`` — the snapshot bundled with the
+package and used by ``marlow_cli/model_catalog.py`` as the offline fallback.
 Commit the regenerated file when models change.
 """
 
@@ -29,12 +29,12 @@ from datetime import datetime, timezone
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-# Ensure HERMES_HOME is set for imports that touch it at module level.
-os.environ.setdefault("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes"))
+# Ensure MARLOW_HOME is set for imports that touch it at module level.
+os.environ.setdefault("MARLOW_HOME", os.path.join(os.path.expanduser("~"), ".marlow"))
 
-from hermes_cli.models import OPENROUTER_MODELS  # noqa: E402
+from marlow_cli.models import OPENROUTER_MODELS  # noqa: E402
 
-OUTPUT_PATH = os.path.join(REPO_ROOT, "hermes_cli", "data", "model-catalog.json")
+OUTPUT_PATH = os.path.join(REPO_ROOT, "marlow_cli", "data", "model-catalog.json")
 CATALOG_VERSION = 1
 
 
@@ -43,8 +43,8 @@ def build_catalog() -> dict:
         "version": CATALOG_VERSION,
         "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "metadata": {
-            "source": "hermes-agent repo",
-            "docs": "https://hermes-agent.nousresearch.com/docs/reference/model-catalog",
+            "source": "marlow-agent repo",
+            "docs": "https://marlow-agent.nousresearch.com/docs/reference/model-catalog",
         },
         "providers": {
             "openrouter": {

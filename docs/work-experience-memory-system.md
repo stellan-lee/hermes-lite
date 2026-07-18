@@ -1,4 +1,4 @@
-# Work Experience Memory for Hermes
+# Work Experience Memory for Marlow
 
 Status: Retrieval-first validation MVP implemented on 2026-07-18. Automatic
 retrospective capture and closed-loop learning remain deferred.
@@ -21,7 +21,7 @@ Implemented now:
   shadow diagnostics, and bounded assist-mode injection;
 - classic foreground CLI integration only, using a wire-only copy of the
   current user turn; unsupported frontends fail closed;
-- CLI governance through `hermes experience ...`; and
+- CLI governance through `marlow experience ...`; and
 - redaction and echo isolation for persistence, provider fallbacks, prompt
   caching, hooks, debug dumps, model reasoning state, tool-call arguments,
   and per-tool-call provider metadata.
@@ -44,19 +44,19 @@ lesson was injected, followed, or causally helpful.
 Typical validation rollout:
 
 ```text
-hermes experience policy set --project-root . --mode capture
-hermes experience add --project-root . \
+marlow experience policy set --project-root . --mode capture
+marlow experience add --project-root . \
   --title "Verify the real side effect" \
   --summary "Workload completion may not prove its external effect." \
   --applies-when "A background workload changes external state" \
   --does-not-apply-when "The task only creates an artifact" \
   --guidance "Verify both workload completion and the external state." \
   --rationale "A completed process can still miss the intended effect."
-hermes experience list --status candidate
-hermes experience approve <lesson-id>
-hermes experience policy set --project-root . --mode shadow
-hermes experience why --last
-hermes experience policy set --project-root . --mode assist
+marlow experience list --status candidate
+marlow experience approve <lesson-id>
+marlow experience policy set --project-root . --mode shadow
+marlow experience why --last
+marlow experience policy set --project-root . --mode assist
 ```
 
 The safe defaults are local-only. Sending a lesson to a remote model requires
@@ -65,7 +65,7 @@ that provider boundary.
 
 ## Executive decision
 
-Hermes should add a first-class, local **work experience** subsystem rather
+Marlow should add a first-class, local **work experience** subsystem rather
 than stretching conversation memory, session search, or skills into a role
 they were not designed to fill.
 
@@ -82,7 +82,7 @@ The recommended validation implementation is:
 - automatic retrieval once per supported user turn, scoped by profile-local
   owner, repository, and project/workspace;
 - ephemeral injection into the current API user-message copy, preserving
-  Hermes's prompt-cache invariant;
+  Marlow's prompt-cache invariant;
 - explicit `retrieved` diagnostics, while paired, externally verified outcomes
   remain the evidence needed to determine whether retrieval helped; and
 - a CLI-first inspection and governance surface.
@@ -98,7 +98,7 @@ for testing the idea.
 
 ### Why
 
-Hermes currently preserves conversations, facts, preferences, and procedures,
+Marlow currently preserves conversations, facts, preferences, and procedures,
 but it does not maintain a reliable body of evidence-backed work history. A
 future task therefore cannot reliably answer: what happened last time, which
 approach failed, what was verified, and whether the previous conclusion still
@@ -161,7 +161,7 @@ defines types, status, entities, confidence, provenance hashes, and
 supersession fields. Extraction at `agent/memory_cards.py:594-649` is
 deterministic and bounded, but it sees only user and final assistant text. It
 does not know which tools failed, what changed, or what was verified. All card
-and conflict options default off in `hermes_cli/config.py:1571-1598`. No
+and conflict options default off in `marlow_cli/config.py:1571-1598`. No
 bundled provider supplies a common canonical typed-card store, so the fallback
 serializes cards as text through `sync_turn`
 (`agent/memory_manager.py:471-515`). The model and tests are useful prior art;
@@ -169,21 +169,21 @@ the storage path is not.
 
 ### 2.2 Session database and search
 
-`hermes_state.py:233-315` defines profile-scoped SQLite tables for sessions,
+`marlow_state.py:233-315` defines profile-scoped SQLite tables for sessions,
 messages, generic metadata, and compression locks. Messages include content,
 tool calls, reasoning, and provider-specific reasoning fields. FTS5 and CJK
-trigram indexes are defined at `hermes_state.py:329-375`. WAL fallback and
-write-contention handling are mature (`hermes_state.py:167-210` and
-`hermes_state.py:385-448`).
+trigram indexes are defined at `marlow_state.py:329-375`. WAL fallback and
+write-contention handling are mature (`marlow_state.py:167-210` and
+`marlow_state.py:385-448`).
 
 `tools/session_search_tool.py:1-29` exposes discovery, scroll, and browse modes
 over actual stored messages. This is valuable supporting provenance, but its
 search cannot express the hard authorization and relevance filters needed for
-experience. `SessionDB.search_messages()` at `hermes_state.py:2964` primarily
+experience. `SessionDB.search_messages()` at `marlow_state.py:2964` primarily
 filters source/role, not principal, repository, task type, outcome, status, or
 confidence.
 
-The existing `workspace_key()` at `hermes_state.py:33-39` prefers a
+The existing `workspace_key()` at `marlow_state.py:33-39` prefers a
 `git_repo_root` field that the production session schema does not persist, then
 falls back to `cwd`. `run_agent.py:475-489` creates a session row without
 `cwd`. Some frontends update it later, but this is not a reliable project
@@ -191,7 +191,7 @@ identity. Work experience needs a dedicated scope resolver.
 
 ### 2.3 Agent-loop timing and prompt caching
 
-Hermes caches its assembled system prompt for a session
+Marlow caches its assembled system prompt for a session
 (`agent/agent_init.py:1006` and `agent/system_prompt.py:339`). Per-turn
 experience must not rebuild that prompt or mutate historical messages.
 
@@ -220,7 +220,7 @@ parsing rendered delimiters afterward is not an acceptable security boundary.
 
 ### 2.4 Completion, evidence, and lifecycle gaps
 
-Hermes has no generic, trustworthy "task succeeded and was verified" signal.
+Marlow has no generic, trustworthy "task succeeded and was verified" signal.
 `completed` at `agent/conversation_loop.py:4579-4584` means only that a final
 response exists, the API-call limit was not reached, and the loop did not set
 `failed`. It does not prove the intended result, a successful verification, or
@@ -260,9 +260,9 @@ That directly conflicts with selective, evidence-based lesson admission.
 ### 2.5 Current work, delegation, and alternate runtimes
 
 `tools/todo_tool.py:25-122` keeps current task state in memory and reconstructs
-it from the conversation when needed. `hermes_cli/goals.py:143-203` persists a
+it from the conversation when needed. `marlow_cli/goals.py:143-203` persists a
 standing goal under `state_meta["goal:<session_id>"]`. Repository contents,
-tests, Git state, and loaded AGENTS/HERMES instructions are also current truth.
+tests, Git state, and loaded AGENTS/MARLOW instructions are also current truth.
 None should be copied into historical experience merely because it exists.
 
 A session ID, user turn, tool `task_id`, and logical work task are currently
@@ -280,7 +280,7 @@ lessons. A synchronous child's safe outcome summary may be folded into its
 parent work record; background delegation correlation can follow later.
 
 `api_mode="codex_app_server"` returns into a separate runtime at
-`agent/conversation_loop.py:953-964` and bypasses much of the normal Hermes
+`agent/conversation_loop.py:953-964` and bypasses much of the normal Marlow
 tool and post-turn lifecycle. MVP0 must explicitly report that this runtime
 is unsupported rather than silently pretending it retrieved or captured
 experience.
@@ -298,8 +298,8 @@ trade-off is inappropriate at a long-term experience boundary. Experience
 needs a stricter, non-configurable storage redactor in addition to the shared
 helper.
 
-Profile isolation is already available through `get_hermes_home()`
-(`hermes_constants.py:43-100`). This is a storage boundary, but not a complete
+Profile isolation is already available through `get_marlow_home()`
+(`marlow_constants.py:43-100`). This is a storage boundary, but not a complete
 authorization boundary: one gateway profile may serve multiple users or group
 threads. MVP0 should therefore be classic local CLI only; other frontends fail
 closed until they supply the same raw-input, principal, cwd, and egress
@@ -309,7 +309,7 @@ contracts.
 
 ### In scope
 
-The feature should help Hermes make better choices on future work by retaining
+The feature should help Marlow make better choices on future work by retaining
 small, structured, evidence-backed records of:
 
 - what a meaningful task attempted;
@@ -404,7 +404,7 @@ It records:
 - optional expiry or review date.
 
 Assistant implementation choices remain inside the work record unless the user
-approves them as continuing constraints. Current AGENTS/HERMES files remain the
+approves them as continuing constraints. Current AGENTS/MARLOW files remain the
 authoritative current source when they already express a decision.
 
 Repository-derived decisions carry an anchor path plus a safe content hash.
@@ -422,7 +422,7 @@ Current state stays outside the experience database:
 - active plan: todo store;
 - standing objective: goals;
 - repository truth: files, Git, tests, dependencies;
-- current instructions: AGENTS/HERMES/context files; and
+- current instructions: AGENTS/MARLOW/context files; and
 - session continuity: messages and compression state.
 
 An unresolved historical issue may inform planning, but it must not silently
@@ -439,13 +439,13 @@ become a current todo.
 | Add logically separate experience tables to `state.db` | Fewest lifecycle changes; mature WAL/migration/retry/backup behavior; no new dependency | Same physical backup and maintenance unit as transcripts; requires disciplined non-cascading retention and a store facade | **Recommended for validation** |
 | Dedicated local SQLite `experience.db` | Independent maintenance, encryption, retention, export, and future synchronization boundary | A second plaintext file is not a confidentiality boundary by itself; duplicates/extracts SQLite infrastructure and expands backup/doctor/profile work | Split later only when a concrete boundary requires it |
 | Remote service or vector database | Shared workers and semantic retrieval | New trust, availability, deletion, tenancy, cost, and sync problems before value is proven | Defer; introduce behind the store interface only after local evidence |
-| Another embedded database | Potential specialized indexing | Adds dependency and operating model while SQLite is already proven in Hermes | No current justification |
+| Another embedded database | Potential specialized indexing | Adds dependency and operating model while SQLite is already proven in Marlow | No current justification |
 
 For the validation release, `ExperienceStore` should be a narrow facade over
 new experience tables in `state.db`. Session export, pruning, and deletion
 remain explicitly scoped to session/message tables; experience rows have no
 cascading foreign keys to them. This reuses the concurrency and backup behavior
-already exercised by Hermes without pretending that another plaintext SQLite
+already exercised by Marlow without pretending that another plaintext SQLite
 file creates a security boundary.
 
 The facade preserves an exit. Split into `experience.db` or a remote store only
@@ -473,7 +473,7 @@ clean user request + resolved scope
                    (current API message only)
                                |
                                v
-                normal Hermes tool loop
+                normal Marlow tool loop
                                |
                                v
                   retrieved diagnostic only
@@ -513,7 +513,7 @@ clean user request + resolved scope
 `ScopeResolver`
 
 - Produces profile-local principal, repository, project/workspace, and producer
-  identity from Hermes's logical runtime cwd, not process `os.getcwd()`.
+  identity from Marlow's logical runtime cwd, not process `os.getcwd()`.
   `agent/runtime_cwd.py:39` is the existing source of truth for per-session cwd.
 - Uses a privacy-safe profile-local hash of canonical
   `git rev-parse --git-common-dir` as the MVP repository authorization key, so
@@ -574,16 +574,16 @@ clean user request + resolved scope
 - Is disabled in MVP0. If later enabled, it uses explicit per-project consent
   and cannot send `local_only` or `blocked` material to a remote provider.
 
-`hermes experience`
+`marlow experience`
 
 - Provides list, inspect, approve, edit, retract, restore, delete, export, and
   influence-trace operations.
 
 ### 6.2 Storage boundary
 
-Experience tables are local to one Hermes profile inside that profile's
+Experience tables are local to one Marlow profile inside that profile's
 `state.db`. They are not stored in the project repository and are not mirrored
-to external memory providers. Multiple local Hermes workers using the same
+to external memory providers. Multiple local Marlow workers using the same
 profile may share them through existing SQLite concurrency, but principal,
 project, repository, and provider-egress filters still apply. Sharing one
 physical database with transcripts is an operational choice for validation,
@@ -973,11 +973,11 @@ seeded/approved versions of their lessons to validate retrieval and influence.
 
 ### 8.1 Successful task produces a reusable lesson
 
-1. The user asks Hermes to fix an intermittent subprocess test hang.
+1. The user asks Marlow to fix an intermittent subprocess test hang.
 2. No active lesson is retrieved.
-3. Hermes first changes a timeout; the test still hangs. The evidence ledger
+3. Marlow first changes a timeout; the test still hangs. The evidence ledger
    records a failed test verification without the raw log.
-4. Hermes observes that the child pipe is not drained, changes the read order,
+4. Marlow observes that the child pipe is not drained, changes the read order,
    and runs the focused test and relevant suite successfully.
 5. The work/novelty gates pass. With explicit reflection and provider-egress
    consent, the bounded reflector produces a work-record body plus the proposed
@@ -991,7 +991,7 @@ seeded/approved versions of their lessons to validate retrieval and influence.
 
 1. The user asks to add a known configuration key following an existing
    pattern.
-2. Hermes edits the expected file and runs the existing focused test.
+2. Marlow edits the expected file and runs the existing focused test.
 3. No nontrivial failure, correction, decision, or reusable evidence appears.
 4. The transient ledger is discarded. No work record and no lesson are
    retained (unless evaluation sampling or the user explicitly requested a
@@ -1004,7 +1004,7 @@ seeded/approved versions of their lessons to validate retrieval and influence.
 2. Hard filters admit the approved project-scoped lesson. Ranking reports exact
    failure-type and technology matches.
 3. The current API user-message copy receives the bounded lesson block.
-4. Hermes uses the recalled diagnostic order and inspects pipe-drain ordering
+4. Marlow uses the recalled diagnostic order and inspects pipe-drain ordering
    before changing timeouts.
 5. The observed tool sequence avoids the earlier failed
    approach, and verification passes.
@@ -1022,7 +1022,7 @@ claiming injection or application.
 1. A dependency upgrade changes subprocess capture behavior.
 2. The old lesson is retrieved and explicitly applied, but the focused check
    still fails.
-3. Hermes verifies that the dependency now closes streams differently and a
+3. Marlow verifies that the dependency now closes streams differently and a
    different procedure succeeds.
 4. The failed application creates counterevidence and a `contradicts` link.
    Because the dependency incompatibility was independently verified, this is
@@ -1039,9 +1039,9 @@ claiming injection or application.
 
 Default sharing boundary:
 
-`Hermes profile -> local-owner principal -> repository -> project/workspace -> provider-egress policy`
+`Marlow profile -> local-owner principal -> repository -> project/workspace -> provider-egress policy`
 
-- Profiles/roles remain isolated by `HERMES_HOME`.
+- Profiles/roles remain isolated by `MARLOW_HOME`.
 - MVP0 uses the literal sentinel `local-owner` inside the already isolated
   profile, never an OS username, path, email, or platform identifier. Classic
   CLI maps to this owner. TUI and every other runtime fail closed until they
@@ -1102,20 +1102,20 @@ The target interface should provide (MVP0 implements only `policy set`, `add`,
 `list`, `show`, `approve`, `edit`, `retract`, `delete --purge`, and `why`):
 
 ```text
-hermes experience list [--kind ...] [--status ...] [--scope ...]
-hermes experience show <id>
-hermes experience policy set --project-root <path> --injection <policy>
-hermes experience add --kind lesson --scope project
-hermes experience candidates
-hermes experience approve <id>
-hermes experience edit <id>
-hermes experience retract <id> --reason ...
-hermes experience restore <id>
-hermes experience promote <id> --scope profile
-hermes experience why [--last | --work <id>]
-hermes experience export --sanitized [--scope ...]  # post-MVP
-hermes experience delete <id> [--purge]
-hermes experience prune --dry-run
+marlow experience list [--kind ...] [--status ...] [--scope ...]
+marlow experience show <id>
+marlow experience policy set --project-root <path> --injection <policy>
+marlow experience add --kind lesson --scope project
+marlow experience candidates
+marlow experience approve <id>
+marlow experience edit <id>
+marlow experience retract <id> --reason ...
+marlow experience restore <id>
+marlow experience promote <id> --scope profile
+marlow experience why [--last | --work <id>]
+marlow experience export --sanitized [--scope ...]  # post-MVP
+marlow experience delete <id> [--purge]
+marlow experience prune --dry-run
 ```
 
 `show` and `why` display scope, sensitivity/egress, provenance, supporting and
@@ -1147,8 +1147,8 @@ and require explicit re-scoping on import. Deleting `state.db` does not delete
 previous exports.
 
 Journey and Curator provide useful interaction precedents:
-`hermes_cli/journey.py:228-338` has editor/confirmation flows, while
-`hermes_cli/curator.py:39-217` demonstrates status, dry-run, archive/restore,
+`marlow_cli/journey.py:228-338` has editor/confirmation flows, while
+`marlow_cli/curator.py:39-217` demonstrates status, dry-run, archive/restore,
 and rollback-oriented lifecycle controls.
 
 Deleting a source session should offer, not assume, deletion of linked work
@@ -1185,7 +1185,7 @@ correctness.
 
 MVP0 answers one question: **does a small set of approved, correctly scoped
 lessons improve later work?** It supports the classic local CLI primary agent
-in normal Hermes runtime only. One `run_conversation()` invocation is one work
+in normal Marlow runtime only. One `run_conversation()` invocation is one work
 attempt for telemetry; follow-ups are separate attempts.
 
 Modes:
@@ -1249,14 +1249,14 @@ New components:
   current turn's retrieval set;
 - `agent/experience/runtime.py` — origin gating, provider identity, once-per-
   turn recall, fallback reauthorization, and wire-only injection;
-- `hermes_cli/experience.py` — `policy set`, `add`, `list`, `show`, `approve`,
+- `marlow_cli/experience.py` — `policy set`, `add`, `list`, `show`, `approve`,
   `edit`, `retract`, `delete --purge`, and `why`; and
-- focused tests under `tests/agent/experience/`, `tests/hermes_cli/`, and
+- focused tests under `tests/agent/experience/`, `tests/marlow_cli/`, and
   `tests/run_agent/`.
 
 Existing modules changed:
 
-- `hermes_cli/config.py` — additive `experience` defaults; no config-format
+- `marlow_cli/config.py` — additive `experience` defaults; no config-format
   version bump is needed;
 - `cli.py` plus the `run_conversation` input boundary — pass explicit raw user
   request text separately from expanded attachments;
@@ -1264,7 +1264,7 @@ Existing modules changed:
 - `agent/conversation_loop.py` — once-per-turn cache-safe retrieval/injection;
 - `agent/memory_manager.py` and `agent/agent_runtime_helpers.py` — generic
   internal-context echo scrubbing at output/log boundaries;
-- `hermes_cli/main.py` — register the governance command.
+- `marlow_cli/main.py` — register the governance command.
 
 Experience is never double-written into `MemoryStore`, structured cards,
 skills, session search, Curator, or Journey. `MemoryManager` supplies only the
@@ -1422,7 +1422,7 @@ running, while logging only opaque metadata.
 ### Code ownership
 
 The `agent/experience/` package owns scope, safety, retrieval, and lifecycle.
-`hermes_state.py` owns only the shared physical schema/migration primitives.
+`marlow_state.py` owns only the shared physical schema/migration primitives.
 Memory providers, skills, context compression, and current-state mechanisms do
 not acquire experience-specific responsibilities.
 
@@ -1430,7 +1430,7 @@ not acquire experience-specific responsibilities.
 
 No todo, goal, compaction summary, session close, or repository observation is
 promoted merely because a turn ended. Current repository and instruction state
-remain authoritative, and disabling experience returns Hermes to its existing
+remain authoritative, and disabling experience returns Marlow to its existing
 behavior.
 
 ## 12. Risks and mitigations
@@ -1486,7 +1486,7 @@ behavior.
 ## 14. Recommendation summary
 
 Build a narrow local experiment, not a generalized memory platform. Preserve
-Hermes's existing divisions:
+Marlow's existing divisions:
 
 - memory for durable facts and preferences;
 - skills for mature procedures;
@@ -1496,7 +1496,7 @@ Hermes's existing divisions:
   and continuing decisions.
 
 The first question to answer is behavioral: does retrieving a few approved,
-project-scoped lessons help Hermes avoid a prior mistake or choose a better
+project-scoped lessons help Marlow avoid a prior mistake or choose a better
 first plan? MVP0 uses logically separate `state.db` tables, manual lessons,
 hard scope/egress filters, bounded injection, transparent attribution, and
 paired outcomes to answer that question before automatic capture is built.

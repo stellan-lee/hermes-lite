@@ -561,7 +561,7 @@ def test_cli_queue_accepts_marked_compression_parent_not_unrelated_child(
     monkeypatch, tmp_path
 ):
     import cli
-    from hermes_state import SessionDB
+    from marlow_state import SessionDB
 
     db = SessionDB(db_path=tmp_path / "state.db")
     db.create_session("parent", source="cli")

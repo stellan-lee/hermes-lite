@@ -33,7 +33,7 @@ def _reset_registry():
 
 @pytest.fixture
 def cfg_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
     return tmp_path
 
 
@@ -227,7 +227,7 @@ class _LegacyProvider(ImageGenProvider):
 class TestPluginDispatchImageToImage:
     def test_dispatch_forwards_image_url(self, cfg_home, monkeypatch):
         import tools.image_generation_tool as image_tool
-        from hermes_cli import plugins as plugins_module
+        from marlow_cli import plugins as plugins_module
         from agent import image_gen_registry as reg
 
         provider = _EditCapableProvider()
@@ -249,7 +249,7 @@ class TestPluginDispatchImageToImage:
 
     def test_dispatch_text_only_when_no_image(self, cfg_home, monkeypatch):
         import tools.image_generation_tool as image_tool
-        from hermes_cli import plugins as plugins_module
+        from marlow_cli import plugins as plugins_module
         from agent import image_gen_registry as reg
 
         provider = _EditCapableProvider()
@@ -266,7 +266,7 @@ class TestPluginDispatchImageToImage:
 
     def test_legacy_provider_edit_request_surfaces_clear_error(self, cfg_home, monkeypatch):
         import tools.image_generation_tool as image_tool
-        from hermes_cli import plugins as plugins_module
+        from marlow_cli import plugins as plugins_module
         from agent import image_gen_registry as reg
 
         provider = _LegacyProvider()
@@ -328,7 +328,7 @@ class _PluginBothProvider(ImageGenProvider):
 
 class TestDynamicSchema:
     def _no_discovery(self, monkeypatch):
-        import hermes_cli.plugins as plugins_module
+        import marlow_cli.plugins as plugins_module
         monkeypatch.setattr(plugins_module, "_ensure_plugins_discovered", lambda *a, **k: None)
 
     def test_fal_edit_model_advertises_both(self, cfg_home, monkeypatch):
