@@ -183,8 +183,12 @@ async def test_chatgpt_oauth_flow_and_persistence(tmp_path: Path):
                 f"{local_base}/.well-known/oauth-authorization-server"
             )
             assert discovery.status_code == 200
-            assert discovery.json()["token_endpoint_auth_methods_supported"] == ["none"]
-            assert discovery.json()["code_challenge_methods_supported"] == ["S256"]
+            discovery_payload = discovery.json()
+            assert discovery_payload["issuer"] == f"{PUBLIC_URL}/"
+            assert discovery_payload["token_endpoint_auth_methods_supported"] == [
+                "none"
+            ]
+            assert discovery_payload["code_challenge_methods_supported"] == ["S256"]
 
             oversized_registration = await client.post(
                 f"{local_base}/register",
@@ -203,7 +207,19 @@ async def test_chatgpt_oauth_flow_and_persistence(tmp_path: Path):
                 f"{local_base}/.well-known/oauth-protected-resource/mcp"
             )
             assert resource.status_code == 200
-            assert resource.json()["resource"] == RESOURCE_URL
+            resource_payload = resource.json()
+            assert resource_payload["resource"] == RESOURCE_URL
+            assert resource_payload["authorization_servers"] == [
+                discovery_payload["issuer"]
+            ]
+
+            root_resource = await client.get(
+                f"{local_base}/.well-known/oauth-protected-resource"
+            )
+            assert root_resource.status_code == 200
+            assert root_resource.json()["authorization_servers"] == [
+                discovery_payload["issuer"]
+            ]
 
             unauthenticated = await client.post(
                 service.endpoint,

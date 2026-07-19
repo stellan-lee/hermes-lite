@@ -106,6 +106,10 @@ class MarlowOAuthProvider:
     def __init__(self, *, database_path: Path, public_url: str, password: str):
         self.database_path = database_path
         self.public_url = public_url.rstrip("/")
+        # Pydantic's AnyHttpUrl canonicalizes an origin-only issuer with a
+        # trailing slash. Publish that exact identifier in every OAuth
+        # metadata document so strict RFC 8414 clients do not reject discovery.
+        self.issuer_url = f"{self.public_url}/"
         self.resource_url = f"{self.public_url}/mcp"
         self._password = password
         self._lock = threading.RLock()
@@ -649,7 +653,7 @@ def install_oauth_routes(server: Any, provider: MarlowOAuthProvider) -> None:
     @server.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
     async def authorization_metadata(_request: Request) -> Response:
         return _json_response({
-            "issuer": provider.public_url,
+            "issuer": provider.issuer_url,
             "authorization_endpoint": f"{provider.public_url}/authorize",
             "token_endpoint": f"{provider.public_url}/token",
             "registration_endpoint": f"{provider.public_url}/register",
@@ -665,7 +669,7 @@ def install_oauth_routes(server: Any, provider: MarlowOAuthProvider) -> None:
     async def protected_resource_metadata(_request: Request) -> Response:
         return _json_response({
             "resource": provider.resource_url,
-            "authorization_servers": [provider.public_url],
+            "authorization_servers": [provider.issuer_url],
             "scopes_supported": [MCP_OAUTH_SCOPE],
             "bearer_methods_supported": ["header"],
             "resource_name": "Marlow MCP",
