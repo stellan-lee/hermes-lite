@@ -1714,3 +1714,120 @@ an environment that lacks the locked project dependencies.
   `uv sync --extra dev`; the canonical test wrapper can now run.
 
 ---
+
+## [ERR-20260719-002] apply-patch-formatting
+
+**Logged**: 2026-07-19T08:57:28Z
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+
+A correction-log patch initially used malformed added lines.
+
+### Error
+
+```
+apply_patch verification failed: invalid hunk
+```
+
+### Context
+
+- Wrapped prose lines in an added block were missing the required `+` prefix.
+
+### Suggested Fix
+
+Prefix every added line in an update hunk and retry with stable context.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .learnings/LEARNINGS.md
+
+### Resolution
+
+- **Resolved**: 2026-07-19T08:57:28Z
+- **Notes**: Reissued the patch with valid added-line prefixes.
+
+---
+
+## [ERR-20260719-003] pytest-node-id-mismatch
+
+**Logged**: 2026-07-19T09:01:44Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+A targeted pytest node ID used the wrong test class and method names.
+
+### Error
+
+```
+ERROR: not found: tests/gateway/test_admin_approval_feature.py::TestAdminApprovalFeature::test_admin_route_overrides_yolo_mode_and_prior_grants
+```
+
+### Context
+
+- The actual class is `TestAdminApprovalQueue`.
+- The actual method is `test_admin_route_overrides_mode_off_yolo_and_prior_grants`.
+
+### Suggested Fix
+
+Resolve exact pytest node IDs with `rg` before invoking targeted tests.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: tests/gateway/test_admin_approval_feature.py
+
+### Resolution
+
+- **Resolved**: 2026-07-19T09:01:44Z
+- **Notes**: Corrected the node ID; the focused and broader suites passed.
+
+---
+
+## [ERR-20260719-004] hidden-error-log-replacement
+
+**Logged**: 2026-07-19T09:06:00Z
+**Priority**: high
+**Status**: resolved
+**Area**: docs
+
+### Summary
+
+Creating an absent hidden log file temporarily replaced a larger tracked file.
+
+### Error
+
+```
+git diff --stat reported 1,604 deleted lines from .learnings/ERRORS.md
+```
+
+### Context
+
+- `rg --files` omitted the hidden `.learnings` path.
+- The tracked file was absent from the worktree but present in `HEAD`.
+- An `Add File` patch therefore created a short replacement.
+- Final full-diff review caught the history loss before handoff.
+
+### Suggested Fix
+
+Before adding a hidden repository file, check both the worktree and `git ls-files`
+or `git show HEAD:<path>`. Always inspect the full diff before completion.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .learnings/ERRORS.md
+
+### Resolution
+
+- **Resolved**: 2026-07-19T09:06:00Z
+- **Notes**: Restored the complete tracked log from `HEAD` and appended only
+  the unique new entries.
+
+---
