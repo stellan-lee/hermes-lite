@@ -1630,3 +1630,48 @@ after mechanical pruning.
 - **Error:** `npm --prefix ui-tui run lint` reports 33 errors and 103 warnings across pre-existing renderer, markdown, config-sync, import-order, and React-compiler code. Most affected files are outside this cleanup, and the same rules flag unchanged lines in touched files.
 - **Resolution:** Kept the cleanup scoped; validated changed TUI behavior with a passing TypeScript type-check and targeted/full Vitest runs, and restored the package declaration entrypoint to its original formatting.
 - **Status:** Resolved
+
+## [ERR-20260719-001] scripts-run-tests-venv-discovery
+
+**Logged**: 2026-07-19T00:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The canonical test wrapper cannot run in a worktree without a local or shared
+Marlow virtual environment.
+
+### Error
+
+```
+error: no virtualenv found in <worktree>/.venv or <worktree>/venv
+```
+
+### Context
+
+- Attempted `scripts/run_tests.sh` with four focused test files.
+- Neither worktree-local candidate exists and
+  `~/.marlow/marlow-agent/venv` is also absent.
+- System `python3` can compile the changed modules but has no pytest install.
+
+### Suggested Fix
+
+Create the documented shared virtual environment, or make the wrapper's error
+message include the shared path it probes. Do not silently run the suite with
+an environment that lacks the locked project dependencies.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: scripts/run_tests.sh
+- See Also: ERR-20260717-002
+
+### Resolution
+
+- **Resolved**: 2026-07-19T00:00:00+08:00
+- **Notes**: Created the worktree-local `.venv` from the pinned lock with
+  `uv sync --extra dev`; the canonical test wrapper can now run.
+
+---
