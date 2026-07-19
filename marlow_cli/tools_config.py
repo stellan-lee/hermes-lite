@@ -190,7 +190,7 @@ def tools_command(args=None,first_install=False,config=None):
   from marlow_cli.curses_ui import curses_single_select
   choices=[PLATFORMS[x]["label"] for x in platforms]; has_mcp=bool(config.get("mcp_servers"))
   if has_mcp:choices.append("Configure MCP server tools")
-  choices.append("Done"); index=curses_single_select("Configure tools",choices,default=0)
+  choices.append("Done"); index=curses_single_select("Configure tools",choices,default_index=0)
   if index is None or index==len(choices)-1:return
   if has_mcp and index==len(choices)-2:_configure_mcp_tools_interactive(config); return
   targets=[platforms[index]]

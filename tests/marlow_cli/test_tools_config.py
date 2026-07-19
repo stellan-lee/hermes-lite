@@ -4,7 +4,7 @@ from unittest.mock import patch
 from marlow_cli.tools_config import (
     CONFIGURABLE_TOOLSETS, PLATFORMS, _DEFAULT_OFF_TOOLSETS,
     _get_platform_tools, _parse_enabled_flag, _platform_toolset_summary,
-    _save_platform_tools,
+    _save_platform_tools, tools_command,
 )
 
 
@@ -69,3 +69,21 @@ def test_enabled_flag_parser():
     assert _parse_enabled_flag("yes") is True
     assert _parse_enabled_flag("off") is False
     assert _parse_enabled_flag(None, default=False) is False
+
+
+def test_tools_command_uses_single_select_default_index():
+    captured = {}
+
+    def fake_single_select(title, items, default_index=0):
+        captured.update(title=title, items=items, default_index=default_index)
+        return len(items) - 1
+
+    with patch("marlow_cli.tools_config._get_enabled_platforms", return_value=["cli"]), \
+         patch("marlow_cli.curses_ui.curses_single_select", side_effect=fake_single_select):
+        tools_command(config={})
+
+    assert captured == {
+        "title": "Configure tools",
+        "items": [PLATFORMS["cli"]["label"], "Done"],
+        "default_index": 0,
+    }
