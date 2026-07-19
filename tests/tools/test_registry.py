@@ -47,6 +47,20 @@ class TestRegisterAndDispatch:
         result = json.loads(reg.dispatch("echo", {"msg": "hi"}))
         assert result == {"msg": "hi"}
 
+    def test_register_keeps_action_intent_metadata(self):
+        reg = ToolRegistry()
+        builder = lambda args: {"operation": args.get("operation", "update")}
+
+        reg.register(
+            name="mutate",
+            toolset="database",
+            schema=_make_schema("mutate"),
+            handler=_dummy_handler,
+            action_intent=builder,
+        )
+
+        assert reg.get_entry("mutate").action_intent is builder
+
 
 class TestGetDefinitions:
     def test_returns_openai_format(self):

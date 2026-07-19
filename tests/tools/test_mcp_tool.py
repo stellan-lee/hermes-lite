@@ -32,6 +32,39 @@ def _make_mcp_tool(name="read_file", description="Read a file", input_schema=Non
     return tool
 
 
+def test_mcp_mutation_annotations_create_action_intents():
+    from tools.mcp_tool import _mcp_action_intent_builder
+
+    destructive = _make_mcp_tool("delete_rows", "Deletes matching rows")
+    destructive.annotations = SimpleNamespace(destructiveHint=True)
+    mutating = _make_mcp_tool("set_device_state", "Changes a device state")
+    mutating.annotations = {"readOnlyHint": False}
+    read_only = _make_mcp_tool("get_device_state", "Reads a device state")
+    read_only.annotations = {"readOnlyHint": True}
+
+    destructive_builder = _mcp_action_intent_builder("postgres", destructive)
+    mutating_builder = _mcp_action_intent_builder("devices", mutating)
+
+    assert destructive_builder({"table": "events"}) == {
+        "action_type": "mcp.mutation",
+        "operation": "delete_rows",
+        "target": "MCP server postgres",
+        "reason": "The requested MCP operation changes external state.",
+        "impact": "Deletes matching rows",
+        "parameters": {"table": "events"},
+    }
+    assert mutating_builder({"device_id": "lock-7"})["operation"] == "set_device_state"
+    assert _mcp_action_intent_builder("devices", read_only) is None
+
+
+def test_absent_mcp_annotations_do_not_guess_mutation_from_tool_name():
+    from tools.mcp_tool import _mcp_action_intent_builder
+
+    tool = _make_mcp_tool("drop_database", "Sounds destructive but is unannotated")
+
+    assert _mcp_action_intent_builder("postgres", tool) is None
+
+
 def _make_call_result(text="file contents here", is_error=False):
     """Create a fake MCP CallToolResult."""
     block = SimpleNamespace(text=text)

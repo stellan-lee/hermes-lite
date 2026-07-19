@@ -791,6 +791,73 @@ def _coerce_boolean(value: str):
     return value
 
 
+def _authorize_registered_action_intent(
+    function_name: str,
+    function_args: Dict[str, Any],
+) -> Optional[str]:
+    """Approve a registered semantic action before its exact handler call.
+
+    Returns ``None`` when dispatch may continue, otherwise a JSON tool result
+    that blocks execution. Approval and dispatch stay in this one call stack,
+    so the model cannot approve one argument object and execute another.
+    """
+    entry = registry.get_entry(function_name)
+    if entry is None or entry.action_intent is None:
+        return None
+
+    try:
+        from tools.approval import (
+            is_admin_action_approval_enabled,
+            request_action_intent_approval,
+        )
+
+        if not is_admin_action_approval_enabled():
+            return None
+
+        from tools.action_intent import build_action_intent
+
+        intent = build_action_intent(
+            tool_name=function_name,
+            args=function_args,
+            builder=entry.action_intent,
+        )
+        if intent is None:
+            return None
+        decision = request_action_intent_approval(intent)
+    except Exception as exc:
+        logger.exception(
+            "Action-intent approval failed closed for tool %s", function_name
+        )
+        return json.dumps(
+            {
+                "error": (
+                    "Administrator action approval could not be evaluated: "
+                    f"{_sanitize_tool_error(str(exc))}"
+                ),
+                "status": "blocked",
+                "decision": "invalid_intent",
+                "approved": False,
+            },
+            ensure_ascii=False,
+        )
+
+    if decision.get("approved") is True:
+        return None
+    return json.dumps(
+        {
+            "error": decision.get(
+                "message",
+                "Administrator approval was not granted. Do not perform the action.",
+            ),
+            "status": "blocked",
+            "decision": decision.get("decision", "denied"),
+            "request_id": decision.get("request_id"),
+            "approved": False,
+        },
+        ensure_ascii=False,
+    )
+
+
 def handle_function_call(
     function_name: str,
     function_args: Dict[str, Any],
@@ -933,6 +1000,13 @@ def handle_function_call(
 
             if block_message is not None:
                 return json.dumps({"error": block_message}, ensure_ascii=False)
+
+        action_approval_block = _authorize_registered_action_intent(
+            function_name,
+            function_args,
+        )
+        if action_approval_block is not None:
+            return action_approval_block
 
         # Notify the read-loop tracker when a non-read/search tool runs,
         # so the *consecutive* counter resets (reads after other work are fine).

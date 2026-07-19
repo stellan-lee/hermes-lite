@@ -161,7 +161,10 @@ class TestAdminApprovalQueue:
         second.start()
 
         assert payloads_ready.wait(timeout=3)
-        by_action = {payload["command"]: payload for payload in payloads}
+        by_action = {
+            payload["action_intent"]["operation"]: payload
+            for payload in payloads
+        }
         first_id = by_action["first action"]["request_id"]
         second_id = by_action["second action"]["request_id"]
         assert first_id != second_id
@@ -279,6 +282,8 @@ class TestAdminApprovalQueue:
         assert result["approved"] is True
         assert result["user_approved"] is True
         assert len(seen) == 1
+        assert seen[0]["kind"] == "action_intent"
+        assert seen[0]["action_intent"]["action_type"] == "terminal.execute"
 
     def test_admin_route_overrides_smart_auto_approval_for_execute_code(self):
         from tools import approval
@@ -317,6 +322,8 @@ class TestAdminApprovalQueue:
         assert result["approved"] is True
         assert result["user_approved"] is True
         assert len(seen) == 1
+        assert seen[0]["kind"] == "action_intent"
+        assert seen[0]["action_intent"]["action_type"] == "code.execute"
         smart.assert_not_called()
 
     def test_admin_mode_overrides_yolo_mode_off_and_prior_grants(self):
@@ -391,6 +398,35 @@ class TestAdminApprovalRouting:
                 origin_metadata=None,
                 kind="admin_action",
             )
+
+    def test_action_intent_uses_action_title_and_never_falls_back(self):
+        runner = _runner(AdminApprovalConfig(enabled=False))
+
+        with pytest.raises(RuntimeError, match="not enabled"):
+            runner._resolve_approval_delivery_route(
+                origin_adapter=_Adapter(),
+                origin_chat_id="requester-chat",
+                origin_metadata=None,
+                kind="action_intent",
+            )
+
+        runner = _runner(
+            AdminApprovalConfig(
+                enabled=True,
+                platform=Platform.SLACK,
+                user_id="U_ADMIN",
+                chat_id="C_ADMIN",
+            )
+        )
+        runner.adapters = {Platform.SLACK: _Adapter()}
+        route = runner._resolve_approval_delivery_route(
+            origin_adapter=_Adapter(),
+            origin_chat_id="requester-chat",
+            origin_metadata=None,
+            kind="action_intent",
+        )
+
+        assert route["title"] == "Action Approval Required"
 
     def test_enabled_incomplete_route_fails_closed(self):
         runner = _runner(

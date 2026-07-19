@@ -159,7 +159,8 @@ VALID_HOOKS: Set[str] = {
     #
     # Kwargs for pre_approval_request:
     #   command: str, description: str, pattern_key: str, pattern_keys: list[str],
-    #   session_key: str, surface: "cli" | "gateway"
+    #   session_key: str, surface: "cli" | "gateway", and optional
+    #   action_intent: dict for structured administrator action approvals.
     # Kwargs for post_approval_response: same as above plus
     #   choice: "once" | "session" | "always" | "deny" | "timeout"
     "pre_approval_request",
@@ -325,6 +326,7 @@ class PluginContext:
         description: str = "",
         emoji: str = "",
         override: bool = False,
+        action_intent: Callable[[dict], dict | None] | dict | None = None,
     ) -> None:
         """Register a tool in the global registry **and** track it as plugin-provided.
 
@@ -332,6 +334,11 @@ class PluginContext:
         same name (e.g. swap the default ``browser_navigate`` for a custom
         CDP-backed implementation). Without it, attempting to register a name
         already claimed by a different toolset is rejected.
+
+        ``action_intent`` opts a side-effecting tool into execution-bound
+        administrator approval. It may be a static mapping or a callable that
+        receives the exact tool arguments and returns a semantic intent. A
+        callable may return ``None`` for read-only operations.
         """
         from tools.registry import registry
 
@@ -345,6 +352,7 @@ class PluginContext:
             is_async=is_async,
             description=description,
             emoji=emoji,
+            action_intent=action_intent,
             override=override,
         )
         self._manager._plugin_tool_names.add(name)
