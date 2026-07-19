@@ -127,7 +127,9 @@ class TestCmdUpdateBranchFallback:
 
         cmd_update(mock_args)
 
-        commands = [" ".join(str(a) for a in c.args[0]) for c in mock_run.call_args_list]
+        commands = [
+            " ".join(str(a) for a in c.args[0]) for c in mock_run.call_args_list
+        ]
 
         # rev-list should use origin/main, not origin/fix/stoicneko
         rev_list_cmds = [c for c in commands if "rev-list" in c]
@@ -182,28 +184,19 @@ class TestCmdUpdateBranchFallback:
 
     @patch("shutil.which", return_value=None)
     @patch("subprocess.run")
-    def test_update_on_fork_checks_upstream_when_origin_up_to_date(
+    def test_update_does_not_probe_for_forks_when_origin_is_up_to_date(
         self, mock_run, _mock_which, mock_args, capsys
     ):
-        """Regression for issue #26172: forks whose local HEAD already matches
-        origin/main must still consult upstream/main before printing
-        "Already up to date!" — otherwise a fork that's caught up to its own
-        origin but behind the canonical Marlow repository silently misses updates.
-        """
-        from marlow_cli import main as hm
-
+        """Updates follow origin without classifying or syncing fork remotes."""
         mock_run.side_effect = _make_run_side_effect(
             branch="main", verify_ok=True, commit_count="0"
         )
 
-        with patch.object(
-            hm,
-            "_get_origin_url",
-            return_value="https://github.com/example/marlow-agent.git",
-        ), patch.object(hm, "_sync_with_upstream_if_needed") as sync_mock:
-            cmd_update(mock_args)
+        cmd_update(mock_args)
 
-        sync_mock.assert_called_once_with(["git"], PROJECT_ROOT)
+        commands = [" ".join(str(a) for a in c.args[0]) for c in mock_run.call_args_list]
+        assert not any("remote get-url" in command for command in commands)
+        assert not any("upstream" in command for command in commands)
         captured = capsys.readouterr()
         assert "Already up to date!" in captured.out
 
@@ -621,7 +614,6 @@ class TestCmdUpdateCheckBranchFlag:
         *,
         verify_ok: bool = True,
         commit_count: str = "0",
-        upstream_fetch_ok: bool = True,
     ):
         """Mock side-effect for the _cmd_update_check git pipeline.
 
@@ -630,17 +622,10 @@ class TestCmdUpdateCheckBranchFlag:
                                  origin/<branch>`` fails (branch missing
                                  on origin)
         - ``commit_count``       rev-list count (0 = up-to-date)
-        - ``upstream_fetch_ok``  if False, ``git fetch upstream`` fails
-                                 (forces fallback to origin on branch==main)
         """
 
         def side_effect(cmd, **kwargs):
             joined = " ".join(str(c) for c in cmd)
-
-            if "fetch" in joined and "upstream" in joined:
-                rc = 0 if upstream_fetch_ok else 128
-                err = "" if upstream_fetch_ok else "fatal: 'upstream' does not appear to be a git repository\n"
-                return subprocess.CompletedProcess(cmd, rc, stdout="", stderr=err)
 
             if "fetch" in joined and "origin" in joined:
                 return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -670,7 +655,7 @@ class TestCmdUpdateCheckBranchFlag:
         cmd_update(args)
 
         commands = [" ".join(str(a) for a in c.args[0]) for c in mock_run.call_args_list]
-        # Non-main branch skips upstream probe entirely.
+        # Every branch checks its matching origin ref directly.
         assert not any("fetch" in c and "upstream" in c for c in commands), commands
         # Verify and rev-list both target origin/bb/gui.
         verify_cmds = [c for c in commands if "rev-parse" in c and "--verify" in c]
@@ -712,10 +697,10 @@ class TestCmdUpdateCheckBranchFlag:
 
     @patch("marlow_cli.config.detect_install_method", return_value="git")
     @patch("subprocess.run")
-    def test_check_default_main_still_prefers_upstream(
+    def test_check_default_main_uses_origin(
         self, mock_run, _mock_method, capsys
     ):
-        """No --branch (or --branch=None) preserves the upstream-then-origin probe."""
+        """No --branch (or --branch=None) checks origin/main directly."""
         mock_run.side_effect = self._check_side_effect(
             target_branch="main", verify_ok=True, commit_count="0"
         )
@@ -724,11 +709,10 @@ class TestCmdUpdateCheckBranchFlag:
         cmd_update(args)
 
         commands = [" ".join(str(a) for a in c.args[0]) for c in mock_run.call_args_list]
-        # Should have tried upstream first.
-        assert any("fetch" in c and "upstream" in c for c in commands), commands
-        # Compare ref is upstream/main (upstream fetch succeeded).
+        assert any("fetch" in c and "origin" in c for c in commands), commands
+        assert not any("upstream" in c for c in commands), commands
         rev_list_cmds = [c for c in commands if "rev-list" in c]
-        assert any("upstream/main" in c for c in rev_list_cmds), rev_list_cmds
+        assert any("origin/main" in c for c in rev_list_cmds), rev_list_cmds
 
     @patch("marlow_cli.config.detect_install_method", return_value="pip")
     @patch("marlow_cli.banner.check_via_pypi", return_value=0)

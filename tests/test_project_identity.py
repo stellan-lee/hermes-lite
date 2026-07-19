@@ -29,15 +29,6 @@ def test_primary_install_surfaces_use_canonical_repository():
     assert 'REPO_URL_SSH="git@github.com:stellan-lee/Marlow.git"' in installer
 
 
-def test_update_logic_recognizes_canonical_repository():
-    from marlow_cli.main import _is_fork
-
-    assert _is_fork("https://github.com/stellan-lee/Marlow.git") is False
-    assert _is_fork("https://github.com/stellan-lee/Marlow") is False
-    assert _is_fork("git@github.com:stellan-lee/Marlow.git") is False
-    assert _is_fork("https://github.com/example/Marlow.git") is True
-
-
 def test_removed_project_endpoints_do_not_return():
     forbidden = (
         "github.com/NousResearch/marlow-agent",
