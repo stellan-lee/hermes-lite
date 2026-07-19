@@ -1585,6 +1585,9 @@ def check_all_command_guards(command: str, env_type: str,
                     "kind": "action_intent",
                     "action": terminal_intent.summary(),
                     "command": terminal_intent.summary(),
+                    "description": (
+                        f"{terminal_intent.reason}\nImpact: {terminal_intent.impact}"
+                    ),
                     "action_intent": terminal_intent.to_dict(),
                     "allowed_choices": ["once", "deny"],
                     "request_scoped_only": True,
@@ -1880,6 +1883,7 @@ def check_execute_code_guard(code: str, env_type: str) -> dict:
             "kind": "action_intent",
             "action": code_intent.summary(),
             "command": code_intent.summary(),
+            "description": f"{code_intent.reason}\nImpact: {code_intent.impact}",
             "action_intent": code_intent.to_dict(),
             "allowed_choices": ["once", "deny"],
             "request_scoped_only": True,

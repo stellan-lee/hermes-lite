@@ -284,6 +284,11 @@ class TestAdminApprovalQueue:
         assert len(seen) == 1
         assert seen[0]["kind"] == "action_intent"
         assert seen[0]["action_intent"]["action_type"] == "terminal.execute"
+        assert seen[0]["action"].startswith("Action: execute terminal command")
+        assert not seen[0]["action"].lstrip().startswith("{")
+        assert "Impact: The command was flagged as capable of changing" in seen[0][
+            "description"
+        ]
 
     def test_admin_route_overrides_smart_auto_approval_for_execute_code(self):
         from tools import approval
@@ -324,6 +329,8 @@ class TestAdminApprovalQueue:
         assert len(seen) == 1
         assert seen[0]["kind"] == "action_intent"
         assert seen[0]["action_intent"]["action_type"] == "code.execute"
+        assert seen[0]["action"].startswith("Action: execute Python code")
+        assert "Impact: The script can spawn processes" in seen[0]["description"]
         smart.assert_not_called()
 
     def test_admin_mode_overrides_yolo_mode_off_and_prior_grants(self):

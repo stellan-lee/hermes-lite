@@ -57,6 +57,31 @@ def test_action_intent_binds_exact_arguments_and_redacts_secrets():
     assert intent.parameters["table"] == "devices"
 
 
+def test_action_intent_summary_is_human_readable():
+    intent = build_action_intent(
+        tool_name="terminal",
+        args={"command": "python3 - <<'PY'\nprint('ok')\nPY", "environment": "local"},
+        builder={
+            "action_type": "terminal.execute",
+            "operation": "execute terminal command",
+            "target": "local terminal environment",
+            "reason": "A security warning requires review.",
+            "impact": "The command may change local state.",
+        },
+    )
+
+    summary = intent.summary()
+
+    assert summary.startswith("Action: execute terminal command")
+    assert not summary.lstrip().startswith("{")
+    assert "Type: terminal.execute" in summary
+    assert "Target: local terminal environment" in summary
+    assert "command:\n    python3 - <<'PY'\n    print('ok')\n    PY" in summary
+    assert "\\n" not in summary
+    assert "environment: local" in summary
+    assert f"Request digest: {intent.argument_digest}" in summary
+
+
 def test_registered_action_is_approved_before_the_same_arguments_execute(monkeypatch):
     name = "test_device_action_intent_approved"
     executed = []
