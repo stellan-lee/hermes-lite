@@ -10,7 +10,9 @@ Matches OpenClaw's 9-tool MCP channel bridge surface:
   events_poll, events_wait, messages_send, permissions_list_open,
   permissions_respond
 
-Plus: channels_list (Marlow-specific extra)
+Plus: channels_list and seven Work Experience tools:
+  experience_recall, experience_list, experience_show, experience_add,
+  experience_approve, experience_edit, experience_retract
 
 Usage:
     marlow mcp serve
@@ -460,11 +462,16 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         instructions=(
             "Marlow Agent messaging bridge. Use these tools to interact with "
             "conversations across Telegram, Discord, Slack, Feishu, email, "
-            "webhooks, and plugin-provided platforms."
+            "webhooks, and plugin-provided platforms, and to recall and manage "
+            "Work Experience for the current project."
         ),
     )
 
     bridge = event_bridge or EventBridge()
+
+    from agent.transports.work_experience_mcp import register_work_experience_tools
+
+    register_work_experience_tools(mcp)
 
     # -- conversations_list ------------------------------------------------
 
