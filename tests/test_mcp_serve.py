@@ -232,7 +232,7 @@ class _FakeFastMCP:
     def __init__(self, *args, **kwargs):
         self._tool_manager = _FakeToolManager()
 
-    def tool(self):
+    def tool(self, **_kwargs):
         def decorator(fn):
             self._tool_manager.add_tool(fn)
             return fn
@@ -868,6 +868,324 @@ class TestE2EChannelsList:
         assert result["channels"][0]["target"] == "discord:789"
 
 
+class TestWorkExperienceRecall:
+    @staticmethod
+    def _seed_lessons(tmp_path, monkeypatch):
+        from agent.experience.models import LessonBody
+        from agent.experience.scope import ScopeResolver
+        from agent.experience.store import ExperienceStore
+        import agent.transports.work_experience_mcp as mcp_serve
+
+        profile = (tmp_path / "experience-profile").resolve()
+        project = (tmp_path / "experience-project").resolve()
+        profile.mkdir()
+        project.mkdir()
+        db_path = profile / "state.db"
+        resolver = ScopeResolver(str(profile))
+        policy = resolver.make_workspace_policy(
+            project,
+            capture_allowed=True,
+            recall_allowed=True,
+            injection_allowed=True,
+            max_egress_policy="explicit_any_provider",
+        )
+        with ExperienceStore(db_path) as store:
+            store.upsert_scope_policy(**policy.to_dict())
+            for item_id, guidance, sensitivity, egress in (
+                (
+                    "lesson-shareable",
+                    "Use bounded random jitter for SQLite writer retries.",
+                    "normal",
+                    "explicit_any_provider",
+                ),
+                (
+                    "lesson-local-secret",
+                    "LOCAL_ONLY_SENTINEL must never leave the profile.",
+                    "local_only",
+                    "local_only",
+                ),
+            ):
+                lesson = store.create_lesson(
+                    item_id=item_id,
+                    principal_id=policy.principal_id,
+                    scope_type="project",
+                    scope_id=policy.project_id,
+                    repository_id=policy.repository_id,
+                    project_id=policy.project_id,
+                    title="Handle SQLite writer contention",
+                    summary="Retry lock contention without synchronized waits.",
+                    body=LessonBody(
+                        applies_when="SQLite reports database is locked",
+                        guidance=guidance,
+                        rationale="Synchronized retries form a writer convoy.",
+                    ),
+                    tags={"technology": ["sqlite"]},
+                    confidence=0.9,
+                    sensitivity=sensitivity,
+                    egress_policy=egress,
+                )
+                store.approve_lesson(lesson["id"], reason="fixture approval")
+
+        monkeypatch.setattr(mcp_serve, "_get_state_db_path", lambda: db_path)
+        monkeypatch.setattr(mcp_serve, "_get_project_root", lambda: project)
+        monkeypatch.setattr(
+            "marlow_cli.config.load_config",
+            lambda: {"experience": {"mode": "assist"}},
+        )
+
+    def test_recall_returns_only_explicit_any_provider_lessons(
+        self, tmp_path, monkeypatch
+    ):
+        import agent.transports.work_experience_mcp as mcp_serve
+
+        self._seed_lessons(tmp_path, monkeypatch)
+        result = json.loads(
+            mcp_serve.recall_work_experience(
+                "Fix SQLite database locked writer contention",
+                technologies=["sqlite"],
+            )
+        )
+
+        assert result["status"] == "ok"
+        assert result["count"] == 1
+        assert "bounded random jitter" in result["context"]
+        assert "LOCAL_ONLY_SENTINEL" not in result["context"]
+        assert result["retrieval_ref"].startswith("retrieval_")
+
+    def test_mcp_tool_delegates_to_safe_recall_boundary(
+        self, mcp_server_e2e, _event_loop, monkeypatch
+    ):
+        import agent.transports.work_experience_mcp as experience_mcp
+
+        recall = MagicMock(
+            return_value=json.dumps(
+                {"status": "ok", "count": 0, "context": ""}
+            )
+        )
+        monkeypatch.setattr(experience_mcp, "recall_work_experience", recall)
+        server, _ = mcp_server_e2e
+
+        result = _run_tool(
+            server,
+            "experience_recall",
+            {
+                "query": "Investigate SQLite contention",
+                "technologies": ["sqlite"],
+                "limit": 2,
+            },
+        )
+
+        assert result["status"] == "ok"
+        recall.assert_called_once_with(
+            "Investigate SQLite contention",
+            task_types=None,
+            technologies=["sqlite"],
+            entities=None,
+            failure_fingerprints=None,
+            limit=2,
+        )
+
+    def test_recall_requires_global_assist_mode(self, tmp_path, monkeypatch):
+        import agent.transports.work_experience_mcp as mcp_serve
+
+        missing_db = (tmp_path / "must-not-be-created" / "state.db").resolve()
+        monkeypatch.setattr(mcp_serve, "_get_state_db_path", lambda: missing_db)
+        monkeypatch.setattr(
+            "marlow_cli.config.load_config",
+            lambda: {"experience": {"mode": "shadow"}},
+        )
+
+        result = json.loads(mcp_serve.recall_work_experience("some task"))
+
+        assert result == {
+            "status": "unavailable",
+            "count": 0,
+            "context": "",
+            "reason": "Work Experience assist mode is not enabled.",
+        }
+        assert not missing_db.exists()
+
+    def test_recall_rejects_empty_query_without_opening_database(
+        self, tmp_path, monkeypatch
+    ):
+        import agent.transports.work_experience_mcp as mcp_serve
+
+        missing_db = (tmp_path / "must-not-be-created" / "state.db").resolve()
+        monkeypatch.setattr(
+            mcp_serve, "_get_state_db_path", lambda: missing_db
+        )
+
+        result = json.loads(mcp_serve.recall_work_experience("   "))
+
+        assert result == {
+            "status": "invalid_request",
+            "count": 0,
+            "context": "",
+            "reason": "A non-empty current-task query is required.",
+        }
+        assert not missing_db.exists()
+
+    def test_recall_failure_does_not_disclose_project_path(self, tmp_path, monkeypatch):
+        import agent.transports.work_experience_mcp as mcp_serve
+
+        secret_root = (tmp_path / "sensitive-customer-name").resolve()
+        missing_db = (tmp_path / "missing-profile" / "state.db").resolve()
+        monkeypatch.setattr(mcp_serve, "_get_state_db_path", lambda: missing_db)
+        monkeypatch.setattr(mcp_serve, "_get_project_root", lambda: secret_root)
+        monkeypatch.setattr(
+            "marlow_cli.config.load_config",
+            lambda: {"experience": {"mode": "assist"}},
+        )
+
+        result = json.loads(mcp_serve.recall_work_experience("some task"))
+
+        assert result["status"] == "error"
+        assert "sensitive-customer-name" not in json.dumps(result)
+        assert not missing_db.exists()
+
+    def test_management_lifecycle(self, tmp_path, monkeypatch):
+        import agent.transports.work_experience_mcp as experience_mcp
+
+        self._seed_lessons(tmp_path, monkeypatch)
+        created = json.loads(
+            experience_mcp.add_work_experience(
+                title="Prefer bounded retries",
+                summary="Avoid synchronized retries under lock contention.",
+                applies_when="Concurrent SQLite writers contend",
+                guidance="Use bounded jitter between retries.",
+                rationale="Fixed delays create synchronized retry waves.",
+                technologies=["sqlite"],
+                sensitivity="normal",
+                egress_policy="explicit_any_provider",
+            )
+        )
+        lesson_id = created["lesson"]["id"]
+        assert created["lesson"]["status"] == "candidate"
+        assert created["lesson"]["created_by"] == "agent"
+
+        listed = json.loads(
+            experience_mcp.list_work_experience(statuses=["candidate"])
+        )
+        assert lesson_id in {lesson["id"] for lesson in listed["lessons"]}
+
+        shown = json.loads(experience_mcp.show_work_experience(lesson_id))
+        assert shown["lesson"]["revision"]["body"]["guidance"] == (
+            "Use bounded jitter between retries."
+        )
+
+        approved = json.loads(
+            experience_mcp.approve_work_experience(
+                lesson_id,
+                reason="Reviewed through the MCP management workflow",
+            )
+        )
+        assert approved["lesson"]["status"] == "active"
+
+        edited = json.loads(
+            experience_mcp.edit_work_experience(
+                lesson_id,
+                reason="Clarify the retry ceiling",
+                guidance="Use bounded jitter and stop after the configured ceiling.",
+                task_types=["persistence"],
+            )
+        )
+        assert edited["changed"] is True
+        assert edited["lesson"]["current_revision"] == 2
+        assert edited["lesson"]["revision"]["editor"] == "mcp-client"
+        assert "configured ceiling" in (
+            edited["lesson"]["revision"]["body"]["guidance"]
+        )
+
+        retracted = json.loads(
+            experience_mcp.retract_work_experience(
+                lesson_id,
+                reason="Superseded by repository-specific guidance",
+            )
+        )
+        assert retracted["lesson"]["status"] == "retracted"
+
+    def test_management_redacts_local_only_content(self, tmp_path, monkeypatch):
+        import agent.transports.work_experience_mcp as experience_mcp
+
+        self._seed_lessons(tmp_path, monkeypatch)
+        listed = json.loads(experience_mcp.list_work_experience())
+        local = next(
+            lesson
+            for lesson in listed["lessons"]
+            if lesson["id"] == "lesson-local-secret"
+        )
+        assert local["content_available"] is False
+        assert "title" not in local
+
+        shown = json.loads(
+            experience_mcp.show_work_experience("lesson-local-secret")
+        )
+        assert shown["lesson"]["content_available"] is False
+        assert "revision" not in shown["lesson"]
+        assert "LOCAL_ONLY_SENTINEL" not in json.dumps(shown)
+
+    def test_management_rejects_cross_project_item(self, tmp_path, monkeypatch):
+        from agent.experience.models import LessonBody
+        from agent.experience.scope import ScopeResolver
+        from agent.experience.store import ExperienceStore
+        import agent.transports.work_experience_mcp as experience_mcp
+
+        self._seed_lessons(tmp_path, monkeypatch)
+        db_path = experience_mcp._get_state_db_path()
+        profile = db_path.parent
+        other_project = (tmp_path / "other-sensitive-project").resolve()
+        other_project.mkdir()
+        resolver = ScopeResolver(str(profile))
+        other_policy = resolver.make_workspace_policy(
+            other_project,
+            capture_allowed=True,
+            recall_allowed=True,
+            injection_allowed=True,
+            max_egress_policy="explicit_any_provider",
+        )
+        with ExperienceStore(db_path) as store:
+            store.upsert_scope_policy(**other_policy.to_dict())
+            item = store.create_lesson(
+                item_id="lesson-other-project",
+                principal_id=other_policy.principal_id,
+                scope_type="project",
+                scope_id=other_policy.project_id,
+                repository_id=other_policy.repository_id,
+                project_id=other_policy.project_id,
+                title="OTHER_PROJECT_SENTINEL",
+                body=LessonBody(
+                    applies_when="another project is active",
+                    guidance="Do not disclose this cross-project lesson.",
+                    rationale="Project scope is an authorization boundary.",
+                ),
+                sensitivity="normal",
+                egress_policy="explicit_any_provider",
+            )
+            store.approve_lesson(item["id"], reason="fixture approval")
+
+        result = json.loads(
+            experience_mcp.show_work_experience("lesson-other-project")
+        )
+        assert result["status"] == "error"
+        assert "OTHER_PROJECT_SENTINEL" not in json.dumps(result)
+        assert "other-sensitive-project" not in json.dumps(result)
+
+    def test_management_tool_annotations(self, mcp_server_e2e, _event_loop):
+        server, _ = mcp_server_e2e
+        tools = {
+            tool.name: tool for tool in server._tool_manager.list_tools()
+        }
+
+        assert tools["experience_recall"].annotations.readOnlyHint is False
+        assert tools["experience_recall"].annotations.idempotentHint is False
+        assert tools["experience_list"].annotations.readOnlyHint is True
+        assert tools["experience_show"].annotations.readOnlyHint is True
+        assert tools["experience_add"].annotations.readOnlyHint is False
+        assert tools["experience_approve"].annotations.destructiveHint is False
+        assert tools["experience_edit"].annotations.idempotentHint is False
+        assert tools["experience_retract"].annotations.destructiveHint is True
+
+
 class TestE2EPermissions:
     def test_list_empty(self, mcp_server_e2e, _event_loop):
         server, _ = mcp_server_e2e
@@ -920,7 +1238,7 @@ class TestE2EPermissions:
 
 
 # ---------------------------------------------------------------------------
-# 4. TOOL LISTING — verify all 10 tools are registered
+# 4. TOOL LISTING — verify all 17 tools are registered
 # ---------------------------------------------------------------------------
 
 class TestToolRegistration:
@@ -933,6 +1251,9 @@ class TestToolRegistration:
             "conversations_list", "conversation_get", "messages_read",
             "attachments_fetch", "events_poll", "events_wait",
             "messages_send", "channels_list",
+            "experience_recall", "experience_list", "experience_show",
+            "experience_add", "experience_approve", "experience_edit",
+            "experience_retract",
             "permissions_list_open", "permissions_respond",
         }
         assert expected == tool_names, f"Missing: {expected - tool_names}, Extra: {tool_names - expected}"

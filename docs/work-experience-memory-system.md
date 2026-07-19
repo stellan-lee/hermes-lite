@@ -19,8 +19,11 @@ Implemented now:
   consent filters before lesson text is returned;
 - explainable structured/FTS5 recall with realistic term-overlap matching,
   shadow diagnostics, and bounded assist-mode injection;
-- classic foreground CLI integration only, using a wire-only copy of the
-  current user turn; unsupported frontends fail closed;
+- classic foreground CLI automatic integration, using a wire-only copy of the
+  current user turn;
+- project-scoped MCP recall and lesson management through `marlow mcp serve`,
+  with explicit tool annotations and external-boundary content filtering;
+  unsupported automatic-injection frontends fail closed;
 - CLI governance through `marlow experience ...`; and
 - redaction and echo isolation for persistence, provider fallbacks, prompt
   caching, hooks, debug dumps, model reasoning state, tool-call arguments,
@@ -62,6 +65,27 @@ marlow experience policy set --project-root . --mode assist
 The safe defaults are local-only. Sending a lesson to a remote model requires
 both a project policy and item-level egress settings that explicitly permit
 that provider boundary.
+
+The MCP server cannot attest which model provider receives a tool result, so
+`experience_recall` treats its caller as an unknown remote provider. It returns
+only active lessons created with `--egress explicit_any_provider` under a
+project policy whose maximum egress is also `explicit_any_provider`.
+
+The same server exposes `experience_list`, `experience_show`,
+`experience_add`, `experience_approve`, `experience_edit`, and
+`experience_retract`. Every operation is fixed to the server process's current
+project. MCP-created candidates record `created_by=agent`, and lifecycle/edit
+events record `mcp-client` as their audit actor. List/show/mutation responses
+include lesson text only when assist mode plus project and item egress policy
+authorize disclosure to the unknown remote boundary; otherwise they return
+opaque management metadata. Physical purge and project-policy mutation remain
+CLI-only.
+
+`experience_recall` is annotated as a non-destructive mutation because it
+records a new text-free retrieval diagnostic. `experience_list` and
+`experience_show` are read-only; add/approve/edit are non-destructive
+mutations; retract is a destructive logical lifecycle change that retains
+inspectable history.
 
 ## Executive decision
 
@@ -1184,9 +1208,11 @@ correctness.
 ### 10.1 MVP0: validate retrieval before capture
 
 MVP0 answers one question: **does a small set of approved, correctly scoped
-lessons improve later work?** It supports the classic local CLI primary agent
-in normal Marlow runtime only. One `run_conversation()` invocation is one work
-attempt for telemetry; follow-ups are separate attempts.
+lessons improve later work?** Automatic once-per-turn retrieval supports the
+classic local CLI primary agent in normal Marlow runtime. Explicit MCP tools
+provide bounded retrieval and project-scoped lesson management to stdio clients
+under stricter external-boundary disclosure rules. One `run_conversation()`
+invocation is one work attempt for telemetry; follow-ups are separate attempts.
 
 Modes:
 
@@ -1212,7 +1238,9 @@ MVP0 includes only:
 3. per-project recall/injection/provider-egress consent;
 4. deterministic FTS5/metadata retrieval with match reasons;
 5. bounded ephemeral injection;
-6. `retrieved` diagnostics with explicit non-causality wording.
+6. `retrieved` diagnostics with explicit non-causality wording; and
+7. MCP recall plus list/show/add/approve/edit/retract management fixed to the
+   server process's current project, with purge and policy changes excluded.
 
 The implementation is ready for a paired behavioral evaluation, but the
 evaluation corpus/harness is not part of this code slice.
@@ -1250,7 +1278,11 @@ New components:
 - `agent/experience/runtime.py` — origin gating, provider identity, once-per-
   turn recall, fallback reauthorization, and wire-only injection;
 - `marlow_cli/experience.py` — `policy set`, `add`, `list`, `show`, `approve`,
-  `edit`, `retract`, `delete --purge`, and `why`; and
+  `edit`, `retract`, `delete --purge`, and `why`;
+- `agent/transports/work_experience_mcp.py` — fail-closed MCP recall and
+  project-scoped lesson management;
+- `mcp_serve.py` — public server registration for the Work Experience tools;
+  and
 - focused tests under `tests/agent/experience/`, `tests/marlow_cli/`, and
   `tests/run_agent/`.
 
