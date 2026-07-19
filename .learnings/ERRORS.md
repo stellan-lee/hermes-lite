@@ -1,5 +1,44 @@
 # Errors
 
+## [ERR-20260719-002] marlow-tools-selector-keyword
+
+**Logged**: 2026-07-19T17:00:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+The `marlow tools` command passed an unsupported keyword to the shared curses selector.
+
+### Error
+
+```
+TypeError: curses_single_select() got an unexpected keyword argument 'default'
+```
+
+### Context
+
+- Command attempted: `marlow tools`
+- `tools_command()` called `curses_single_select(..., default=0)`.
+- The selector contract names that parameter `default_index`.
+
+### Suggested Fix
+
+Use the selector's `default_index` keyword and cover the interactive entry path with a regression test.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: marlow_cli/tools_config.py, tests/marlow_cli/test_tools_config.py
+
+### Resolution
+
+- **Resolved**: 2026-07-19T17:00:00+08:00
+- **Notes**: Replaced the invalid `default` keyword with `default_index` and added a regression test for the interactive tools entry path. Focused selector and tools tests pass.
+
+---
+
 ## [ERR-20260718-029] missing-repository-rule-files
 
 **Logged**: 2026-07-18T21:30:00+08:00
