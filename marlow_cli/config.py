@@ -1649,6 +1649,17 @@ DEFAULT_CONFIG = {
         "force_ipv4": False,
     },
 
+    # Marlow's own MCP server.  This is distinct from ``mcp_servers``, which
+    # configures external MCP servers that Marlow consumes.  When enabled,
+    # the gateway manages a persistent Streamable HTTP endpoint and stops it
+    # during gateway shutdown.  The bearer token remains in ~/.marlow/.env.
+    "mcp_serve": {
+        "enabled": False,
+        "transport": "streamable_http",
+        "host": "127.0.0.1",
+        "port": 8765,
+    },
+
     # Gateway settings — control how messaging platforms (Telegram, Discord,
     # Slack, etc.) deliver agent-produced files as native attachments.
     "gateway": {
@@ -1811,7 +1822,13 @@ DEFAULT_CONFIG = {
 REQUIRED_ENV_VARS = {}
 
 # Optional environment variables that enhance functionality
-OPTIONAL_ENV_VARS = {'LM_API_KEY': {'description': 'LM Studio bearer token for auth-enabled local servers',
+OPTIONAL_ENV_VARS = {'MARLOW_MCP_BEARER_TOKEN': {'description': 'Bearer token for the managed Marlow MCP HTTP server',
+                             'prompt': 'Marlow MCP HTTP bearer token',
+                             'url': None,
+                             'password': True,
+                             'category': 'setting',
+                             'advanced': True},
+ 'LM_API_KEY': {'description': 'LM Studio bearer token for auth-enabled local servers',
                 'prompt': 'LM Studio API key / bearer token',
                 'url': None,
                 'password': True,

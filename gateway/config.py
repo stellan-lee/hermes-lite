@@ -463,6 +463,57 @@ class StreamingConfig:
         )
 
 
+@dataclass(frozen=True)
+class MCPServeConfig:
+    """Configuration for Marlow's gateway-managed MCP HTTP endpoint."""
+
+    enabled: bool = False
+    transport: str = "streamable_http"
+    host: str = "127.0.0.1"
+    port: int = 8765
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "transport": self.transport,
+            "host": self.host,
+            "port": self.port,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "MCPServeConfig":
+        if data is None:
+            return cls()
+        if not isinstance(data, dict):
+            raise ValueError("mcp_serve must be a mapping")
+
+        enabled = _coerce_bool(data.get("enabled"), False)
+        transport = str(data.get("transport", "streamable_http")).strip().lower()
+        transport = transport.replace("-", "_")
+        host = str(data.get("host", "127.0.0.1")).strip()
+
+        try:
+            port = int(data.get("port", 8765))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("mcp_serve.port must be an integer") from exc
+
+        if enabled and transport != "streamable_http":
+            raise ValueError(
+                "gateway-managed mcp_serve.transport must be streamable_http"
+            )
+        if enabled and not host:
+            raise ValueError("mcp_serve.host must not be empty")
+        if not 1 <= port <= 65535:
+            raise ValueError("mcp_serve.port must be between 1 and 65535")
+
+        return cls(
+            enabled=enabled,
+            transport=transport,
+            host=host,
+            port=port,
+        )
+
+
 # -----------------------------------------------------------------------------
 # Built-in platform connection checkers
 # -----------------------------------------------------------------------------
@@ -526,6 +577,9 @@ class GatewayConfig:
 
     # Streaming configuration
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
+
+    # Gateway-managed Marlow MCP Streamable HTTP endpoint.
+    mcp_serve: MCPServeConfig = field(default_factory=MCPServeConfig)
 
     # Session store pruning: drop SessionEntry records older than this many
     # days from the in-memory dict and sessions.json.  Keeps the store from
@@ -620,6 +674,7 @@ class GatewayConfig:
             "thread_sessions_per_user": self.thread_sessions_per_user,
             "unauthorized_dm_behavior": self.unauthorized_dm_behavior,
             "streaming": self.streaming.to_dict(),
+            "mcp_serve": self.mcp_serve.to_dict(),
             "session_store_max_age_days": self.session_store_max_age_days,
         }
     
@@ -694,6 +749,7 @@ class GatewayConfig:
             thread_sessions_per_user=_coerce_bool(thread_sessions_per_user, False),
             unauthorized_dm_behavior=unauthorized_dm_behavior,
             streaming=StreamingConfig.from_dict(data.get("streaming", {})),
+            mcp_serve=MCPServeConfig.from_dict(data.get("mcp_serve")),
             session_store_max_age_days=session_store_max_age_days,
         )
 
@@ -789,6 +845,9 @@ def load_gateway_config() -> GatewayConfig:
                 streaming_cfg = yaml_cfg.get("gateway", {}).get("streaming")
             if isinstance(streaming_cfg, dict):
                 gw_data["streaming"] = streaming_cfg
+
+            if "mcp_serve" in yaml_cfg:
+                gw_data["mcp_serve"] = yaml_cfg["mcp_serve"]
 
             if "reset_triggers" in yaml_cfg:
                 gw_data["reset_triggers"] = yaml_cfg["reset_triggers"]
