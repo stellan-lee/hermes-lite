@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -787,12 +788,14 @@ def check_command_security(command: str) -> dict:
             summary = "security warning detected (details unavailable)"
 
     # Suppress warn verdicts that consist solely of a lookalike_tld finding for
-    # the .app TLD.  .app is a legitimate gTLD used by many production services
-    # and the "can be confused with file extensions" heuristic generates false
-    # positives for normal API calls.  Any other finding (including other
-    # lookalike_tld entries for non-.app TLDs) preserves the warn action.
+    # common application/development gTLDs. The "can be confused with file
+    # extensions" heuristic generates false positives when ordinary .app or
+    # .dev URLs appear anywhere in a command, including quoted query data. Any
+    # other finding preserves the warn action.
     if action == "warn" and findings:
-        non_suppressible = [f for f in findings if not _is_app_tld_finding(f)]
+        non_suppressible = [
+            f for f in findings if not _is_suppressed_lookalike_tld_finding(f)
+        ]
         if not non_suppressible:
             action = "allow"
             findings = []
@@ -801,18 +804,36 @@ def check_command_security(command: str) -> dict:
     return {"action": action, "findings": findings, "summary": summary}
 
 
+_SUPPRESSED_LOOKALIKE_TLDS = frozenset({".app", ".dev"})
+
+
+def _finding_mentions_tld(finding: dict, tlds: frozenset[str]) -> bool:
+    """Return whether a lookalike finding names one of ``tlds`` exactly."""
+    if not isinstance(finding, dict) or finding.get("rule_id") != "lookalike_tld":
+        return False
+    alternatives = "|".join(re.escape(tld) for tld in sorted(tlds))
+    pattern = re.compile(rf"(?<![a-z0-9])(?:{alternatives})(?![a-z0-9])", re.IGNORECASE)
+    return any(
+        value is not None and pattern.search(str(value)) is not None
+        for value in (
+            finding.get("value"),
+            finding.get("tld"),
+            finding.get("detail"),
+            finding.get("description"),
+            finding.get("message"),
+        )
+    )
+
+
+def _is_suppressed_lookalike_tld_finding(finding: dict) -> bool:
+    """Return True for a standalone .app/.dev lookalike-TLD warning."""
+    return _finding_mentions_tld(finding, _SUPPRESSED_LOOKALIKE_TLDS)
+
+
 def _is_app_tld_finding(finding: dict) -> bool:
-    """Return True if this finding is a lookalike_tld warning for the .app TLD only.
+    """Compatibility helper for tests and integrations checking .app only.
 
     Checks the rule_id and inspects common value/detail field names that
     Tirith may use to carry the TLD string.
     """
-    if not isinstance(finding, dict):
-        return False
-    if finding.get("rule_id") != "lookalike_tld":
-        return False
-    for field in ("value", "tld", "detail", "description", "message"):
-        val = finding.get(field)
-        if val is not None and ".app" in str(val).lower():
-            return True
-    return False
+    return _finding_mentions_tld(finding, frozenset({".app"}))

@@ -52,6 +52,34 @@ def argument_digest(tool_name: str, args: Mapping[str, Any]) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _format_review_value(value: Any) -> str:
+    """Render one redacted parameter without JSON-escaping plain strings."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, indent=2, default=repr)
+
+
+def _format_review_parameters(parameters: Any) -> list[str]:
+    """Render redacted parameters as readable key/value lines."""
+    if not isinstance(parameters, Mapping):
+        rendered = _format_review_value(parameters)
+        return [f"  {line}" for line in rendered.splitlines()] or ["  (none)"]
+
+    if not parameters:
+        return ["  (none)"]
+
+    lines: list[str] = []
+    for key, value in parameters.items():
+        rendered = _format_review_value(value)
+        rendered_lines = rendered.splitlines()
+        if len(rendered_lines) <= 1:
+            lines.append(f"  {key}: {rendered}")
+            continue
+        lines.append(f"  {key}:")
+        lines.extend(f"    {line}" for line in rendered_lines)
+    return lines
+
+
 @dataclass(frozen=True)
 class ActionIntent:
     """Semantic description of a single side-effecting tool invocation."""
@@ -80,8 +108,17 @@ class ActionIntent:
         }
 
     def summary(self) -> str:
-        """Render reviewable semantic action data for existing adapters."""
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+        """Render a readable, request-bound summary for legacy adapters."""
+        lines = [
+            f"Action: {self.operation}",
+            f"Type: {self.action_type}",
+            f"Target: {self.target}",
+            f"Tool: {self.tool_name}",
+            "Parameters:",
+            *_format_review_parameters(self.parameters),
+            f"Request digest: {self.argument_digest}",
+        ]
+        return "\n".join(lines)
 
 
 def build_action_intent(

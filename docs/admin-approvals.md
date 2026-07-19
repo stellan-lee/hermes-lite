@@ -102,6 +102,7 @@ def database_intent(args):
     }
 ```
 
-The approval card contains the semantic intent plus a SHA-256 digest bound to
-the original tool name and unredacted arguments. Display parameters are
+The approval card renders the semantic intent as labeled text plus a SHA-256
+digest bound to the original tool name and unredacted arguments. The structured
+intent remains attached to approval hooks, while display parameters are
 secret-redacted before being sent to the messaging adapter.

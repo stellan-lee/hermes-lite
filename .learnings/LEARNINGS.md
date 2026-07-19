@@ -220,3 +220,37 @@ code against retained consumers before deleting it.
 - See Also: LRN-20260718-002
 
 ---
+
+## [LRN-20260719-001] correction
+
+**Logged**: 2026-07-19T08:57:28Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+
+Distinguish admin routing from the semantic class of an approval.
+
+### Details
+
+The title `Action Approval Required` and exact-user routing prove that an
+approval traveled through the configured administrator channel, but do not by
+themselves prove that the underlying operation is semantically an
+administrator-level intent. A routine terminal command can be promoted to a
+structured action intent by central enforcement, creating an admin-routed
+decision whose content still represents an ordinary command.
+
+### Suggested Action
+
+When explaining approval behavior, separately identify (1) who is authorized
+to decide, (2) what semantic object is being approved, and (3) why that object
+was escalated. Treat raw structured-intent rendering as a separate UX concern.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: tools/registry.py, tools/action_intent.py, tools/approval.py, gateway/run.py
+- Tags: approvals, admin-routing, action-intent, semantics, ux
+
+---
