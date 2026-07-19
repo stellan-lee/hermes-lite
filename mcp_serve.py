@@ -1,9 +1,11 @@
 """
 Marlow MCP Server — expose messaging conversations as MCP tools.
 
-Starts a stdio MCP server that lets any MCP client (Claude Code, Cursor, Codex,
+Starts an MCP server that lets any MCP client (Claude Code, Cursor, Codex,
 etc.) list conversations, read message history, send messages, poll for live
-events, and manage approval requests across all connected platforms.
+events, and manage approval requests across all connected platforms.  The
+standalone command uses stdio; the gateway can manage an authenticated
+Streamable HTTP endpoint through the ``mcp_serve`` config section.
 
 Matches OpenClaw's 9-tool MCP channel bridge surface:
   conversations_list, conversation_get, messages_read, attachments_fetch,
@@ -31,6 +33,7 @@ MCP client config (e.g. claude_desktop_config.json):
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -40,7 +43,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("marlow.mcp_serve")
 
@@ -449,7 +452,10 @@ class EventBridge:
 # MCP Server
 # ---------------------------------------------------------------------------
 
-def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
+def create_mcp_server(
+    event_bridge: Optional[EventBridge] = None,
+    **server_options: Any,
+) -> "FastMCP":
     """Create and return the Marlow MCP server with all tools registered."""
     if not _MCP_SERVER_AVAILABLE:
         raise ImportError(
@@ -465,6 +471,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             "webhooks, and plugin-provided platforms, and to recall and manage "
             "Work Experience for the current project."
         ),
+        **server_options,
     )
 
     bridge = event_bridge or EventBridge()
@@ -864,6 +871,176 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         return json.dumps(result, indent=2)
 
     return mcp
+
+
+# ---------------------------------------------------------------------------
+# Gateway-managed Streamable HTTP transport
+# ---------------------------------------------------------------------------
+
+class _StaticBearerTokenVerifier:
+    """MCP SDK token verifier backed by one operator-managed secret."""
+
+    def __init__(self, expected_token: str):
+        self._expected_token = expected_token
+
+    async def verify_token(self, token: str):
+        if not hmac.compare_digest(token, self._expected_token):
+            return None
+
+        from mcp.server.auth.provider import AccessToken
+
+        return AccessToken(
+            token=token,
+            client_id="marlow-mcp-http",
+            scopes=[],
+        )
+
+
+def create_authenticated_http_server(
+    *,
+    host: str,
+    port: int,
+    bearer_token: str,
+    event_bridge: Optional[EventBridge] = None,
+) -> "FastMCP":
+    """Create a bearer-protected Streamable HTTP MCP server."""
+    if not bearer_token:
+        raise ValueError("MARLOW_MCP_BEARER_TOKEN is required for HTTP MCP")
+
+    from mcp.server.auth.settings import AuthSettings
+    from pydantic import AnyHttpUrl
+
+    # FastMCP requires an issuer URL when its public TokenVerifier interface is
+    # enabled.  Static bearer authentication does not expose OAuth metadata, so
+    # resource_server_url remains None and this URL is not advertised.
+    auth = AuthSettings(
+        issuer_url=AnyHttpUrl(f"http://localhost:{port}"),
+        resource_server_url=None,
+        required_scopes=[],
+    )
+    return create_mcp_server(
+        event_bridge=event_bridge,
+        host=host,
+        port=port,
+        streamable_http_path="/mcp",
+        auth=auth,
+        token_verifier=_StaticBearerTokenVerifier(bearer_token),
+    )
+
+
+class ManagedMCPHTTPServer:
+    """Run authenticated MCP Streamable HTTP with gateway-owned lifecycle.
+
+    Uvicorn runs in a dedicated thread so its signal handling cannot replace
+    the gateway's SIGINT/SIGTERM handlers.  ``start`` waits for a successful
+    socket bind, making configuration or port failures visible at startup.
+    """
+
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        bearer_token: str,
+        startup_timeout: float = 10.0,
+    ):
+        if not bearer_token:
+            raise ValueError(
+                "mcp_serve.enabled requires MARLOW_MCP_BEARER_TOKEN in ~/.marlow/.env"
+            )
+        self.host = host
+        self.port = port
+        self._bearer_token = bearer_token
+        self._startup_timeout = startup_timeout
+        self._bridge = EventBridge()
+        self._uvicorn_server = None
+        self._thread: Optional[threading.Thread] = None
+        self._thread_error: Optional[BaseException] = None
+
+    @property
+    def endpoint(self) -> str:
+        display_host = self.host
+        if ":" in display_host and not display_host.startswith("["):
+            display_host = f"[{display_host}]"
+        return f"http://{display_host}:{self.port}/mcp"
+
+    def _run(self) -> None:
+        try:
+            import asyncio
+
+            asyncio.run(self._serve())
+        except BaseException as exc:
+            self._thread_error = exc
+
+    async def _serve(self) -> None:
+        import uvicorn
+
+        server = create_authenticated_http_server(
+            host=self.host,
+            port=self.port,
+            bearer_token=self._bearer_token,
+            event_bridge=self._bridge,
+        )
+        app = server.streamable_http_app()
+        config = uvicorn.Config(
+            app,
+            host=self.host,
+            port=self.port,
+            log_level="warning",
+            access_log=False,
+        )
+        self._uvicorn_server = uvicorn.Server(config)
+        await self._uvicorn_server.serve()
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+
+        self._thread_error = None
+        self._bridge.start()
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="marlow-mcp-http",
+        )
+        self._thread.start()
+
+        deadline = time.monotonic() + self._startup_timeout
+        while time.monotonic() < deadline:
+            if self._uvicorn_server is not None and self._uvicorn_server.started:
+                logger.info("MCP Streamable HTTP listening at %s", self.endpoint)
+                return
+            if not self._thread.is_alive():
+                break
+            time.sleep(0.01)
+
+        error = self._thread_error
+        self.stop()
+        if error is not None:
+            if isinstance(error, SystemExit):
+                raise RuntimeError(
+                    f"MCP HTTP server exited before startup (code {error.code})"
+                ) from error
+            raise RuntimeError(f"MCP HTTP server failed to start: {error}") from error
+        raise TimeoutError(
+            f"MCP HTTP server did not start within {self._startup_timeout:g}s"
+        )
+
+    def stop(self) -> None:
+        server = self._uvicorn_server
+        if server is not None:
+            server.should_exit = True
+
+        thread = self._thread
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=10)
+            if thread.is_alive():
+                logger.warning("MCP HTTP server did not stop within 10s")
+
+        self._bridge.stop()
+        self._thread = None
+        self._uvicorn_server = None
+        self._bearer_token = ""
 
 
 # ---------------------------------------------------------------------------

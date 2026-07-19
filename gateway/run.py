@@ -1893,6 +1893,7 @@ class GatewayRunner:
         self._restart_via_service = False
         self._restart_command_source: Optional[SessionSource] = None
         self._stop_task: Optional[asyncio.Task] = None
+        self._mcp_http_server = None
         
         # Track running agents per session for interrupt support
         # Key: session_key, Value: AIAgent instance
@@ -4151,6 +4152,30 @@ class GatewayRunner:
             )
         return scheduled
 
+    async def _start_managed_mcp_server(self) -> None:
+        """Start the config-enabled MCP HTTP service and verify its bind."""
+        serve_config = self.config.mcp_serve
+        if not serve_config.enabled:
+            return
+
+        from mcp_serve import ManagedMCPHTTPServer
+
+        service = ManagedMCPHTTPServer(
+            host=serve_config.host,
+            port=serve_config.port,
+            bearer_token=os.getenv("MARLOW_MCP_BEARER_TOKEN", "").strip(),
+        )
+        await asyncio.to_thread(service.start)
+        self._mcp_http_server = service
+
+    async def _stop_managed_mcp_server(self) -> None:
+        service = self._mcp_http_server
+        self._mcp_http_server = None
+        if service is None:
+            return
+        await asyncio.to_thread(service.stop)
+        logger.info("MCP Streamable HTTP server stopped")
+
     async def start(self) -> bool:
         """
         Start the gateway and all configured platform adapters.
@@ -4560,6 +4585,27 @@ class GatewayRunner:
                 logger.warning("No messaging platforms enabled.")
                 logger.info("Gateway will continue running for cron job execution.")
         
+        # The HTTP MCP endpoint is an explicitly enabled gateway service.  A
+        # bad token, invalid bind, or occupied port is a startup failure rather
+        # than a silently degraded integration.
+        try:
+            await self._start_managed_mcp_server()
+        except Exception as exc:
+            reason = f"MCP HTTP startup failed: {exc}"
+            logger.error(reason)
+            for platform, adapter in list(self.adapters.items()):
+                await self._safe_adapter_disconnect(adapter, platform)
+            self.adapters.clear()
+            try:
+                from gateway.status import write_runtime_status
+                write_runtime_status(
+                    gateway_state="startup_failed",
+                    exit_reason=reason,
+                )
+            except Exception:
+                pass
+            return False
+
         # Update delivery router with adapters
         self.delivery_router.adapters = self.adapters
         self._running = True
@@ -5314,6 +5360,11 @@ class GatewayRunner:
 
             self._running = False
             self._draining = True
+
+            try:
+                await self._stop_managed_mcp_server()
+            except Exception as exc:
+                logger.error("MCP HTTP shutdown error: %s", exc)
 
             # Notify all chats with active agents BEFORE draining.
             # Adapters are still connected here, so messages can be sent.
