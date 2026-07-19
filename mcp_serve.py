@@ -43,7 +43,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
+from urllib.parse import urlparse
 
 logger = logging.getLogger("marlow.mcp_serve")
 
@@ -896,36 +897,117 @@ class _StaticBearerTokenVerifier:
         )
 
 
+def _validated_oauth_public_url(value: Optional[str]) -> str:
+    public_url = (value or "").strip().rstrip("/")
+    parsed = urlparse(public_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("mcp_serve.public_url must be an HTTPS origin for OAuth")
+    return public_url
+
+
 def create_authenticated_http_server(
     *,
     host: str,
     port: int,
-    bearer_token: str,
+    bearer_token: str = "",
+    auth_mode: str = "bearer",
+    public_url: Optional[str] = None,
+    oauth_password: str = "",
+    oauth_database_path: Optional[Path] = None,
     event_bridge: Optional[EventBridge] = None,
 ) -> "FastMCP":
-    """Create a bearer-protected Streamable HTTP MCP server."""
-    if not bearer_token:
-        raise ValueError("MARLOW_MCP_BEARER_TOKEN is required for HTTP MCP")
+    """Create a bearer- or OAuth-protected Streamable HTTP MCP server."""
 
     from mcp.server.auth.settings import AuthSettings
     from pydantic import AnyHttpUrl
 
-    # FastMCP requires an issuer URL when its public TokenVerifier interface is
-    # enabled.  Static bearer authentication does not expose OAuth metadata, so
-    # resource_server_url remains None and this URL is not advertised.
-    auth = AuthSettings(
-        issuer_url=AnyHttpUrl(f"http://localhost:{port}"),
-        resource_server_url=None,
-        required_scopes=[],
-    )
-    return create_mcp_server(
+    oauth_provider = None
+    transport_security = None
+    if auth_mode == "bearer":
+        if not bearer_token:
+            raise ValueError("MARLOW_MCP_BEARER_TOKEN is required for HTTP MCP")
+        # FastMCP requires an issuer URL when its public TokenVerifier interface
+        # is enabled. Static bearer auth does not publish OAuth metadata.
+        auth = AuthSettings(
+            issuer_url=AnyHttpUrl(f"http://localhost:{port}"),
+            resource_server_url=None,
+            required_scopes=[],
+        )
+        verifier: Any = _StaticBearerTokenVerifier(bearer_token)
+    elif auth_mode == "oauth":
+        public_url = _validated_oauth_public_url(public_url)
+        if len(oauth_password) < 16:
+            raise ValueError(
+                "MARLOW_MCP_OAUTH_PASSWORD must contain at least 16 characters"
+            )
+        from marlow_constants import get_marlow_home
+        from mcp.server.transport_security import TransportSecuritySettings
+        from mcp_oauth import MCP_OAUTH_SCOPE, MarlowOAuthProvider
+
+        database_path = oauth_database_path or (get_marlow_home() / "mcp-oauth.db")
+        oauth_provider = MarlowOAuthProvider(
+            database_path=database_path,
+            public_url=public_url,
+            password=oauth_password,
+        )
+        verifier = oauth_provider
+        auth = AuthSettings(
+            issuer_url=AnyHttpUrl(public_url),
+            resource_server_url=AnyHttpUrl(f"{public_url.rstrip('/')}/mcp"),
+            required_scopes=[MCP_OAUTH_SCOPE],
+        )
+        parsed_public_url = urlparse(public_url)
+        public_host = parsed_public_url.hostname or ""
+        bracketed_public_host = (
+            f"[{public_host}]" if ":" in public_host else public_host
+        )
+        transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=list(
+                dict.fromkeys(
+                    [
+                        parsed_public_url.netloc,
+                        public_host,
+                        f"{bracketed_public_host}:*",
+                        "127.0.0.1:*",
+                        "localhost:*",
+                        "[::1]:*",
+                    ]
+                )
+            ),
+            allowed_origins=[
+                public_url,
+                "https://chatgpt.com",
+                "http://127.0.0.1:*",
+                "http://localhost:*",
+                "http://[::1]:*",
+            ],
+        )
+    else:
+        raise ValueError("mcp_serve.auth must be bearer or oauth")
+
+    server = create_mcp_server(
         event_bridge=event_bridge,
         host=host,
         port=port,
         streamable_http_path="/mcp",
         auth=auth,
-        token_verifier=_StaticBearerTokenVerifier(bearer_token),
+        token_verifier=verifier,
+        transport_security=transport_security,
     )
+    if oauth_provider is not None:
+        from mcp_oauth import install_oauth_routes
+
+        install_oauth_routes(server, oauth_provider)
+    return server
 
 
 class ManagedMCPHTTPServer:
@@ -941,16 +1023,32 @@ class ManagedMCPHTTPServer:
         *,
         host: str,
         port: int,
-        bearer_token: str,
+        bearer_token: str = "",
+        auth_mode: str = "bearer",
+        public_url: Optional[str] = None,
+        oauth_password: str = "",
+        oauth_database_path: Optional[Path] = None,
         startup_timeout: float = 10.0,
     ):
-        if not bearer_token:
+        if auth_mode == "bearer" and not bearer_token:
             raise ValueError(
                 "mcp_serve.enabled requires MARLOW_MCP_BEARER_TOKEN in ~/.marlow/.env"
             )
+        if auth_mode == "oauth":
+            public_url = _validated_oauth_public_url(public_url)
+        if auth_mode == "oauth" and len(oauth_password) < 16:
+            raise ValueError(
+                "mcp_serve OAuth requires MARLOW_MCP_OAUTH_PASSWORD with at least 16 characters"
+            )
+        if auth_mode not in {"bearer", "oauth"}:
+            raise ValueError("mcp_serve.auth must be bearer or oauth")
         self.host = host
         self.port = port
         self._bearer_token = bearer_token
+        self.auth_mode = auth_mode
+        self.public_url = public_url.rstrip("/") if public_url else None
+        self._oauth_password = oauth_password
+        self._oauth_database_path = oauth_database_path
         self._startup_timeout = startup_timeout
         self._bridge = EventBridge()
         self._uvicorn_server = None
@@ -979,9 +1077,25 @@ class ManagedMCPHTTPServer:
             host=self.host,
             port=self.port,
             bearer_token=self._bearer_token,
+            auth_mode=self.auth_mode,
+            public_url=self.public_url,
+            oauth_password=self._oauth_password,
+            oauth_database_path=self._oauth_database_path,
             event_bridge=self._bridge,
         )
         app = server.streamable_http_app()
+        if self.auth_mode == "oauth" and self.public_url:
+            from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+            public_host = urlparse(self.public_url).hostname
+            app.add_middleware(
+                cast(Any, TrustedHostMiddleware),
+                allowed_hosts=[
+                    host
+                    for host in (public_host, "127.0.0.1", "localhost", "::1")
+                    if host
+                ],
+            )
         config = uvicorn.Config(
             app,
             host=self.host,
@@ -1008,7 +1122,14 @@ class ManagedMCPHTTPServer:
         deadline = time.monotonic() + self._startup_timeout
         while time.monotonic() < deadline:
             if self._uvicorn_server is not None and self._uvicorn_server.started:
-                logger.info("MCP Streamable HTTP listening at %s", self.endpoint)
+                advertised_endpoint = (
+                    f"{self.public_url}/mcp"
+                    if self.auth_mode == "oauth"
+                    else self.endpoint
+                )
+                logger.info(
+                    "MCP Streamable HTTP listening at %s", advertised_endpoint
+                )
                 return
             if not self._thread.is_alive():
                 break
@@ -1041,6 +1162,7 @@ class ManagedMCPHTTPServer:
         self._thread = None
         self._uvicorn_server = None
         self._bearer_token = ""
+        self._oauth_password = ""
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Callable
 from enum import Enum
+from urllib.parse import urlparse
 
 from marlow_cli.config import get_marlow_home
 from utils import is_truthy_value
@@ -471,6 +472,8 @@ class MCPServeConfig:
     transport: str = "streamable_http"
     host: str = "127.0.0.1"
     port: int = 8765
+    auth: str = "bearer"
+    public_url: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -478,6 +481,8 @@ class MCPServeConfig:
             "transport": self.transport,
             "host": self.host,
             "port": self.port,
+            "auth": self.auth,
+            "public_url": self.public_url,
         }
 
     @classmethod
@@ -491,6 +496,13 @@ class MCPServeConfig:
         transport = str(data.get("transport", "streamable_http")).strip().lower()
         transport = transport.replace("-", "_")
         host = str(data.get("host", "127.0.0.1")).strip()
+        auth = str(data.get("auth", "bearer")).strip().lower()
+        public_url_value = data.get("public_url")
+        public_url = (
+            str(public_url_value).strip().rstrip("/")
+            if public_url_value is not None
+            else None
+        )
 
         try:
             port = int(data.get("port", 8765))
@@ -503,6 +515,22 @@ class MCPServeConfig:
             )
         if enabled and not host:
             raise ValueError("mcp_serve.host must not be empty")
+        if enabled and auth not in {"bearer", "oauth"}:
+            raise ValueError("mcp_serve.auth must be bearer or oauth")
+        if enabled and auth == "oauth":
+            parsed_public_url = urlparse(public_url or "")
+            if (
+                parsed_public_url.scheme != "https"
+                or not parsed_public_url.netloc
+                or parsed_public_url.username is not None
+                or parsed_public_url.password is not None
+                or parsed_public_url.query
+                or parsed_public_url.fragment
+                or parsed_public_url.path not in {"", "/"}
+            ):
+                raise ValueError(
+                    "mcp_serve.public_url must be an HTTPS origin in oauth mode"
+                )
         if not 1 <= port <= 65535:
             raise ValueError("mcp_serve.port must be between 1 and 65535")
 
@@ -511,6 +539,8 @@ class MCPServeConfig:
             transport=transport,
             host=host,
             port=port,
+            auth=auth,
+            public_url=public_url,
         )
 
 

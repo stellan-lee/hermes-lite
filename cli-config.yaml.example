@@ -151,13 +151,15 @@ mcp_servers: {}
 #     args: ["-y", "@example/mcp-server"]
 #     env: {EXAMPLE_TOKEN: "${EXAMPLE_TOKEN}"}
 
-# Marlow's gateway-managed MCP Streamable HTTP endpoint. When enabled, set
-# MARLOW_MCP_BEARER_TOKEN in ~/.marlow/.env before restarting the gateway.
+# Marlow's gateway-managed MCP Streamable HTTP endpoint. Set the matching
+# bearer token or OAuth owner password in ~/.marlow/.env before restarting.
 mcp_serve:
   enabled: false
   transport: streamable_http
   host: 127.0.0.1
   port: 8765
+  auth: bearer  # bearer | oauth
+  public_url: null  # Required HTTPS origin when auth is oauth.
 
 gateway:
   strict: false

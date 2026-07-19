@@ -1652,12 +1652,14 @@ DEFAULT_CONFIG = {
     # Marlow's own MCP server.  This is distinct from ``mcp_servers``, which
     # configures external MCP servers that Marlow consumes.  When enabled,
     # the gateway manages a persistent Streamable HTTP endpoint and stops it
-    # during gateway shutdown.  The bearer token remains in ~/.marlow/.env.
+    # during gateway shutdown. Authentication secrets remain in ~/.marlow/.env.
     "mcp_serve": {
         "enabled": False,
         "transport": "streamable_http",
         "host": "127.0.0.1",
         "port": 8765,
+        "auth": "bearer",
+        "public_url": None,
     },
 
     # Gateway settings — control how messaging platforms (Telegram, Discord,
@@ -1824,6 +1826,12 @@ REQUIRED_ENV_VARS = {}
 # Optional environment variables that enhance functionality
 OPTIONAL_ENV_VARS = {'MARLOW_MCP_BEARER_TOKEN': {'description': 'Bearer token for the managed Marlow MCP HTTP server',
                              'prompt': 'Marlow MCP HTTP bearer token',
+                             'url': None,
+                             'password': True,
+                             'category': 'setting',
+                             'advanced': True},
+ 'MARLOW_MCP_OAUTH_PASSWORD': {'description': 'Owner password for Marlow MCP OAuth authorization',
+                             'prompt': 'Marlow MCP OAuth owner password',
                              'url': None,
                              'password': True,
                              'category': 'setting',
