@@ -2376,13 +2376,14 @@ class GatewayRunner:
 
         Admin approval is intentionally fail-closed: a configured route must
         name a connected adapter plus an exact user and chat. General
-        ``admin_action`` requests never fall back to the originating user.
+        Structured action-intent requests never fall back to the originating
+        user.
         """
         config = getattr(self, "config", None)
         admin = getattr(config, "admin_approval", AdminApprovalConfig())
         admin_routed = bool(admin.enabled)
 
-        if kind == "admin_action" and not admin_routed:
+        if kind in {"admin_action", "action_intent"} and not admin_routed:
             raise RuntimeError(
                 "approvals.admin is not enabled; refusing to ask the "
                 "originating user for an administrator decision"
@@ -2420,7 +2421,11 @@ class GatewayRunner:
             "metadata": metadata,
             "authorized_user_id": admin.user_id,
             "binary": True,
-            "title": "Admin Approval Required",
+            "title": (
+                "Action Approval Required"
+                if kind in {"admin_action", "action_intent"}
+                else "Admin Approval Required"
+            ),
             "admin_routed": True,
             "admin_platform": admin.platform,
         }
@@ -16278,7 +16283,7 @@ class GatewayRunner:
                 except Exception:
                     pass
 
-                cmd = approval_data.get("command", "")
+                cmd = approval_data.get("action") or approval_data.get("command", "")
                 desc = approval_data.get("description", "dangerous command")
                 request_id = str(approval_data.get("request_id") or "")
                 kind = str(approval_data.get("kind") or "command")

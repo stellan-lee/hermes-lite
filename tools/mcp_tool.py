@@ -3134,6 +3134,48 @@ def _convert_mcp_schema(server_name: str, mcp_tool) -> dict:
     }
 
 
+def _explicit_mcp_annotation(mcp_tool, name: str):
+    """Return an explicitly supplied MCP annotation, otherwise ``None``.
+
+    MCP annotations are hints rather than a security boundary. We use only
+    explicit mutation hints; absent/default values must not cause every MCP
+    read tool to prompt for administrator approval.
+    """
+    annotations = getattr(mcp_tool, "annotations", None)
+    if annotations is None:
+        return None
+    if isinstance(annotations, dict):
+        return annotations.get(name) if name in annotations else None
+
+    fields_set = getattr(annotations, "model_fields_set", None)
+    if fields_set is not None and name not in fields_set:
+        return None
+    return getattr(annotations, name, None)
+
+
+def _mcp_action_intent_builder(server_name: str, mcp_tool):
+    """Return an intent builder for explicitly mutating MCP tools."""
+    destructive = _explicit_mcp_annotation(mcp_tool, "destructiveHint")
+    read_only = _explicit_mcp_annotation(mcp_tool, "readOnlyHint")
+    if destructive is not True and read_only is not False:
+        return None
+
+    tool_name = str(mcp_tool.name)
+    description = str(mcp_tool.description or "This MCP action may change external state.")
+
+    def build(args: dict) -> dict:
+        return {
+            "action_type": "mcp.mutation",
+            "operation": tool_name,
+            "target": f"MCP server {server_name}",
+            "reason": "The requested MCP operation changes external state.",
+            "impact": description,
+            "parameters": args,
+        }
+
+    return build
+
+
 def _build_utility_schemas(server_name: str) -> List[dict]:
     """Build schemas for the MCP utility tools (resources & prompts).
 
@@ -3406,6 +3448,7 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
             check_fn=_make_check_fn(name),
             is_async=False,
             description=schema["description"],
+            action_intent=_mcp_action_intent_builder(name, mcp_tool),
         )
         _track_mcp_tool_server(tool_name_prefixed, name)
         registered_names.append(tool_name_prefixed)

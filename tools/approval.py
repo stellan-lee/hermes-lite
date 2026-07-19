@@ -930,6 +930,15 @@ def _is_admin_approval_enforced(approval_config: Optional[dict] = None) -> bool:
     return bool(isinstance(admin, dict) and is_truthy_value(admin.get("enabled")))
 
 
+def is_admin_action_approval_enabled() -> bool:
+    """Return whether the current dispatch must enforce action intents.
+
+    This public wrapper keeps registry/dispatcher code out of approval's
+    private configuration details while preserving the gateway-only boundary.
+    """
+    return _is_admin_approval_enforced()
+
+
 def _get_approval_timeout() -> int:
     """Read the approval timeout from config. Defaults to 60 seconds."""
     try:
@@ -1156,6 +1165,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     approval_data = dict(approval_data)
     command = approval_data.get("command", "")
     description = approval_data.get("description", "")
+    action_intent = approval_data.get("action_intent")
     primary_key = approval_data.get("pattern_key", "")
     all_keys = approval_data.get("pattern_keys", [primary_key])
 
@@ -1173,15 +1183,17 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
 
     # Notify plugins that an approval is being requested. Fires before the
     # gateway notify callback so observers get the event in real time.
-    _fire_approval_hook(
-        "pre_approval_request",
-        command=command,
-        description=description,
-        pattern_key=primary_key,
-        pattern_keys=list(all_keys),
-        session_key=session_key,
-        surface=surface,
-    )
+    hook_context = {
+        "command": command,
+        "description": description,
+        "pattern_key": primary_key,
+        "pattern_keys": list(all_keys),
+        "session_key": session_key,
+        "surface": surface,
+    }
+    if action_intent is not None:
+        hook_context["action_intent"] = action_intent
+    _fire_approval_hook("pre_approval_request", **hook_context)
 
     # Notify the user (bridges sync agent thread → async gateway)
     try:
@@ -1250,12 +1262,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     _outcome = "timeout" if not resolved else (choice if choice else "timeout")
     _fire_approval_hook(
         "post_approval_response",
-        command=command,
-        description=description,
-        pattern_key=primary_key,
-        pattern_keys=list(all_keys),
-        session_key=session_key,
-        surface=surface,
+        **hook_context,
         choice=_outcome,
     )
     return {
@@ -1265,22 +1272,26 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     }
 
 
-def request_admin_approval(action: str, reason: str = "") -> dict:
-    """Request a one-shot administrator decision for an arbitrary action.
+def request_action_intent_approval(intent) -> dict:
+    """Approve one structured intent and execute only in the waiting caller.
 
     The gateway's registered approval callback owns routing and exact admin
     authorization. This primitive only enqueues the request and blocks the
     current tool thread until the configured administrator approves, declines,
     or the request times out. Missing gateway/admin routing fails closed.
     """
-    action = str(action or "").strip()
-    reason = str(reason or "").strip()
-    if not action:
+    from tools.action_intent import ActionIntent
+
+    if not isinstance(intent, ActionIntent):
         return {
             "approved": False,
             "decision": "invalid",
-            "message": "An action description is required.",
+            "message": "A valid structured action intent is required.",
         }
+
+    intent_data = intent.to_dict()
+    action = intent.summary()
+    reason = intent.reason
 
     session_key = get_current_session_key(default="")
     if not session_key:
@@ -1303,15 +1314,20 @@ def request_admin_approval(action: str, reason: str = "") -> dict:
         session_key,
         notify_cb,
         {
-            "kind": "admin_action",
+            "kind": "action_intent",
+            "action": action,
+            # Existing platform adapters still accept a parameter named
+            # command. Keep this compatibility alias internal; the title and
+            # payload identify it as a semantic action intent.
             "command": action,
-            "description": reason or "Administrator authorization is required.",
-            "pattern_key": "admin_action",
-            "pattern_keys": ["admin_action"],
+            "description": f"{reason}\nImpact: {intent.impact}",
+            "action_intent": intent_data,
+            "pattern_key": f"action_intent:{intent.argument_digest}",
+            "pattern_keys": [f"action_intent:{intent.argument_digest}"],
             "allowed_choices": ["once", "deny"],
             "request_scoped_only": True,
         },
-        surface="gateway_admin",
+        surface="gateway_action_intent",
     )
     request_id = decision.get("request_id")
     if decision.get("notify_failed"):
@@ -1340,7 +1356,45 @@ def request_admin_approval(action: str, reason: str = "") -> dict:
         "decision": "approved",
         "request_id": request_id,
         "message": "The administrator approved this action once.",
+        "action_intent": intent_data,
     }
+
+
+def request_admin_approval(
+    action: str,
+    reason: str = "",
+    *,
+    action_type: str = "custom.action",
+    operation: str = "",
+    target: str = "",
+    impact: str = "",
+    parameters=None,
+) -> dict:
+    """Compatibility entry point for a model-described privileged action.
+
+    Registered tools should use central ``action_intent`` metadata so approval
+    and execution are inseparable. This function remains for external actions
+    that do not have a registered executor.
+    """
+    from tools.action_intent import build_manual_action_intent
+
+    try:
+        intent = build_manual_action_intent(
+            action,
+            reason,
+            action_type=action_type,
+            operation=operation,
+            target=target,
+            impact=impact,
+            parameters=parameters,
+        )
+    except (TypeError, ValueError) as exc:
+        return {
+            "approved": False,
+            "decision": "invalid",
+            "message": str(exc),
+        }
+    return request_action_intent_approval(intent)
 
 
 def check_all_command_guards(command: str, env_type: str,
@@ -1502,14 +1556,36 @@ def check_all_command_guards(command: str, env_type: str,
             # Block the agent thread until the user responds; the notify +
             # heartbeat wait loop is shared with check_execute_code_guard via
             # _await_gateway_decision().
-            approval_data = {
+            approval_data: dict[str, object] = {
                 "command": command,
                 "pattern_key": primary_key,
                 "pattern_keys": all_keys,
                 "description": combined_desc,
             }
             if admin_enforced:
+                from tools.action_intent import build_action_intent
+
+                terminal_intent = build_action_intent(
+                    tool_name="terminal",
+                    args={"command": command, "environment": env_type},
+                    builder={
+                        "action_type": "terminal.execute",
+                        "operation": "execute terminal command",
+                        "target": f"{env_type} terminal environment",
+                        "reason": combined_desc,
+                        "impact": (
+                            "The command was flagged as capable of changing "
+                            "or damaging system state."
+                        ),
+                    },
+                )
+                if terminal_intent is None:  # static builders never skip
+                    raise RuntimeError("terminal action intent was not created")
                 approval_data.update({
+                    "kind": "action_intent",
+                    "action": terminal_intent.summary(),
+                    "command": terminal_intent.summary(),
+                    "action_intent": terminal_intent.to_dict(),
                     "allowed_choices": ["once", "deny"],
                     "request_scoped_only": True,
                 })
@@ -1775,14 +1851,36 @@ def check_execute_code_guard(code: str, env_type: str) -> dict:
             ),
         }
 
-    approval_data = {
+    approval_data: dict[str, object] = {
         "command": command,
         "pattern_key": pattern_key,
         "pattern_keys": [pattern_key],
         "description": description,
     }
     if admin_enforced:
+        from tools.action_intent import build_action_intent
+
+        code_intent = build_action_intent(
+            tool_name="execute_code",
+            args={"code": code, "environment": env_type},
+            builder={
+                "action_type": "code.execute",
+                "operation": "execute Python code",
+                "target": f"{env_type} execution environment",
+                "reason": description,
+                "impact": (
+                    "The script can spawn processes or mutate files and "
+                    "external systems."
+                ),
+            },
+        )
+        if code_intent is None:  # static builders never skip
+            raise RuntimeError("execute_code action intent was not created")
         approval_data.update({
+            "kind": "action_intent",
+            "action": code_intent.summary(),
+            "command": code_intent.summary(),
+            "action_intent": code_intent.to_dict(),
             "allowed_choices": ["once", "deny"],
             "request_scoped_only": True,
         })

@@ -2713,7 +2713,7 @@ class SlackAdapter(BasePlatformAdapter):
 
             kwargs: Dict[str, Any] = {
                 "channel": chat_id,
-                "text": f"⚠️ Command approval required: {cmd_preview[:100]}",
+                "text": f"⚠️ {title}: {cmd_preview[:100]}",
                 "blocks": blocks,
             }
             if thread_ts:

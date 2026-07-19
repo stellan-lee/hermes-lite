@@ -178,9 +178,12 @@ CLARIFY_GUIDANCE = (
 )
 
 ADMIN_APPROVAL_GUIDANCE = (
-    "When an action requires administrator authorization and no automatic "
-    "tool safety prompt covers it, call request_admin_approval with the exact "
-    "action, target, reason, and material impact before acting. Treat "
+    "Side-effecting tools with an action-intent policy request administrator "
+    "approval automatically; call them normally and never try to pre-approve "
+    "their implementation command. For an external privileged action with no "
+    "registered executor, call request_admin_approval with its semantic "
+    "action_type, operation, exact target, reason, parameters, and material "
+    "impact before acting. Treat "
     "approved=false, timeout, delivery failure, or missing configuration as "
     "a definitive denial: do not perform, retry, rephrase, or bypass the "
     "action. Approval is one-shot and covers only the action described."

@@ -21,7 +21,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +80,13 @@ class ToolEntry:
     __slots__ = (
         "name", "toolset", "schema", "handler", "check_fn",
         "requires_env", "is_async", "description", "emoji",
-        "max_result_size_chars", "dynamic_schema_overrides",
+        "max_result_size_chars", "dynamic_schema_overrides", "action_intent",
     )
 
     def __init__(self, name, toolset, schema, handler, check_fn,
                  requires_env, is_async, description, emoji,
-                 max_result_size_chars=None, dynamic_schema_overrides=None):
+                 max_result_size_chars=None, dynamic_schema_overrides=None,
+                 action_intent=None):
         self.name = name
         self.toolset = toolset
         self.schema = schema
@@ -104,6 +105,10 @@ class ToolEntry:
         # on every get_definitions() call; results are merged shallow on top
         # of the base schema before the {"type": "function", ...} wrap.
         self.dynamic_schema_overrides = dynamic_schema_overrides
+        # Optional mapping or callable(args) -> mapping | None describing a
+        # semantic side effect. Central dispatch uses it to obtain exact-admin
+        # approval before invoking the handler with those same arguments.
+        self.action_intent = action_intent
 
 
 # ---------------------------------------------------------------------------
@@ -237,14 +242,19 @@ class ToolRegistry:
         toolset: str,
         schema: dict,
         handler: Callable,
-        check_fn: Callable = None,
-        requires_env: list = None,
+        check_fn: Optional[Callable] = None,
+        requires_env: Optional[list] = None,
         is_async: bool = False,
         description: str = "",
         emoji: str = "",
         max_result_size_chars: int | float | None = None,
-        dynamic_schema_overrides: Callable = None,
+        dynamic_schema_overrides: Optional[Callable] = None,
         override: bool = False,
+        action_intent: (
+            Callable[[dict[str, Any]], Mapping[str, Any] | None]
+            | Mapping[str, Any]
+            | None
+        ) = None,
     ):
         """Register a tool.  Called at module-import time by each tool file.
 
@@ -253,6 +263,10 @@ class ToolRegistry:
         default browser tool for a headed-Chrome CDP backend). Without it,
         registrations that would shadow an existing tool from a different
         toolset are rejected to prevent accidental overwrites.
+
+        ``action_intent`` marks a side-effecting tool for exact-admin approval.
+        It may be a static mapping or ``callable(args) -> mapping | None``;
+        returning ``None`` identifies a read-only branch of a mixed tool.
         """
         with self._lock:
             existing = self._tools.get(name)
@@ -299,6 +313,7 @@ class ToolRegistry:
                 emoji=emoji,
                 max_result_size_chars=max_result_size_chars,
                 dynamic_schema_overrides=dynamic_schema_overrides,
+                action_intent=action_intent,
             )
             if check_fn and toolset not in self._toolset_checks:
                 self._toolset_checks[toolset] = check_fn
