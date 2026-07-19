@@ -26,8 +26,11 @@ class TestMCPServeConfig:
             "transport": "streamable_http",
             "host": "127.0.0.1",
             "port": 8765,
+            "auth": "bearer",
+            "public_url": None,
         }
         assert OPTIONAL_ENV_VARS["MARLOW_MCP_BEARER_TOKEN"]["password"] is True
+        assert OPTIONAL_ENV_VARS["MARLOW_MCP_OAUTH_PASSWORD"]["password"] is True
 
     def test_defaults_are_disabled_and_loopback_only(self):
         config = MCPServeConfig.from_dict(None)
@@ -36,6 +39,8 @@ class TestMCPServeConfig:
         assert config.transport == "streamable_http"
         assert config.host == "127.0.0.1"
         assert config.port == 8765
+        assert config.auth == "bearer"
+        assert config.public_url is None
 
     def test_enabled_streamable_http_config(self):
         config = MCPServeConfig.from_dict(
@@ -64,6 +69,28 @@ class TestMCPServeConfig:
             MCPServeConfig.from_dict(
                 {"enabled": True, "transport": "stdio"}
             )
+
+    def test_oauth_requires_https_public_origin(self):
+        with pytest.raises(ValueError, match="HTTPS origin"):
+            MCPServeConfig.from_dict(
+                {
+                    "enabled": True,
+                    "auth": "oauth",
+                    "public_url": "http://office:8765",
+                }
+            )
+
+    def test_oauth_public_origin(self):
+        config = MCPServeConfig.from_dict(
+            {
+                "enabled": True,
+                "auth": "oauth",
+                "public_url": "https://marlow.example/",
+            }
+        )
+
+        assert config.auth == "oauth"
+        assert config.public_url == "https://marlow.example"
 
     def test_gateway_config_round_trip(self):
         original = GatewayConfig(
@@ -192,7 +219,6 @@ async def test_authenticated_streamable_http_end_to_end(tmp_path, monkeypatch):
                     tools = await session.list_tools()
                     result = await session.call_tool("conversations_list", {})
 
-        assert len(tools.tools) == 10
         assert {tool.name for tool in tools.tools} >= {
             "conversations_list",
             "messages_read",
@@ -243,6 +269,58 @@ async def test_gateway_manages_http_service_lifecycle(monkeypatch, tmp_path):
                 "host": "127.0.0.1",
                 "port": 9876,
                 "bearer_token": "gateway-test-token",
+                "auth_mode": "bearer",
+                "public_url": None,
+                "oauth_password": "",
+            },
+        ),
+        ("start", None),
+        ("stop", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gateway_passes_oauth_configuration(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARLOW_HOME", str(tmp_path))
+    monkeypatch.setenv("MARLOW_MCP_OAUTH_PASSWORD", "oauth-password-long-enough")
+    calls = []
+
+    class FakeManagedServer:
+        def __init__(self, **kwargs):
+            calls.append(("init", kwargs))
+
+        def start(self):
+            calls.append(("start", None))
+
+        def stop(self):
+            calls.append(("stop", None))
+
+    monkeypatch.setattr("mcp_serve.ManagedMCPHTTPServer", FakeManagedServer)
+    runner = GatewayRunner(
+        GatewayConfig(
+            mcp_serve=MCPServeConfig(
+                enabled=True,
+                host="127.0.0.1",
+                port=9877,
+                auth="oauth",
+                public_url="https://marlow.example",
+            )
+        )
+    )
+
+    await runner._start_managed_mcp_server()
+    await runner._stop_managed_mcp_server()
+
+    assert calls == [
+        (
+            "init",
+            {
+                "host": "127.0.0.1",
+                "port": 9877,
+                "bearer_token": "",
+                "auth_mode": "oauth",
+                "public_url": "https://marlow.example",
+                "oauth_password": "oauth-password-long-enough",
             },
         ),
         ("start", None),

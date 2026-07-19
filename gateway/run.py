@@ -4164,6 +4164,9 @@ class GatewayRunner:
             host=serve_config.host,
             port=serve_config.port,
             bearer_token=os.getenv("MARLOW_MCP_BEARER_TOKEN", "").strip(),
+            auth_mode=serve_config.auth,
+            public_url=serve_config.public_url,
+            oauth_password=os.getenv("MARLOW_MCP_OAUTH_PASSWORD", "").strip(),
         )
         await asyncio.to_thread(service.start)
         self._mcp_http_server = service
