@@ -186,6 +186,8 @@ async def test_launch_detached_restart_command_uses_setsid(monkeypatch):
     runner, _adapter = make_restart_runner()
     popen_calls = []
 
+    monkeypatch.setenv("_MARLOW_GATEWAY", "1")
+    monkeypatch.setenv("MARLOW_TEST_RESTART_ENV", "preserved")
     monkeypatch.setattr(gateway_run, "_resolve_marlow_bin", lambda: ["/usr/bin/marlow"])
     monkeypatch.setattr(gateway_run.os, "getpid", lambda: 321)
     monkeypatch.setattr(
@@ -208,6 +210,8 @@ async def test_launch_detached_restart_command_uses_setsid(monkeypatch):
     assert kwargs["start_new_session"] is True
     assert kwargs["stdout"] is subprocess.DEVNULL
     assert kwargs["stderr"] is subprocess.DEVNULL
+    assert "_MARLOW_GATEWAY" not in kwargs["env"]
+    assert kwargs["env"]["MARLOW_TEST_RESTART_ENV"] == "preserved"
 
 
 # ── Shutdown notification tests ──────────────────────────────────────

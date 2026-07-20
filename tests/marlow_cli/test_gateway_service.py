@@ -23,6 +23,66 @@ def _systemd_platform(monkeypatch):
     monkeypatch.setattr(gateway_cli.sys, "platform", "linux")
 
 
+class TestLaunchdServicePid:
+    def test_parses_labeled_launchctl_property_list(self, monkeypatch):
+        monkeypatch.setattr(gateway_cli.sys, "platform", "darwin")
+        label = gateway_cli.get_launchd_label()
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    '{\n'
+                    f'\t"Label" = "{label}";\n'
+                    '\t"LastExitStatus" = 0;\n'
+                    '\t"PID" = 4321;\n'
+                    '};\n'
+                ),
+                stderr="",
+            )
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli.get_launchd_service_pid() == 4321
+        assert calls == [
+            (
+                ["launchctl", "list", label],
+                {"capture_output": True, "text": True, "timeout": 5},
+            )
+        ]
+
+    def test_accepts_tabular_launchctl_output(self, monkeypatch):
+        monkeypatch.setattr(gateway_cli.sys, "platform", "darwin")
+        label = gateway_cli.get_launchd_label()
+        monkeypatch.setattr(
+            gateway_cli.subprocess,
+            "run",
+            lambda *args, **kwargs: SimpleNamespace(
+                returncode=0,
+                stdout=f"PID\tStatus\tLabel\n987\t0\t{label}\n",
+                stderr="",
+            ),
+        )
+
+        assert gateway_cli.get_launchd_service_pid() == 987
+
+    def test_returns_none_for_unloaded_launchd_job(self, monkeypatch):
+        monkeypatch.setattr(gateway_cli.sys, "platform", "darwin")
+        monkeypatch.setattr(
+            gateway_cli.subprocess,
+            "run",
+            lambda *args, **kwargs: SimpleNamespace(
+                returncode=113,
+                stdout="",
+                stderr="Could not find service",
+            ),
+        )
+
+        assert gateway_cli.get_launchd_service_pid() is None
+
+
 class TestUserSystemdPrivateSocketPreflight:
     def test_preflight_accepts_private_socket_without_dbus_bus(self, monkeypatch):
         monkeypatch.setattr(gateway_cli, "_ensure_user_systemd_env", lambda: None)

@@ -3989,6 +3989,11 @@ class GatewayRunner:
             f"while kill -0 {current_pid} 2>/dev/null; do sleep 0.2; done; "
             f"{cmd} gateway restart"
         )
+        restart_env = os.environ.copy()
+        # This is a trusted internal handoff that runs only after this PID
+        # exits.  Do not let the child inherit the marker used to reject
+        # agent-initiated self-targeting gateway commands.
+        restart_env.pop("_MARLOW_GATEWAY", None)
         setsid_bin = shutil.which("setsid")
         if setsid_bin:
             subprocess.Popen(
@@ -3996,6 +4001,7 @@ class GatewayRunner:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                env=restart_env,
             )
         else:
             subprocess.Popen(
@@ -4003,6 +4009,7 @@ class GatewayRunner:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                env=restart_env,
             )
 
     def _launch_systemd_restart_shortcut(self) -> None:
@@ -4098,6 +4105,30 @@ class GatewayRunner:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return True
+
+    def _is_service_managed_process(self) -> bool:
+        """Return whether the current gateway relies on a supervisor to relaunch.
+
+        systemd exposes ``INVOCATION_ID`` and containers use their existing
+        restart-policy path.  launchd has no equivalent environment marker,
+        so verify that its configured job owns this exact PID.  Checking the
+        PID avoids misclassifying a manually started gateway merely because a
+        stale launchd plist still exists on disk.
+        """
+        if os.environ.get("INVOCATION_ID"):
+            return True
+        if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+            return True
+        if sys.platform != "darwin":
+            return False
+
+        try:
+            from marlow_cli.gateway import get_launchd_service_pid
+
+            return get_launchd_service_pid() == os.getpid()
+        except Exception as e:
+            logger.debug("Could not determine launchd gateway ownership: %s", e)
+            return False
 
     # Drain-timeout reasons set by _stop_impl() when a still-running turn is
     # force-interrupted; "restart_interrupted" is set by
@@ -9422,9 +9453,7 @@ class GatewayRunner:
         # us.  The detached subprocess approach (setsid + bash) doesn't work
         # under systemd (KillMode=mixed kills the cgroup) or Docker (tini
         # exits when the gateway dies, taking the detached helper with it).
-        _under_service = bool(os.environ.get("INVOCATION_ID"))  # systemd sets this
-        _in_container = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
-        if _under_service or _in_container:
+        if self._is_service_managed_process():
             self.request_restart(detached=False, via_service=True)
         else:
             self.request_restart(detached=True, via_service=False)

@@ -77,6 +77,53 @@ class ProfileGatewayProcess:
     pid: int
 
 
+def get_launchd_service_pid() -> int | None:
+    """Return the PID owned by this profile's launchd job, if running.
+
+    ``launchctl list <label>`` emits an old-style property list when a label
+    is supplied, rather than the tabular output produced by bare
+    ``launchctl list``.  Accept both formats so this also works with older
+    launchctl variants and test doubles.
+    """
+    if not is_macos():
+        return None
+
+    label = get_launchd_label()
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", label],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+
+    import re
+
+    property_pid = re.search(
+        r'^\s*"PID"\s*=\s*(\d+)\s*;',
+        result.stdout,
+        flags=re.MULTILINE,
+    )
+    if property_pid:
+        pid = int(property_pid.group(1))
+        return pid if pid > 0 else None
+
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3 or parts[2] != label:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        return pid if pid > 0 else None
+    return None
+
+
 def _get_service_pids() -> set:
     """Return PIDs currently managed by systemd or launchd gateway services.
 
@@ -126,27 +173,9 @@ def _get_service_pids() -> set:
 
     # --- launchd (macOS) ---
     if is_macos():
-        try:
-            label = get_launchd_label()
-            result = subprocess.run(
-                ["launchctl", "list", label],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                # Output: "PID\tStatus\tLabel" header, then one data line
-                for line in result.stdout.strip().splitlines():
-                    parts = line.split()
-                    if len(parts) >= 3 and parts[2] == label:
-                        try:
-                            pid = int(parts[0])
-                            if pid > 0:
-                                pids.add(pid)
-                        except ValueError:
-                            pass
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
+        pid = get_launchd_service_pid()
+        if pid is not None:
+            pids.add(pid)
 
     return pids
 
