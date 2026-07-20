@@ -39,6 +39,89 @@ Use the selector's `default_index` keyword and cover the interactive entry path 
 
 ---
 
+## [ERR-20260720-001] validation-python-command-recurrence
+
+**Logged**: 2026-07-20T08:55:02+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+A direct validation command again assumed a `python` executable was available.
+
+### Error
+
+```
+zsh:1: command not found: python
+```
+
+### Context
+
+- A syntax-only validation command invoked `python -m py_compile` directly.
+- This worktree exposes `/opt/homebrew/bin/python3` and no `python` alias.
+
+### Suggested Fix
+
+Use the project test wrapper where possible and `python3` for standalone probes.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: scripts/run_tests.sh
+- See Also: ERR-20260717-002
+
+### Resolution
+
+- **Resolved**: 2026-07-20T08:55:02+08:00
+- **Notes**: Switched the standalone syntax probe to `python3` and used the
+  main checkout's shared virtualenv for pytest.
+
+---
+
+## [ERR-20260720-002] telegram-recall-raw-message-scope
+
+**Logged**: 2026-07-20T09:12:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+The raw Telegram request was captured in the outer handler but referenced from
+a separate inner-handler method without being passed across the boundary.
+
+### Error
+
+```
+NameError: name '_raw_experience_user_message' is not defined
+```
+
+### Context
+
+- The focused runtime and `_run_agent` tests passed.
+- The complete gateway suite exercised the real outer-to-inner dispatch path
+  and exposed the missing parameter in 13 tests.
+
+### Suggested Fix
+
+Carry the raw request on the transient typed `MessageEvent`, preserving the
+inner handler's established call contract, then pass it to `_run_agent` and
+assert propagation in gateway regression tests.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: gateway/run.py, tests/gateway/test_status_command.py
+
+### Resolution
+
+- **Resolved**: 2026-07-20T09:12:00+08:00
+- **Notes**: Added `MessageEvent.raw_user_message`, preserved it across plugin
+  rewrites, and completed the full gateway suite successfully.
+
+---
+
 ## [ERR-20260718-029] missing-repository-rule-files
 
 **Logged**: 2026-07-18T21:30:00+08:00

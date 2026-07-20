@@ -1,8 +1,8 @@
 """Runtime boundary helpers for the Work Experience validation MVP.
 
-Experience is intentionally available to one narrow producer in the first
-release: a foreground turn from the classic local CLI. Every other caller is
-named explicitly and fails closed. Keeping this as an enum instead of
+Experience is intentionally available only to explicitly authorized foreground
+turns: the classic local CLI and an owner-bound Telegram DM. Every other caller
+is named explicitly and fails closed. Keeping this as an enum instead of
 inferring eligibility from ``agent.platform`` matters because both background
 CLI tasks and the TUI currently identify themselves as ``"cli"``.
 
@@ -36,6 +36,7 @@ class TurnOrigin(StrEnum):
     """Immutable identity for the frontend/runtime that started a turn."""
 
     CLASSIC_CLI = "classic_cli"
+    TELEGRAM = "telegram"
     CLI_BACKGROUND = "cli_background"
     TUI = "tui"
     GATEWAY = "gateway"
@@ -48,7 +49,7 @@ class TurnOrigin(StrEnum):
     def experience_eligible(self) -> bool:
         """Whether the MVP may read experience for this origin."""
 
-        return self is TurnOrigin.CLASSIC_CLI
+        return self in {TurnOrigin.CLASSIC_CLI, TurnOrigin.TELEGRAM}
 
 
 class ExperienceMode(StrEnum):
@@ -244,6 +245,11 @@ def prepare_experience_turn(
         raw_config = load_config().get("experience", {})
         if not isinstance(raw_config, Mapping):
             return None
+        if origin is TurnOrigin.TELEGRAM and not _telegram_recall_authorized(
+            agent,
+            raw_config,
+        ):
+            return None
         global_mode = normalize_experience_mode(raw_config.get("mode", "off"))
         if not global_mode.recall_enabled:
             return None
@@ -334,6 +340,45 @@ def prepare_experience_turn(
             type(exc).__name__,
         )
         return None
+
+
+def _telegram_recall_authorized(
+    agent: Any,
+    experience_config: Mapping[str, Any],
+) -> bool:
+    """Bind Telegram recall to one configured local-owner DM identity.
+
+    Gateway allowlists and pairing authorize general bot access, not disclosure
+    of the profile owner's durable lessons. Work Experience therefore requires
+    a separate, exact identity binding and never enables group or channel turns.
+    """
+
+    telegram_config = experience_config.get("telegram_recall", {})
+    if not isinstance(telegram_config, Mapping):
+        return False
+    if telegram_config.get("enabled") is not True:
+        return False
+    if str(getattr(agent, "platform", "") or "").strip().casefold() != "telegram":
+        return False
+    if str(getattr(agent, "_chat_type", "") or "").strip().casefold() != "dm":
+        return False
+
+    configured = telegram_config.get("owner_user_id")
+    if isinstance(configured, bool) or configured is None:
+        return False
+    owner_user_id = str(configured).strip()
+    if not owner_user_id or len(owner_user_id) > 128:
+        return False
+
+    caller_ids = {
+        str(value).strip()
+        for value in (
+            getattr(agent, "_user_id", None),
+            getattr(agent, "_user_id_alt", None),
+        )
+        if value is not None and str(value).strip()
+    }
+    return owner_user_id in caller_ids
 
 
 def _effective_mode(

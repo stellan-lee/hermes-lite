@@ -1374,6 +1374,13 @@ DEFAULT_CONFIG = {
         # Automatic retrospectives are intentionally deferred in the MVP.
         "reflection_enabled": False,
         "gateway_capture": False,
+        # Work Experience belongs to the profile's local-owner principal.
+        # Telegram recall therefore requires a separate exact owner binding;
+        # general gateway allowlists/pairing are not sufficient authorization.
+        "telegram_recall": {
+            "enabled": False,
+            "owner_user_id": "",
+        },
     },
 
     # Curator — background skill maintenance.

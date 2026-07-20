@@ -207,6 +207,7 @@ def test_merge_pending_message_event_merges_text_and_photo_followups():
         text="first follow-up",
         message_type=MessageType.TEXT,
         source=source,
+        raw_user_message="first follow-up",
     )
     photo_event = MessageEvent(
         text="see screenshot",
@@ -214,6 +215,7 @@ def test_merge_pending_message_event_merges_text_and_photo_followups():
         source=source,
         media_urls=["/tmp/test.png"],
         media_types=["image/png"],
+        raw_user_message="see screenshot",
     )
 
     merge_pending_message_event(pending, session_key, text_event, merge_text=True)
@@ -222,6 +224,7 @@ def test_merge_pending_message_event_merges_text_and_photo_followups():
     merged = pending[session_key]
     assert merged.message_type == MessageType.PHOTO
     assert merged.text == "first follow-up\n\nsee screenshot"
+    assert merged.raw_user_message == "first follow-up\nsee screenshot"
     assert merged.media_urls == ["/tmp/test.png"]
     assert merged.media_types == ["image/png"]
 
@@ -298,6 +301,7 @@ async def test_recent_telegram_followups_append_in_pending_queue():
     fake_agent.interrupt.assert_not_called()
     adapter = runner.adapters[Platform.TELEGRAM]
     assert adapter._pending_messages[session_key].text == "part one\npart two"
+    assert adapter._pending_messages[session_key].raw_user_message == "part one\npart two"
 
 
 # ------------------------------------------------------------------
