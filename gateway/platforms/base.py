@@ -1439,6 +1439,10 @@ class MessageEvent:
 
     # Timestamps
     timestamp: datetime = field(default_factory=datetime.now)
+
+    # Exact user-authored text captured before gateway plugin rewrites or
+    # attachment/context expansion. Transient only: never persisted directly.
+    raw_user_message: Optional[str] = None
     
     def is_command(self) -> bool:
         """Check if this is a command message (e.g., /new, /reset)."""
@@ -1588,6 +1592,15 @@ def merge_pending_message_event(
     """
     existing = pending_messages.get(session_key)
     if existing:
+        def merge_raw_user_message() -> None:
+            incoming = getattr(event, "raw_user_message", None)
+            if not isinstance(incoming, str) or not incoming.strip():
+                return
+            current = getattr(existing, "raw_user_message", None)
+            existing.raw_user_message = (
+                f"{current}\n{incoming}" if current else incoming
+            )
+
         existing_is_photo = getattr(existing, "message_type", None) == MessageType.PHOTO
         incoming_is_photo = event.message_type == MessageType.PHOTO
         existing_has_media = bool(existing.media_urls)
@@ -1598,6 +1611,7 @@ def merge_pending_message_event(
             existing.media_types.extend(event.media_types)
             if event.text:
                 existing.text = BasePlatformAdapter._merge_caption(existing.text, event.text)
+                merge_raw_user_message()
             return
 
         if existing_has_media or incoming_has_media:
@@ -1609,6 +1623,7 @@ def merge_pending_message_event(
                     existing.text = BasePlatformAdapter._merge_caption(existing.text, event.text)
                 else:
                     existing.text = event.text
+                merge_raw_user_message()
             if existing_is_photo or incoming_is_photo:
                 existing.message_type = MessageType.PHOTO
             elif (
@@ -1625,6 +1640,7 @@ def merge_pending_message_event(
         ):
             if event.text:
                 existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
+                merge_raw_user_message()
             return
 
     pending_messages[session_key] = event

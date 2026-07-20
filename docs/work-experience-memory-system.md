@@ -19,11 +19,11 @@ Implemented now:
   consent filters before lesson text is returned;
 - explainable structured/FTS5 recall with realistic term-overlap matching,
   shadow diagnostics, and bounded assist-mode injection;
-- classic foreground CLI automatic integration, using a wire-only copy of the
-  current user turn;
+- classic foreground CLI and explicitly owner-bound Telegram DM integration,
+  using a wire-only copy of the current user turn;
 - project-scoped MCP recall and lesson management through `marlow mcp serve`,
   with explicit tool annotations and external-boundary content filtering;
-  unsupported automatic-injection frontends fail closed;
+  unbound and unsupported automatic-injection frontends fail closed;
 - CLI governance through `marlow experience ...`; and
 - redaction and echo isolation for persistence, provider fallbacks, prompt
   caching, hooks, debug dumps, model reasoning state, tool-call arguments,
@@ -325,9 +325,11 @@ helper.
 Profile isolation is already available through `get_marlow_home()`
 (`marlow_constants.py:43-100`). This is a storage boundary, but not a complete
 authorization boundary: one gateway profile may serve multiple users or group
-threads. MVP0 should therefore be classic local CLI only; other frontends fail
-closed until they supply the same raw-input, principal, cwd, and egress
-contracts.
+threads. Automatic recall therefore remains fail-closed for general gateways.
+Telegram is the narrow exception: a direct-message turn may bind one exact,
+locally configured Telegram user ID to the existing `local-owner` principal.
+Groups, channels, anonymous senders, and other gateway identities remain
+ineligible.
 
 ## 3. Problem definition
 
@@ -1314,13 +1316,20 @@ experience:
   default_egress: local_only
   reflection_enabled: false   # post-MVP, extra model request
   gateway_capture: false
+  telegram_recall:
+    enabled: false             # direct messages only
+    owner_user_id: ""          # exact Telegram user ID bound to local-owner
 ```
 
 Per-project capture, recall, injection, reflection, and provider-trust consent
 live in the experience policy store and default deny. `capture` grants no
 recall, `shadow` grants recall without injection, and `assist` grants both
-recall and injection. These config keys are additive; no `_config_version`
-migration is needed.
+recall and injection. Telegram recall additionally requires both fields under
+`telegram_recall`; gateway pairing and allowlists alone never authorize access
+to Work Experience. The Telegram turn supplies the untouched inbound text as
+the retrieval query, while attachment expansion and synthetic gateway notes are
+excluded. These config keys are additive; no `_config_version` migration is
+needed.
 
 ### 10.5 Database migration and retention
 
@@ -1373,7 +1382,8 @@ MVP0 integration tests:
 - store failures are fail-open for the user's work and metadata-only in logs;
 - no cross-profile, cross-project, cross-repository, or disallowed-provider item
   is returned;
-- gateway/TUI/`codex_app_server` fail closed; and
+- unbound Telegram, Telegram group/channel, other gateway, TUI, and
+  `codex_app_server` turns fail closed; and
 - reopen/WAL tests verify purge behavior and its documented limitations.
 
 Post-MVP capture tests are separate: every terminal return must use the common
@@ -1476,7 +1486,7 @@ behavior.
 | Expanded attachments enter task signatures | Typed raw/synthetic turn input; assist disabled where a frontend cannot supply raw request text |
 | Local storage is mistaken for local processing | Separate capture/recall/injection/reflection consent and item-level provider-egress policy |
 | Similar text or a model declaration is mistaken for influence | Separate retrieval/declaration/observation events; paired behavioral outcomes remain primary |
-| Cross-project/user leakage | Hard profile-owner/repository/project filters before ranking; gateway disabled in MVP0 |
+| Cross-project/user leakage | Hard profile-owner/repository/project filters before ranking; Telegram recall requires an exact local-owner DM binding and other gateways remain disabled |
 | Reflection delays responses or leaks data | Disabled in MVP0; later bounded synchronous call with immediate consent/egress re-check and fail-open timeout |
 | Existing memory systems conflict | No automatic mirroring; distinct context tag, precedence, config, and governance |
 | Purge is overstated | Distinguish logical retraction from best-effort physical purge and disclose backups/filesystem/provider copies |
@@ -1491,8 +1501,9 @@ behavior.
    immediately, or still require approval in the MVP?
 3. What bounded, observable signal can show that a recalled lesson changed
    behavior without introducing a mandatory self-report ritual?
-4. How should CLI principal identity evolve into stable gateway identity
-   without leaking across direct messages, channels, and group threads?
+4. How should the single `local-owner` Telegram DM binding evolve into stable
+   multi-user gateway principals without leaking across direct messages,
+   channels, and group threads?
 5. What user-approved portable repository identity should support path moves,
    cross-clone sharing, forks, and intentionally related repositories beyond
    the MVP's profile-local Git-common-dir key?

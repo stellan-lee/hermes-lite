@@ -80,6 +80,10 @@ def test_default_config_is_disabled_and_non_reflective() -> None:
     assert defaults["reflection_enabled"] is False
     assert defaults["gateway_capture"] is False
     assert defaults["max_injected_chars"] == 1500
+    assert defaults["telegram_recall"] == {
+        "enabled": False,
+        "owner_user_id": "",
+    }
 
 
 def test_partial_user_config_receives_new_experience_defaults(tmp_path: Path) -> None:
@@ -93,6 +97,10 @@ def test_partial_user_config_receives_new_experience_defaults(tmp_path: Path) ->
     assert config["experience"]["max_retrieved_items"] == 3
     assert config["experience"]["max_injected_chars"] == 1500
     assert config["experience"]["reflection_enabled"] is False
+    assert config["experience"]["telegram_recall"] == {
+        "enabled": False,
+        "owner_user_id": "",
+    }
 
 
 @pytest.mark.parametrize(

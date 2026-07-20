@@ -96,6 +96,7 @@ async def test_hook_rewrite_replaces_event_text(monkeypatch):
 
     async def _capture(event, source, _quick_key, _run_generation):
         seen_text["value"] = event.text
+        seen_text["raw"] = event.raw_user_message
         return "ok"
 
     monkeypatch.setattr("marlow_cli.plugins.invoke_hook", _fake_hook)
@@ -106,6 +107,7 @@ async def test_hook_rewrite_replaces_event_text(monkeypatch):
     await runner._handle_message(_make_event("original"))
 
     assert seen_text.get("value") == "REWRITTEN"
+    assert seen_text.get("raw") == "original"
 
 
 @pytest.mark.asyncio

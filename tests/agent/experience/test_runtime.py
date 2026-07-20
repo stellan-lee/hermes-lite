@@ -8,6 +8,7 @@ from agent.experience.runtime import (
     ExperienceRuntimeTurn,
     TurnOrigin,
     _effective_mode,
+    _telegram_recall_authorized,
     copy_messages_with_experience_context,
     normalize_experience_mode,
     normalize_turn_origin,
@@ -26,14 +27,44 @@ class _FormattingService:
         return ",".join(item.item_id for item in result.items)
 
 
-def test_only_classic_cli_origin_is_experience_eligible() -> None:
+def test_only_classic_cli_and_telegram_origins_are_experience_eligible() -> None:
     assert TurnOrigin.CLASSIC_CLI.experience_eligible is True
+    assert TurnOrigin.TELEGRAM.experience_eligible is True
     assert all(
         not origin.experience_eligible
         for origin in TurnOrigin
-        if origin is not TurnOrigin.CLASSIC_CLI
+        if origin not in {TurnOrigin.CLASSIC_CLI, TurnOrigin.TELEGRAM}
     )
     assert normalize_turn_origin("not-a-runtime") is TurnOrigin.UNKNOWN
+
+
+def test_telegram_recall_requires_exact_configured_owner_dm() -> None:
+    config = {
+        "telegram_recall": {
+            "enabled": True,
+            "owner_user_id": "12345",
+        }
+    }
+    owner_dm = SimpleNamespace(
+        platform="telegram",
+        _chat_type="dm",
+        _user_id="12345",
+        _user_id_alt=None,
+    )
+
+    assert _telegram_recall_authorized(owner_dm, config) is True
+    assert _telegram_recall_authorized(
+        SimpleNamespace(**{**owner_dm.__dict__, "_user_id": "54321"}),
+        config,
+    ) is False
+    assert _telegram_recall_authorized(
+        SimpleNamespace(**{**owner_dm.__dict__, "_chat_type": "group"}),
+        config,
+    ) is False
+    assert _telegram_recall_authorized(
+        owner_dm,
+        {"telegram_recall": {"enabled": False, "owner_user_id": "12345"}},
+    ) is False
 
 
 def test_only_shadow_and_assist_enable_recall() -> None:
@@ -229,8 +260,27 @@ def test_unsupported_origin_and_codex_runtime_never_open_store(monkeypatch) -> N
         raise AssertionError("experience store must not be opened")
 
     monkeypatch.setattr(store_module, "ExperienceStore", fail_if_opened)
+    monkeypatch.setattr(
+        "marlow_cli.config.load_config",
+        lambda: {
+            "experience": {
+                "mode": "assist",
+                "telegram_recall": {
+                    "enabled": True,
+                    "owner_user_id": "configured-owner",
+                },
+            }
+        },
+    )
     regular = SimpleNamespace(api_mode="chat_completions")
     codex = SimpleNamespace(api_mode="codex_app_server")
+    unbound_telegram = SimpleNamespace(
+        api_mode="chat_completions",
+        platform="telegram",
+        _chat_type="dm",
+        _user_id="different-user",
+        _user_id_alt=None,
+    )
 
     assert prepare_experience_turn(
         regular,
@@ -241,5 +291,10 @@ def test_unsupported_origin_and_codex_runtime_never_open_store(monkeypatch) -> N
         codex,
         raw_user_message="hello",
         turn_origin=TurnOrigin.CLASSIC_CLI,
+    ) is None
+    assert prepare_experience_turn(
+        unbound_telegram,
+        raw_user_message="hello",
+        turn_origin=TurnOrigin.TELEGRAM,
     ) is None
     assert opened == 0

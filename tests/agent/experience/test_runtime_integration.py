@@ -61,9 +61,26 @@ def _seed_active_local_lesson(home: Path, repository: Path) -> str:
         return lesson["id"]
 
 
+@pytest.mark.parametrize(
+    ("turn_origin", "agent_identity"),
+    [
+        (TurnOrigin.CLASSIC_CLI, {}),
+        (
+            TurnOrigin.TELEGRAM,
+            {
+                "platform": "telegram",
+                "_chat_type": "dm",
+                "_user_id": "12345",
+                "_user_id_alt": None,
+            },
+        ),
+    ],
+)
 def test_prepare_retrieves_once_and_builds_local_assist_context(
     tmp_path: Path,
     monkeypatch,
+    turn_origin: TurnOrigin,
+    agent_identity: dict[str, object],
 ) -> None:
     home = tmp_path / "marlow-home"
     repository = tmp_path / "repository"
@@ -87,6 +104,10 @@ def test_prepare_retrieves_once_and_builds_local_assist_context(
                 "max_retrieved_items": 3,
                 "max_injected_chars": 1_500,
                 "min_retrieval_confidence": 0.55,
+                "telegram_recall": {
+                    "enabled": True,
+                    "owner_user_id": "12345",
+                },
             }
         },
     )
@@ -95,6 +116,7 @@ def test_prepare_retrieves_once_and_builds_local_assist_context(
         api_mode="chat_completions",
         provider="ollama",
         base_url="http://127.0.0.1:11434/v1",
+        **agent_identity,
     )
 
     turn = prepare_experience_turn(
@@ -102,7 +124,7 @@ def test_prepare_retrieves_once_and_builds_local_assist_context(
         raw_user_message=(
             "Please troubleshoot the CronJob because its external update is missing"
         ),
-        turn_origin=TurnOrigin.CLASSIC_CLI,
+        turn_origin=turn_origin,
     )
 
     assert turn is not None
@@ -123,7 +145,7 @@ def test_prepare_retrieves_once_and_builds_local_assist_context(
     unrelated = prepare_experience_turn(
         agent,
         raw_user_message="Draft a README for the frontend color palette",
-        turn_origin=TurnOrigin.CLASSIC_CLI,
+        turn_origin=turn_origin,
     )
     assert unrelated is not None
     assert unrelated.result.items == ()

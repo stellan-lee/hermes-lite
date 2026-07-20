@@ -1164,6 +1164,30 @@ logger = logging.getLogger(__name__)
 _AGENT_PENDING_SENTINEL = object()
 
 
+def _work_experience_turn_kwargs(
+    source: SessionSource,
+    raw_user_message: Optional[str],
+) -> Dict[str, str]:
+    """Return the explicit Work Experience boundary for a Telegram owner DM.
+
+    The runtime performs the authoritative configured-owner check. This gateway
+    seam only identifies a direct Telegram user turn and keeps synthetic notes,
+    attachment expansion, observed group context, and other gateways out of the
+    retrieval query.
+    """
+
+    if source.platform != Platform.TELEGRAM or source.chat_type != "dm":
+        return {}
+    if not source.user_id:
+        return {}
+    if not isinstance(raw_user_message, str) or not raw_user_message.strip():
+        return {}
+    return {
+        "raw_user_message": raw_user_message,
+        "turn_origin": "telegram",
+    }
+
+
 def _resolve_runtime_agent_kwargs() -> dict:
     """Resolve provider credentials for gateway-created AIAgent instances.
 
@@ -6098,6 +6122,13 @@ class GatewayRunner:
         # Internal events (e.g. background-process completion notifications)
         # are system-generated and must skip user authorization.
         is_internal = bool(getattr(event, "internal", False))
+        if (
+            not is_internal
+            and event.raw_user_message is None
+            and isinstance(event.text, str)
+            and event.text.strip()
+        ):
+            event.raw_user_message = event.text
 
         # Fire pre_gateway_dispatch plugin hook for user-originated messages.
         # Plugins receive the MessageEvent and may return a dict influencing flow:
@@ -7203,7 +7234,9 @@ class GatewayRunner:
         _run_generation = self._begin_session_run_generation(_quick_key)
 
         try:
-            _agent_result = await self._handle_message_with_agent(event, source, _quick_key, _run_generation)
+            _agent_result = await self._handle_message_with_agent(
+                event, source, _quick_key, _run_generation
+            )
             # Goal continuation: after the agent returns a final response
             # for this turn, check any standing /goal — the judge will
             # either mark it done, pause it (budget), or enqueue a
@@ -8152,6 +8185,7 @@ class GatewayRunner:
             # Run the agent
             agent_result = await self._run_agent(
                 message=message_text,
+                raw_user_message=event.raw_user_message,
                 context_prompt=context_prompt,
                 history=history,
                 source=source,
@@ -15246,6 +15280,7 @@ class GatewayRunner:
         _interrupt_depth: int = 0,
         event_message_id: Optional[str] = None,
         channel_prompt: Optional[str] = None,
+        raw_user_message: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -16610,6 +16645,9 @@ class GatewayRunner:
                     "conversation_history": agent_history,
                     "task_id": session_id,
                 }
+                _conversation_kwargs.update(
+                    _work_experience_turn_kwargs(source, raw_user_message)
+                )
                 if observed_group_context:
                     _conversation_kwargs["persist_user_message"] = message
                 result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
@@ -17400,6 +17438,7 @@ class GatewayRunner:
                 next_message = pending
                 next_message_id = None
                 next_channel_prompt = None
+                next_raw_user_message = None
                 if pending_event is not None:
                     next_source = getattr(pending_event, "source", None) or source
                     if self._is_goal_continuation_event(pending_event) and not self._goal_still_active_for_session(session_id):
@@ -17417,6 +17456,13 @@ class GatewayRunner:
                         return result
                     next_message_id = self._reply_anchor_for_event(pending_event)
                     next_channel_prompt = getattr(pending_event, "channel_prompt", None)
+                    if not bool(getattr(pending_event, "internal", False)):
+                        _pending_raw_text = (
+                            getattr(pending_event, "raw_user_message", None)
+                            or getattr(pending_event, "text", None)
+                        )
+                        if isinstance(_pending_raw_text, str) and _pending_raw_text.strip():
+                            next_raw_user_message = _pending_raw_text
 
                 # Restart typing indicator so the user sees activity while
                 # the follow-up turn runs.  The outer _process_message_background
@@ -17433,6 +17479,7 @@ class GatewayRunner:
 
                 followup_result = await self._run_agent(
                     message=next_message,
+                    raw_user_message=next_raw_user_message,
                     context_prompt=context_prompt,
                     history=updated_history,
                     source=next_source,

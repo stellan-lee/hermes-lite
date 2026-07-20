@@ -41,3 +41,43 @@ map explicit MCP mutation annotations into the same policy.
   fail-closed tests.
 
 ---
+
+## [FEAT-20260720-001] telegram-work-experience-recall
+
+**Logged**: 2026-07-20T08:55:02+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Requested Capability
+
+Support Work Experience recall for turns received through Telegram.
+
+### User Context
+
+The profile owner wants Telegram tasks to benefit from the same approved,
+project-scoped lessons available in the classic CLI.
+
+### Complexity Estimate
+
+medium
+
+### Suggested Implementation
+
+Add an explicit Telegram turn origin, preserve the untouched inbound request,
+bind direct-message recall to one configured owner user ID, and retain all
+existing project and provider-egress checks.
+
+### Metadata
+
+- Frequency: first_time
+- Related Features: Work Experience, Telegram gateway, provider egress
+
+### Resolution
+
+- **Resolved**: 2026-07-20T09:22:00+08:00
+- **Notes**: Added owner-bound Telegram DM recall with raw-input separation,
+  retained project/provider authorization, documented configuration, and
+  completed the full gateway and focused Work Experience test suites.
+
+---
