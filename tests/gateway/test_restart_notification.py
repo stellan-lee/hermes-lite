@@ -16,6 +16,16 @@ from tests.gateway.restart_test_helpers import (
 )
 
 
+def _hide_container_markers(monkeypatch):
+    real_exists = gateway_run.os.path.exists
+    container_markers = {"/.dockerenv", "/run/.containerenv"}
+    monkeypatch.setattr(
+        gateway_run.os.path,
+        "exists",
+        lambda path: False if path in container_markers else real_exists(path),
+    )
+
+
 # ── restart marker helpers ───────────────────────────────────────────────
 
 
@@ -99,10 +109,62 @@ async def test_restart_command_uses_service_restart_under_systemd(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_restart_command_uses_detached_without_systemd(tmp_path, monkeypatch):
-    """Without systemd, /restart uses the detached subprocess approach."""
+async def test_restart_command_uses_service_restart_under_launchd(tmp_path, monkeypatch):
+    """A launchd-owned macOS gateway exits for launchd to relaunch it."""
     monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
     monkeypatch.delenv("INVOCATION_ID", raising=False)
+    monkeypatch.setattr(gateway_run.sys, "platform", "darwin")
+    monkeypatch.setattr(gateway_run.os, "getpid", lambda: 321)
+    monkeypatch.setattr("marlow_cli.gateway.get_launchd_service_pid", lambda: 321)
+    _hide_container_markers(monkeypatch)
+
+    runner, _adapter = make_restart_runner()
+    runner.request_restart = MagicMock(return_value=True)
+
+    source = make_restart_source(chat_id="42")
+    event = MessageEvent(
+        text="/restart",
+        message_type=MessageType.TEXT,
+        source=source,
+        message_id="m1",
+    )
+
+    await runner._handle_restart_command(event)
+    runner.request_restart.assert_called_once_with(detached=False, via_service=True)
+
+
+@pytest.mark.asyncio
+async def test_restart_command_uses_detached_for_manual_macos_gateway(tmp_path, monkeypatch):
+    """A manual macOS gateway must not rely on an unrelated launchd job."""
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    monkeypatch.setattr(gateway_run.sys, "platform", "darwin")
+    monkeypatch.setattr(gateway_run.os, "getpid", lambda: 321)
+    monkeypatch.setattr("marlow_cli.gateway.get_launchd_service_pid", lambda: 654)
+    _hide_container_markers(monkeypatch)
+
+    runner, _adapter = make_restart_runner()
+    runner.request_restart = MagicMock(return_value=True)
+
+    source = make_restart_source(chat_id="42")
+    event = MessageEvent(
+        text="/restart",
+        message_type=MessageType.TEXT,
+        source=source,
+        message_id="m1",
+    )
+
+    await runner._handle_restart_command(event)
+    runner.request_restart.assert_called_once_with(detached=True, via_service=False)
+
+
+@pytest.mark.asyncio
+async def test_restart_command_uses_detached_without_service_manager(tmp_path, monkeypatch):
+    """Without a supervisor, /restart uses the detached subprocess approach."""
+    monkeypatch.setattr(gateway_run, "_marlow_home", tmp_path)
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    monkeypatch.setattr(gateway_run.sys, "platform", "linux")
+    _hide_container_markers(monkeypatch)
 
     runner, _adapter = make_restart_runner()
     runner.request_restart = MagicMock(return_value=True)
