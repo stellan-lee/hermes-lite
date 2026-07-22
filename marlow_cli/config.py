@@ -1502,10 +1502,12 @@ DEFAULT_CONFIG = {
         "cron_mode": "deny",
         # Optional exact-user route for privileged gateway approvals. When
         # enabled, requests are sent to this destination and only user_id may
-        # resolve them. Configure user_id locally first; that user can then run
-        # /set_admin_channel to update chat_id/thread_id safely.
+        # resolve them. Set conversation_mode to super_admin to also trust
+        # messages from that exact user/chat/thread and auto-approve approvable
+        # actions originating there. Configure this block locally.
         "admin": {
             "enabled": False,
+            "conversation_mode": "approval_only",
             "platform": "",
             "user_id": "",
             "chat_id": "",

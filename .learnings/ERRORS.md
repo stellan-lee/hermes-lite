@@ -1914,3 +1914,120 @@ or `git show HEAD:<path>`. Always inspect the full diff before completion.
   the unique new entries.
 
 ---
+
+## [ERR-20260722-001] scripts/run_tests.sh
+
+**Logged**: 2026-07-22T13:33:02Z
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The canonical test runner could not find a supported virtualenv from this worktree.
+
+### Error
+
+```
+error: no virtualenv found in /Users/liyuqi/.codex/worktrees/fcc5/hermes-lite/.venv or /Users/liyuqi/.codex/worktrees/fcc5/hermes-lite/venv
+```
+
+### Context
+
+- The documented shared fallback at `~/.marlow/marlow-agent/venv` was absent.
+- System Python 3.14 did not have pytest installed.
+- The main checkout at `/Volumes/Dev/project/hermes-lite` had a reusable `.venv`.
+
+### Suggested Fix
+
+Document the main-checkout virtualenv as a worktree fallback or provide the documented shared environment.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: scripts/run_tests.sh, AGENTS.md
+
+### Resolution
+
+- **Resolved**: 2026-07-22T13:36:00Z
+- **Notes**: Used the existing main-checkout virtualenv without changing dependencies.
+
+---
+
+## [ERR-20260722-002] tracked-hidden-log-replacement
+
+**Logged**: 2026-07-22T13:36:00Z
+**Priority**: high
+**Status**: resolved
+**Area**: docs
+
+### Summary
+
+Adding apparently absent hidden learning logs replaced tracked history already present in `HEAD`.
+
+### Error
+
+```
+git diff --numstat reported 1,896 deleted ERROR lines and 64 deleted FEATURE_REQUEST lines.
+```
+
+### Context
+
+- The worktree omitted the tracked hidden files while `HEAD` retained them.
+- This repeated the exact failure already documented in ERR-20260719-004.
+- A focused status and full line-count comparison detected it before validation.
+
+### Suggested Fix
+
+Always run `git ls-files <hidden-path>` before creating hidden repository files, even when the worktree path is absent.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .learnings/ERRORS.md, .learnings/FEATURE_REQUESTS.md
+- See Also: ERR-20260719-004
+
+### Resolution
+
+- **Resolved**: 2026-07-22T13:37:00Z
+- **Notes**: Mechanically restored both files from `HEAD`, then appended only the new entries.
+
+---
+
+## [ERR-20260722-003] git-rev-parse-multiple-short-revisions
+
+**Logged**: 2026-07-22T14:02:00Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+One Git inspection command passed multiple revisions to `git rev-parse --short`, which accepts a single revision in this form.
+
+### Error
+
+```
+fatal: Needed a single revision
+```
+
+### Context
+
+- The command attempted to print `HEAD`, `origin/main`, and `upstream/main` together.
+- Fetching both remotes completed successfully before the display command failed.
+
+### Suggested Fix
+
+Invoke `git rev-parse --short` once per revision when comparing several refs.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .git/config
+
+### Resolution
+
+- **Resolved**: 2026-07-22T14:03:00Z
+- **Notes**: Queried each revision separately and confirmed the PR should target the fork's `main` branch.
+
+---

@@ -81,3 +81,40 @@ existing project and provider-egress checks.
   completed the full gateway and focused Work Experience test suites.
 
 ---
+
+## [FEAT-20260722-001] super-admin-gateway-conversation
+
+**Logged**: 2026-07-22T13:33:02Z
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Requested Capability
+
+Allow one exactly configured gateway administrator conversation to bypass ordinary message and slash-command restrictions and auto-approve approvable actions.
+
+### User Context
+
+The operator needs a trusted admin channel or DM where instructions may be challenged with warnings but are not refused solely because of risk.
+
+### Complexity Estimate
+
+complex
+
+### Suggested Implementation
+
+Reuse the exact `approvals.admin` identity and destination, add an explicit `super_admin` conversation mode, propagate per-turn authority through context variables, and retain non-approvable safety invariants.
+
+### Metadata
+
+- Frequency: first_time
+- Related Features: administrator-routed approvals, gateway slash access, dangerous command approvals
+
+### Resolution
+
+- **Resolved**: 2026-07-22T13:50:00Z
+- **Notes**: Added exact-source super-admin conversation mode, automatic
+  approvable-action authorization, command access, behavioral context,
+  background-task propagation, local-only configuration, and focused tests.
+
+---

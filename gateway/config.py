@@ -226,8 +226,8 @@ class AdminApprovalConfig:
     """Secure destination and identity for routed gateway approvals.
 
     ``user_id`` is the authorization boundary. ``chat_id`` and ``thread_id``
-    only control delivery and can be updated by the configured administrator
-    through ``/set_admin_channel``.
+    control both delivery and, when ``conversation_mode`` is ``super_admin``,
+    the exact conversation where that identity receives elevated authority.
     """
 
     enabled: bool = False
@@ -235,6 +235,7 @@ class AdminApprovalConfig:
     user_id: str = ""
     chat_id: str = ""
     thread_id: Optional[str] = None
+    conversation_mode: str = "approval_only"
 
     @property
     def is_complete(self) -> bool:
@@ -245,11 +246,16 @@ class AdminApprovalConfig:
             and self.chat_id.strip()
         )
 
+    @property
+    def is_super_admin_enabled(self) -> bool:
+        return self.is_complete and self.conversation_mode == "super_admin"
+
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "enabled": self.enabled,
             "user_id": self.user_id,
             "chat_id": self.chat_id,
+            "conversation_mode": self.conversation_mode,
         }
         if self.platform is not None:
             result["platform"] = self.platform.value
@@ -271,6 +277,15 @@ class AdminApprovalConfig:
                     "Ignoring invalid approvals.admin.platform=%r",
                     raw_platform,
                 )
+        conversation_mode = str(
+            data.get("conversation_mode") or "approval_only"
+        ).strip().lower()
+        if conversation_mode not in {"approval_only", "super_admin"}:
+            logger.warning(
+                "Ignoring invalid approvals.admin.conversation_mode=%r",
+                conversation_mode,
+            )
+            conversation_mode = "approval_only"
         return cls(
             enabled=_coerce_bool(data.get("enabled"), False),
             platform=platform,
@@ -281,6 +296,7 @@ class AdminApprovalConfig:
                 if data.get("thread_id") not in (None, "")
                 else None
             ),
+            conversation_mode=conversation_mode,
         )
 
 

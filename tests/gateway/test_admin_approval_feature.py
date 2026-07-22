@@ -62,6 +62,7 @@ class TestAdminApprovalConfig:
         config = AdminApprovalConfig.from_dict(
             {
                 "enabled": True,
+                "conversation_mode": "super_admin",
                 "platform": "telegram",
                 "user_id": "  admin-user  ",
                 "chat_id": 1234,
@@ -73,6 +74,7 @@ class TestAdminApprovalConfig:
         assert config.platform is Platform.TELEGRAM
         assert config.to_dict() == {
             "enabled": True,
+            "conversation_mode": "super_admin",
             "platform": "telegram",
             "user_id": "admin-user",
             "chat_id": "1234",
@@ -92,6 +94,20 @@ class TestAdminApprovalConfig:
         assert config.platform is None
         assert config.is_complete is False
 
+    def test_invalid_conversation_mode_falls_back_to_approval_only(self):
+        config = AdminApprovalConfig.from_dict(
+            {
+                "enabled": True,
+                "conversation_mode": "root_everywhere",
+                "platform": "telegram",
+                "user_id": "admin-user",
+                "chat_id": "admin-chat",
+            }
+        )
+
+        assert config.conversation_mode == "approval_only"
+        assert config.is_super_admin_enabled is False
+
     def test_top_level_yaml_is_loaded_into_gateway_runtime(self, tmp_path):
         from gateway import config as gateway_config
 
@@ -100,6 +116,7 @@ class TestAdminApprovalConfig:
 approvals:
   admin:
     enabled: true
+    conversation_mode: super_admin
     platform: slack
     user_id: U_ADMIN
     chat_id: C_ADMIN
@@ -113,6 +130,7 @@ approvals:
 
         assert config.admin_approval == AdminApprovalConfig(
             enabled=True,
+            conversation_mode="super_admin",
             platform=Platform.SLACK,
             user_id="U_ADMIN",
             chat_id="C_ADMIN",
@@ -472,52 +490,218 @@ class TestAdminApprovalRouting:
             )
 
 
-class TestAdminApprovalCommands:
-    @pytest.mark.asyncio
-    async def test_only_configured_admin_can_set_delivery_channel(self):
+class TestSuperAdminConversation:
+    def test_exact_identity_chat_and_thread_match(self):
         admin = AdminApprovalConfig(
             enabled=True,
+            conversation_mode="super_admin",
             platform=Platform.TELEGRAM,
             user_id="admin-user",
-            chat_id="old-chat",
+            chat_id="admin-chat",
+            thread_id="admin-thread",
         )
         runner = _runner(admin)
 
-        result = await runner._handle_set_admin_channel_command(
-            _event("/set_admin_channel", user_id="attacker")
-        )
+        assert runner._is_super_admin_source(_event("hello").source) is True
+        assert runner._is_super_admin_source(
+            _event("hello", user_id="attacker").source
+        ) is False
+        assert runner._is_super_admin_source(
+            _event("hello", chat_id="other-chat").source
+        ) is False
+        assert runner._is_super_admin_source(
+            _event("hello", thread_id="other-thread").source
+        ) is False
+        assert runner._is_super_admin_source(
+            _event("hello", platform=Platform.SLACK).source
+        ) is False
 
-        assert "Only the configured administrator" in result
-        assert admin.chat_id == "old-chat"
-
-    @pytest.mark.asyncio
-    async def test_configured_admin_can_move_delivery_channel(self):
+    def test_missing_thread_configuration_trusts_admin_across_chat(self):
         admin = AdminApprovalConfig(
             enabled=True,
+            conversation_mode="super_admin",
             platform=Platform.TELEGRAM,
             user_id="admin-user",
-            chat_id="old-chat",
+            chat_id="admin-chat",
+            thread_id=None,
         )
         runner = _runner(admin)
 
-        with patch("cli.save_config_value", return_value=True) as save:
-            result = await runner._handle_set_admin_channel_command(
-                _event("/set_admin_channel")
+        assert runner._is_super_admin_source(
+            _event("hello", thread_id="any-thread").source
+        ) is True
+        assert runner._is_user_authorized(
+            _event("hello", thread_id="any-thread").source
+        ) is True
+
+    def test_approval_only_route_does_not_elevate_conversation(self):
+        runner = _runner(
+            AdminApprovalConfig(
+                enabled=True,
+                conversation_mode="approval_only",
+                platform=Platform.TELEGRAM,
+                user_id="admin-user",
+                chat_id="admin-chat",
             )
-
-        assert "Admin approval channel set" in result
-        assert admin.chat_id == "admin-chat"
-        assert admin.thread_id == "admin-thread"
-        save.assert_called_once_with(
-            "approvals.admin",
-            {
-                "enabled": True,
-                "platform": "telegram",
-                "user_id": "admin-user",
-                "chat_id": "admin-chat",
-                "thread_id": "admin-thread",
-            },
         )
+
+        assert runner._is_super_admin_source(_event("hello").source) is False
+
+    def test_super_admin_bypasses_slash_access_and_gets_authority_prompt(self):
+        runner = _runner(
+            AdminApprovalConfig(
+                enabled=True,
+                conversation_mode="super_admin",
+                platform=Platform.TELEGRAM,
+                user_id="admin-user",
+                chat_id="admin-chat",
+                thread_id="admin-thread",
+            )
+        )
+
+        assert runner._check_slash_access(_event("/restart").source, "restart") is None
+        prompt = runner._super_admin_authority_prompt()
+        assert "do not refuse solely because an action is risky" in prompt
+        assert "authorized automatically" in prompt
+
+    @pytest.mark.asyncio
+    async def test_whoami_reports_super_admin_authority(self):
+        runner = _runner(
+            AdminApprovalConfig(
+                enabled=True,
+                conversation_mode="super_admin",
+                platform=Platform.TELEGRAM,
+                user_id="admin-user",
+                chat_id="admin-chat",
+                thread_id="admin-thread",
+            )
+        )
+
+        result = await runner._handle_whoami_command(_event("/whoami"))
+
+        assert "Tier: **super admin**" in result
+        assert "automatically authorized" in result
+
+    @pytest.mark.asyncio
+    async def test_yolo_reports_that_super_admin_is_already_authorized(self):
+        runner = _runner(
+            AdminApprovalConfig(
+                enabled=True,
+                conversation_mode="super_admin",
+                platform=Platform.TELEGRAM,
+                user_id="admin-user",
+                chat_id="admin-chat",
+                thread_id="admin-thread",
+            )
+        )
+
+        result = await runner._handle_yolo_command(_event("/yolo"))
+
+        assert "already auto-approves" in str(result)
+        assert "disabled" not in str(result).lower()
+
+    @pytest.mark.asyncio
+    async def test_super_admin_auto_approves_slash_confirmation(self):
+        runner = _runner(
+            AdminApprovalConfig(
+                enabled=True,
+                conversation_mode="super_admin",
+                platform=Platform.TELEGRAM,
+                user_id="admin-user",
+                chat_id="admin-chat",
+                thread_id="admin-thread",
+            )
+        )
+        calls = []
+
+        async def execute():
+            calls.append(True)
+            return "executed"
+
+        result = await runner._maybe_confirm_destructive_slash(
+            event=_event("/new"),
+            command="new",
+            title="/new",
+            detail="reset",
+            execute=execute,
+        )
+
+        assert result == "executed"
+        assert calls == [True]
+
+
+class TestSuperAdminApprovals:
+    def setup_method(self):
+        _clear_approval_state()
+
+    def teardown_method(self):
+        _clear_approval_state()
+
+    def test_common_and_execute_code_approvals_are_automatic(self):
+        from tools.approval import (
+            check_all_command_guards,
+            check_execute_code_guard,
+            reset_super_admin_context,
+            set_super_admin_context,
+        )
+
+        token = set_super_admin_context(True)
+        try:
+            command = check_all_command_guards(
+                "rm -rf /tmp/marlow-super-admin-test",
+                "local",
+            )
+            code = check_execute_code_guard("print('trusted')", "local")
+        finally:
+            reset_super_admin_context(token)
+
+        assert command["approved"] is True
+        assert command["super_admin_approved"] is True
+        assert code["approved"] is True
+        assert code["super_admin_approved"] is True
+
+    def test_non_approvable_hardline_guard_remains_blocked(self):
+        from tools.approval import (
+            check_all_command_guards,
+            reset_super_admin_context,
+            set_super_admin_context,
+        )
+
+        token = set_super_admin_context(True)
+        try:
+            result = check_all_command_guards("rm -rf /", "local")
+        finally:
+            reset_super_admin_context(token)
+
+        assert result["approved"] is False
+        assert result.get("hardline") is True
+
+    def test_structured_admin_action_is_automatic_and_not_queued(self):
+        from tools import approval
+        from tools.action_intent import build_manual_action_intent
+
+        session_token = approval.set_current_session_key("telegram:admin")
+        admin_token = approval.set_super_admin_context(True)
+        try:
+            result = approval.request_action_intent_approval(
+                build_manual_action_intent(
+                    "deploy production",
+                    "requested by administrator",
+                    operation="deploy",
+                    target="production",
+                    impact="Production will be updated.",
+                )
+            )
+        finally:
+            approval.reset_super_admin_context(admin_token)
+            approval.reset_current_session_key(session_token)
+
+        assert result["approved"] is True
+        assert result["decision"] == "super_admin"
+        assert approval._gateway_queues == {}
+
+
+class TestAdminApprovalCommands:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("command", ["/approve", "/deny"])

@@ -37,6 +37,10 @@ _approval_session_key: contextvars.ContextVar[str] = contextvars.ContextVar(
     "approval_session_key",
     default="",
 )
+_super_admin_context: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "super_admin_approval_context",
+    default=False,
+)
 
 
 def _fire_approval_hook(hook_name: str, **kwargs) -> None:
@@ -88,6 +92,21 @@ def get_current_session_key(default: str = "default") -> str:
         return session_key
     from gateway.session_context import get_session_env
     return get_session_env("MARLOW_SESSION_KEY", default)
+
+
+def set_super_admin_context(enabled: bool) -> contextvars.Token[bool]:
+    """Bind exact-source super-admin authority to the current agent turn."""
+    return _super_admin_context.set(bool(enabled))
+
+
+def reset_super_admin_context(token: contextvars.Token[bool]) -> None:
+    """Restore the prior super-admin authority context."""
+    _super_admin_context.reset(token)
+
+
+def is_super_admin_context() -> bool:
+    """Return whether approvable actions in this turn are pre-authorized."""
+    return _super_admin_context.get()
 
 
 def _get_session_platform() -> str:
@@ -936,7 +955,7 @@ def is_admin_action_approval_enabled() -> bool:
     This public wrapper keeps registry/dispatcher code out of approval's
     private configuration details while preserving the gateway-only boundary.
     """
-    return _is_admin_approval_enforced()
+    return is_super_admin_context() or _is_admin_approval_enforced()
 
 
 def _get_approval_timeout() -> int:
@@ -1034,6 +1053,17 @@ def check_dangerous_command(command: str, env_type: str,
     if is_hardline:
         logger.warning("Hardline block: %s (command: %s)", hardline_desc, command[:200])
         return _hardline_block_result(hardline_desc)
+
+    if is_super_admin_context():
+        logger.info(
+            "Super-admin auto-approved dangerous-command guard: %s",
+            command[:200],
+        )
+        return {
+            "approved": True,
+            "message": None,
+            "super_admin_approved": True,
+        }
 
     # --yolo: bypass all approval prompts unless exact-admin routing is the
     # active gateway security boundary.
@@ -1293,6 +1323,36 @@ def request_action_intent_approval(intent) -> dict:
     action = intent.summary()
     reason = intent.reason
 
+    if is_super_admin_context():
+        session_key = get_current_session_key(default="")
+        hook_context = {
+            "command": action,
+            "description": reason,
+            "pattern_key": f"action_intent:{intent.argument_digest}",
+            "pattern_keys": [f"action_intent:{intent.argument_digest}"],
+            "session_key": session_key,
+            "surface": "super_admin_action_intent",
+            "action_intent": intent_data,
+        }
+        _fire_approval_hook("pre_approval_request", **hook_context)
+        _fire_approval_hook(
+            "post_approval_response",
+            **hook_context,
+            choice="super_admin",
+        )
+        logger.info(
+            "Super-admin auto-approved action intent in session %s: %s",
+            session_key or "<unknown>",
+            action,
+        )
+        return {
+            "approved": True,
+            "decision": "super_admin",
+            "request_id": None,
+            "message": "The configured super administrator pre-authorized this action.",
+            "action_intent": intent_data,
+        }
+
     session_key = get_current_session_key(default="")
     if not session_key:
         return {
@@ -1429,6 +1489,17 @@ def check_all_command_guards(command: str, env_type: str,
         logger.warning("Sudo stdin guard block: %s (command: %s)",
                        sudo_guess_desc, command[:200])
         return _sudo_stdin_block_result(sudo_guess_desc)
+
+    if is_super_admin_context():
+        logger.info(
+            "Super-admin auto-approved command guards: %s",
+            command[:200],
+        )
+        return {
+            "approved": True,
+            "message": None,
+            "super_admin_approved": True,
+        }
 
     # Exact-admin gateway routing is stricter than YOLO/mode=off because those
     # settings would otherwise bypass the configured decision maker entirely.
@@ -1756,6 +1827,14 @@ def check_execute_code_guard(code: str, env_type: str) -> dict:
     # in check_all_command_guards / check_dangerous_command.
     if env_type == "docker":
         return {"approved": True, "message": None}
+
+    if is_super_admin_context():
+        logger.info("Super-admin auto-approved execute_code guard")
+        return {
+            "approved": True,
+            "message": None,
+            "super_admin_approved": True,
+        }
 
     # Exact-admin gateway routing takes precedence over all approval bypasses.
     approval_config = _get_approval_config()

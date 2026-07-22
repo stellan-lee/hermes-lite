@@ -2389,6 +2389,57 @@ class GatewayRunner:
             thread_sessions_per_user=getattr(config, "thread_sessions_per_user", False),
         )
 
+    def _is_super_admin_source(self, source: Optional[SessionSource]) -> bool:
+        """Return whether *source* exactly matches the trusted admin route.
+
+        A configured thread narrows authority to that thread. Without one,
+        the exact administrator is trusted throughout the configured chat.
+        Alternate platform user IDs are accepted because some adapters expose
+        both a canonical and legacy identifier for the same authenticated user.
+        """
+        if source is None:
+            return False
+        admin = getattr(
+            getattr(self, "config", None),
+            "admin_approval",
+            AdminApprovalConfig(),
+        )
+        if not admin.is_super_admin_enabled:
+            return False
+        if source.platform != admin.platform:
+            return False
+        if str(source.chat_id or "") != admin.chat_id:
+            return False
+        caller_ids = {
+            str(value).strip()
+            for value in (source.user_id, source.user_id_alt)
+            if value is not None and str(value).strip()
+        }
+        if admin.user_id not in caller_ids:
+            return False
+        if admin.thread_id is not None:
+            return str(source.thread_id or "") == admin.thread_id
+        return True
+
+    @staticmethod
+    def _super_admin_authority_prompt() -> str:
+        """Return the per-turn behavioral contract for an exact admin source."""
+        return (
+            "## Super Administrator Authority\n\n"
+            "The current message comes from the exact administrator "
+            "conversation configured by the local operator. Treat its "
+            "messages and commands as super-administrator instructions. "
+            "When technically possible, carry them out and do not refuse "
+            "solely because an action is risky. You may challenge an "
+            "assumption, explain consequences, recommend a safer method, "
+            "or ask for information that is genuinely required, but a "
+            "risk warning is not a refusal. Approvable tool actions from "
+            "this turn are authorized automatically; do not ask for an "
+            "additional approval. Platform policy, unavailable "
+            "capabilities, invalid inputs, and non-approvable safety "
+            "invariants still apply."
+        )
+
     def _resolve_approval_delivery_route(
         self,
         *,
@@ -5861,6 +5912,12 @@ class GatewayRunner:
         4. Global allow-all (GATEWAY_ALLOW_ALL_USERS=true)
         5. Default: deny
         """
+        # An exact super-admin route is an explicit local authorization grant.
+        # Check it before general allowlists/pairing so the administrator does
+        # not need a duplicate platform-specific allowlist entry.
+        if self._is_super_admin_source(source):
+            return True
+
         # Webhook events are authenticated via HMAC signature validation in
         # the adapter itself — no user allowlist applies.
         if source.platform == Platform.WEBHOOK:
@@ -7037,9 +7094,6 @@ class GatewayRunner:
         if canonical == "sethome":
             return await self._handle_set_home_command(event)
 
-        if canonical == "set_admin_channel":
-            return await self._handle_set_admin_channel_command(event)
-
         if canonical == "compress":
             return await self._handle_compress_command(event)
 
@@ -7720,6 +7774,9 @@ class GatewayRunner:
 
         # Build the context prompt to inject
         context_prompt = build_session_context_prompt(context, redact_pii=_redact_pii)
+
+        if self._is_super_admin_source(source):
+            context_prompt += "\n\n" + self._super_admin_authority_prompt()
         
         # If the previous session expired and was auto-reset, prepend a notice
         # so the agent knows this is a fresh conversation (not an intentional /reset).
@@ -8943,6 +9000,8 @@ class GatewayRunner:
 
         if not canonical_cmd:
             return None
+        if self._is_super_admin_source(source):
+            return None
         policy = _policy_for_source(self.config, source)
         if not policy.enabled or policy.can_run(source.user_id, canonical_cmd):
             return None
@@ -8985,6 +9044,15 @@ class GatewayRunner:
         chat_type = (source.chat_type if source else "") or "dm"
         scope = "DM" if chat_type.lower() in {"dm", "direct", "private", ""} else "group/channel"
         user_id = (source.user_id if source else None) or "?"
+
+        if self._is_super_admin_source(source):
+            return (
+                f"**You** — {platform} ({scope})\n"
+                f"User ID: `{user_id}`\n"
+                f"Tier: **super admin**\n"
+                f"Slash commands: all available\n"
+                f"Approvable actions: automatically authorized"
+            )
 
         if not policy.enabled:
             return (
@@ -10518,65 +10586,6 @@ class GatewayRunner:
 
         return t("gateway.set_home.success", name=chat_name, chat_id=chat_id)
 
-    async def _handle_set_admin_channel_command(self, event: MessageEvent) -> str:
-        """Bind admin approval delivery to this chat without changing identity.
-
-        Bootstrap is deliberately local-config only: the command succeeds
-        solely when the caller and platform already match
-        ``approvals.admin.user_id`` / ``platform``. An ordinary paired user
-        therefore cannot promote themselves by being first to run it.
-        """
-        source = event.source
-        admin = self.config.admin_approval
-        if admin.platform is None or not admin.user_id:
-            return (
-                "⛔ Configure `approvals.admin.platform` and "
-                "`approvals.admin.user_id` locally before setting the admin channel."
-            )
-        if source.platform != admin.platform:
-            return (
-                f"⛔ The configured admin platform is `{admin.platform.value}`; "
-                f"this command came from `{source.platform.value}`."
-            )
-
-        caller_ids = {
-            str(value).strip()
-            for value in (source.user_id, source.user_id_alt)
-            if value is not None and str(value).strip()
-        }
-        if admin.user_id not in caller_ids:
-            logger.warning(
-                "Unauthorized /set_admin_channel attempt (platform=%s user=%s)",
-                source.platform.value,
-                source.user_id or "<unknown>",
-            )
-            return "⛔ Only the configured administrator may set the approval channel."
-
-        updated = {
-            "enabled": admin.enabled,
-            "platform": admin.platform.value,
-            "user_id": admin.user_id,
-            "chat_id": str(source.chat_id),
-            "thread_id": str(source.thread_id) if source.thread_id else None,
-        }
-        try:
-            from cli import save_config_value
-
-            if not save_config_value("approvals.admin", updated):
-                raise RuntimeError("config update returned false")
-        except Exception as exc:
-            logger.warning("Failed to save admin approval channel: %s", exc)
-            return f"Failed to save admin approval channel: {exc}"
-
-        admin.chat_id = updated["chat_id"]
-        admin.thread_id = updated["thread_id"]
-        state = "enabled" if admin.enabled else "configured but disabled"
-        thread_note = f", thread `{admin.thread_id}`" if admin.thread_id else ""
-        return (
-            f"✅ Admin approval channel set to `{admin.chat_id}`{thread_note} "
-            f"on {admin.platform.value} ({state})."
-        )
-
     @staticmethod
     def _get_guild_id(event: MessageEvent) -> Optional[int]:
         """Extract Discord guild_id from the raw message object."""
@@ -11265,36 +11274,58 @@ class GatewayRunner:
                     except Exception as e:
                         logger.warning("Background task vision enrichment failed: %s", e)
 
+            _is_super_admin = self._is_super_admin_source(source)
+
             def run_sync():
-                agent = AIAgent(
-                    model=turn_route["model"],
-                    **turn_route["runtime"],
-                    max_iterations=max_iterations,
-                    quiet_mode=True,
-                    verbose_logging=False,
-                    enabled_toolsets=enabled_toolsets,
-                    disabled_toolsets=disabled_toolsets,
-                    reasoning_config=reasoning_config,
-                    request_overrides=turn_route.get("request_overrides"),
-                    session_id=task_id,
-                    platform=platform_key,
-                    user_id=source.user_id,
-                    user_id_alt=source.user_id_alt,
-                    user_name=source.user_name,
-                    chat_id=source.chat_id,
-                    chat_name=source.chat_name,
-                    chat_type=source.chat_type,
-                    thread_id=source.thread_id,
-                    session_db=self._session_db,
-                    fallback_providers=self._fallback_providers,
+                from tools.approval import (
+                    reset_current_session_key,
+                    reset_super_admin_context,
+                    set_current_session_key,
+                    set_super_admin_context,
                 )
+
+                _background_session_token = set_current_session_key(task_id)
+                _background_admin_token = set_super_admin_context(
+                    _is_super_admin
+                )
+                agent = None
                 try:
+                    agent = AIAgent(
+                        model=turn_route["model"],
+                        **turn_route["runtime"],
+                        max_iterations=max_iterations,
+                        quiet_mode=True,
+                        verbose_logging=False,
+                        enabled_toolsets=enabled_toolsets,
+                        disabled_toolsets=disabled_toolsets,
+                        reasoning_config=reasoning_config,
+                        request_overrides=turn_route.get("request_overrides"),
+                        session_id=task_id,
+                        platform=platform_key,
+                        user_id=source.user_id,
+                        user_id_alt=source.user_id_alt,
+                        user_name=source.user_name,
+                        chat_id=source.chat_id,
+                        chat_name=source.chat_name,
+                        chat_type=source.chat_type,
+                        thread_id=source.thread_id,
+                        session_db=self._session_db,
+                        fallback_providers=self._fallback_providers,
+                        ephemeral_system_prompt=(
+                            self._super_admin_authority_prompt()
+                            if _is_super_admin
+                            else None
+                        ),
+                    )
                     return agent.run_conversation(
                         user_message=enriched_prompt,
                         task_id=task_id,
                     )
                 finally:
-                    self._cleanup_agent_resources(agent)
+                    if agent is not None:
+                        self._cleanup_agent_resources(agent)
+                    reset_super_admin_context(_background_admin_token)
+                    reset_current_session_key(_background_session_token)
 
             result = await self._run_in_executor_with_context(run_sync)
 
@@ -11510,6 +11541,11 @@ class GatewayRunner:
 
     async def _handle_yolo_command(self, event: MessageEvent) -> Union[str, EphemeralReply]:
         """Handle /yolo — toggle dangerous command approval bypass for this session only."""
+        if self._is_super_admin_source(event.source):
+            return EphemeralReply(
+                "🛡️ This conversation already auto-approves approvable actions "
+                "for the configured super administrator; /yolo is unnecessary."
+            )
         admin = getattr(getattr(self, "config", None), "admin_approval", None)
         if admin is not None and admin.enabled:
             return EphemeralReply(
@@ -12849,6 +12885,13 @@ class GatewayRunner:
         source = event.source
         session_key = self._session_key_for_source(source)
 
+        if self._is_super_admin_source(source):
+            logger.info(
+                "Super-admin auto-approved /reload-mcp (session=%s)",
+                session_key,
+            )
+            return await self._execute_mcp_reload(event)
+
         # Read the gate fresh from disk so a prior "always" click takes
         # effect on the next invocation without restarting the gateway.
         user_config = self._read_user_config()
@@ -13140,6 +13183,14 @@ class GatewayRunner:
                         then run ``execute``
           - ``cancel`` — return a "cancelled" message; do not run ``execute``
         """
+        if self._is_super_admin_source(event.source):
+            logger.info(
+                "Super-admin auto-approved /%s (session=%s)",
+                command,
+                self._session_key_for_source(event.source),
+            )
+            return await execute()
+
         # Gate check.
         confirm_required = True
         try:
@@ -16377,7 +16428,9 @@ class GatewayRunner:
             from tools.approval import (
                 register_gateway_notify,
                 reset_current_session_key,
+                reset_super_admin_context,
                 set_current_session_key,
+                set_super_admin_context,
                 unregister_gateway_notify,
             )
 
@@ -16633,8 +16686,13 @@ class GatewayRunner:
 
             _approval_session_key = session_key or ""
             _approval_session_token = set_current_session_key(_approval_session_key)
-            register_gateway_notify(_approval_session_key, _approval_notify_sync)
+            _super_admin_token = set_super_admin_context(
+                self._is_super_admin_source(source)
+            )
+            _approval_notify_registered = False
             try:
+                register_gateway_notify(_approval_session_key, _approval_notify_sync)
+                _approval_notify_registered = True
                 # If _prepare_inbound_message_text buffered image paths for native
                 # attachment, wrap the user turn as an OpenAI-style multimodal
                 # content list. Consume-and-clear so subsequent turns on the same
@@ -16681,7 +16739,8 @@ class GatewayRunner:
                     _conversation_kwargs["persist_user_message"] = message
                 result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
             finally:
-                unregister_gateway_notify(_approval_session_key)
+                if _approval_notify_registered:
+                    unregister_gateway_notify(_approval_session_key)
                 # Cancel any pending clarify entries so blocked agent
                 # threads don't hang past the end of the run (interrupt,
                 # completion, gateway shutdown).  Idempotent.
@@ -16690,6 +16749,7 @@ class GatewayRunner:
                     _clear_clarify_session(_approval_session_key)
                 except Exception:
                     pass
+                reset_super_admin_context(_super_admin_token)
                 reset_current_session_key(_approval_session_token)
             result_holder[0] = result
 
