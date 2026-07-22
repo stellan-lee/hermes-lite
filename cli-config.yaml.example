@@ -110,6 +110,13 @@ approvals:
   mode: manual
   timeout: 60
   cron_mode: deny
+  admin:
+    enabled: false
+    conversation_mode: approval_only  # Set to super_admin for the exact route below
+    platform: ""
+    user_id: ""
+    chat_id: ""
+    thread_id: null
   mcp_reload_confirm: true
   destructive_slash_confirm: true
 

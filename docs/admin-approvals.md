@@ -14,18 +14,24 @@ cannot be bootstrapped from a chat command.
 approvals:
   admin:
     enabled: true
+    conversation_mode: approval_only  # or super_admin
     platform: telegram
     user_id: "123456789"
     chat_id: "123456789"
     thread_id: null
 ```
 
-`user_id` is the authorization boundary. `chat_id` and optional `thread_id`
-are only delivery destinations. After `platform` and `user_id` are configured
-locally and the gateway has restarted, that administrator can run
-`/set_admin_channel` in the desired chat or thread to update the destination
-without changing the trusted identity. `/whoami` shows the platform identity
-values needed for the local configuration.
+`user_id` is the authorization boundary. Configure the complete block locally;
+there is no chat command that can create or move this trust boundary. `/whoami`
+shows the platform identity values needed for the local configuration. Restart
+the gateway after changing the block.
+
+The default `conversation_mode: approval_only` uses `chat_id` and optional
+`thread_id` only as the approval delivery destination. With
+`conversation_mode: super_admin`, the same destination also becomes a trusted
+administrator conversation, but only for the exact configured `user_id`. If a
+`thread_id` is present, elevated authority is limited to that thread; otherwise
+it applies to that administrator throughout the configured chat.
 
 Supported interactive adapters are Telegram, Discord, Slack, and Feishu. The
 configured platform must be connected when a request is sent.
@@ -53,6 +59,15 @@ configured platform must be connected when a request is sent.
   is enabled. Administrator routing also takes precedence over `mode: off`,
   smart auto-approval, prior command grants, and process/session YOLO settings
   for gateway approvals.
+
+In `super_admin` conversation mode, matching messages bypass general gateway
+allowlists and slash-command restrictions. Approvable terminal commands,
+`execute_code`, registered action intents, and slash-command confirmations
+originating there are approved automatically and logged. The agent may warn or
+challenge the administrator, but is instructed not to refuse solely because an
+action is risky. Catastrophic-command, credential-protection, input-validation,
+provider-policy, and capability boundaries remain in force because they are not
+approval decisions.
 
 When `approvals.admin.enabled` is false, the existing originating-chat approval
 behavior is unchanged.

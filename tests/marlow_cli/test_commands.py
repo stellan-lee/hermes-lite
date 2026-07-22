@@ -106,8 +106,8 @@ class TestResolveCommand:
         assert resolve_command("exit").name == "quit"
         assert resolve_command("gateway").name == "platforms"
         assert resolve_command("set-home").name == "sethome"
-        assert resolve_command("set_admin_channel").name == "set_admin_channel"
-        assert resolve_command("setadmin").name == "set_admin_channel"
+        assert resolve_command("set_admin_channel") is None
+        assert resolve_command("setadmin") is None
         assert resolve_command("reload_mcp").name == "reload-mcp"
         assert resolve_command("codex_runtime").name == "codex-runtime"
         assert resolve_command("tasks").name == "agents"
@@ -192,10 +192,6 @@ class TestGatewayKnownCommands:
         assert "bg" in GATEWAY_KNOWN_COMMANDS
         assert "background" in GATEWAY_KNOWN_COMMANDS
 
-    def test_set_admin_channel_uses_underscore_name(self):
-        assert "set_admin_channel" in GATEWAY_KNOWN_COMMANDS
-        assert "set-admin-channel" not in GATEWAY_KNOWN_COMMANDS
-
     def test_is_frozenset(self):
         assert isinstance(GATEWAY_KNOWN_COMMANDS, frozenset)
 
@@ -221,12 +217,6 @@ class TestGatewayHelpLines:
         bg_line = [l for l in lines if "/background" in l]
         assert len(bg_line) == 1
         assert "/bg" in bg_line[0]
-
-    def test_set_admin_channel_uses_underscore_name(self):
-        lines = gateway_help_lines()
-        matching = [line for line in lines if "/set_admin_channel" in line]
-        assert len(matching) == 1
-        assert "/set-admin-channel" not in matching[0]
 
 
 class TestTelegramBotCommands:
@@ -286,11 +276,6 @@ class TestSlackSubcommandMap:
         mapping = slack_subcommand_map()
         assert "bg" in mapping
         assert "reset" in mapping
-
-    def test_set_admin_channel_uses_underscore_name(self):
-        mapping = slack_subcommand_map()
-        assert mapping["set_admin_channel"] == "/set_admin_channel"
-        assert "set-admin-channel" not in mapping
 
     def test_excludes_cli_only_without_config_gate(self):
         mapping = slack_subcommand_map()

@@ -81,7 +81,7 @@ Marlow has two entry points: start the terminal UI with `marlow`, or run the gat
 | Browse skills                  | `/skills` or `/<skill-name>`                  | `/<skill-name>`                                                                  |
 | Interrupt current work         | `Ctrl+C` or send a new message                | `/stop` or send a new message                                                    |
 | Platform-specific status       | `/platforms`                                  | `/status`, `/sethome`                                                            |
-| Route privileged approvals     | Configure locally                            | [`/set_admin_channel`](docs/admin-approvals.md)                                  |
+| Route privileged approvals     | Configure locally                            | [`approvals.admin`](docs/admin-approvals.md)                                     |
 
 Run `marlow --help` for CLI commands and `marlow gateway --help` for messaging gateway commands.
 
