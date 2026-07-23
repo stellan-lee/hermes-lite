@@ -2087,6 +2087,10 @@ class GatewayRunner:
         # DM pairing store for code-based user authorization
         from gateway.pairing import PairingStore
         self.pairing_store = PairingStore()
+
+        # Runtime group grants managed by trusted platform administrators.
+        from gateway.group_access import GroupAccessStore
+        self.group_access_store = GroupAccessStore()
         
         # Event hook system
         from gateway.hooks import HookRegistry
@@ -5908,9 +5912,10 @@ class GatewayRunner:
         Checks in order:
         1. Per-platform allow-all flag (e.g., DISCORD_ALLOW_ALL_USERS=true)
         2. Environment variable allowlists (TELEGRAM_ALLOWED_USERS, etc.)
-        3. DM pairing approved list
-        4. Global allow-all (GATEWAY_ALLOW_ALL_USERS=true)
-        5. Default: deny
+        3. Runtime group access grants
+        4. DM pairing approved list
+        5. Global allow-all (GATEWAY_ALLOW_ALL_USERS=true)
+        6. Default: deny
         """
         # An exact super-admin route is an explicit local authorization grant.
         # Check it before general allowlists/pairing so the administrator does
@@ -5952,6 +5957,17 @@ class GatewayRunner:
 
         if not user_id:
             return False
+
+        # In-chat grants are deliberately scoped to the exact group.  They do
+        # not authorize DMs, another Telegram group, or any other platform.
+        if source.chat_type in {"group", "forum"} and source.chat_id:
+            group_access_store = getattr(self, "group_access_store", None)
+            if group_access_store is not None and group_access_store.is_granted(
+                source.platform.value if source.platform else "",
+                source.chat_id,
+                user_id,
+            ):
+                return True
 
         platform_env_map = {
             Platform.TELEGRAM: "TELEGRAM_ALLOWED_USERS",
@@ -6192,6 +6208,39 @@ class GatewayRunner:
 
         await adapter.send(source.chat_id, content, metadata=metadata)
 
+    @staticmethod
+    def _is_telegram_group_access_command(event: MessageEvent) -> bool:
+        """Return whether *event* is the narrow pre-auth ``/access`` path.
+
+        Both the original user text and the current event text must name the
+        command.  Requiring both prevents a pre-dispatch plugin from rewriting
+        an unauthorized message into or out of an authorization bypass.
+        """
+        source = getattr(event, "source", None)
+        if (
+            source is None
+            or source.platform != Platform.TELEGRAM
+            or source.chat_type not in {"group", "forum"}
+            or not source.chat_id
+            or not source.user_id
+        ):
+            return False
+
+        def _command_from_text(raw: Any) -> Optional[str]:
+            if not isinstance(raw, str):
+                return None
+            stripped = raw.strip()
+            if not stripped.startswith("/"):
+                return None
+            token = stripped.split(maxsplit=1)[0][1:].lower()
+            return token.split("@", 1)[0] if token else None
+
+        original = event.raw_user_message or event.text
+        return (
+            _command_from_text(original) == "access"
+            and _command_from_text(event.text) == "access"
+        )
+
     async def _handle_message(self, event: MessageEvent) -> Optional[str]:
         """
         Handle an incoming message from any platform.
@@ -6259,6 +6308,8 @@ class GatewayRunner:
                 if _action == "allow":
                     break
 
+        access_bootstrap = self._is_telegram_group_access_command(event)
+
         if is_internal:
             pass
         elif source.user_id is None:
@@ -6271,7 +6322,7 @@ class GatewayRunner:
             if not self._is_user_authorized(source):
                 logger.debug("Ignoring message with no user_id from %s", source.platform.value)
                 return None
-        elif not self._is_user_authorized(source):
+        elif not self._is_user_authorized(source) and not access_bootstrap:
             logger.warning("Unauthorized user: %s (%s) on %s", source.user_id, source.user_name, source.platform.value)
             # In DMs: offer pairing code. In groups: silently ignore.
             if source.chat_type == "dm" and self._get_unauthorized_dm_behavior(source.platform) == "pair":
@@ -7003,6 +7054,9 @@ class GatewayRunner:
 
         if canonical == "whoami":
             return await self._handle_whoami_command(event)
+
+        if canonical == "access":
+            return await self._handle_access_command(event)
 
         if canonical == "status":
             return await self._handle_status_command(event)
@@ -9003,6 +9057,15 @@ class GatewayRunner:
 
         if not canonical_cmd:
             return None
+        if (
+            canonical_cmd == "access"
+            and source.platform == Platform.TELEGRAM
+            and source.chat_type in {"group", "forum"}
+        ):
+            # /access has its own stronger authorization check against live
+            # Telegram group roles.  It must remain reachable before a static
+            # Marlow admin list exists, which is the feature's bootstrap path.
+            return None
         if self._is_super_admin_source(source):
             return None
         policy = _policy_for_source(self.config, source)
@@ -9029,6 +9092,137 @@ class GatewayRunner:
                 "or to set user_allowed_commands."
             )
         return f"⛔ /{canonical_cmd} is admin-only here. {suffix}"
+
+    async def _handle_access_command(self, event: MessageEvent) -> str:
+        """Grant, revoke, or list runtime access for one Telegram group."""
+        source = event.source
+        if (
+            source.platform != Platform.TELEGRAM
+            or source.chat_type not in {"group", "forum"}
+            or not source.chat_id
+        ):
+            return "⛔ /access is available only inside Telegram groups."
+        if not source.user_id:
+            return "⛔ Anonymous administrators cannot manage Marlow access."
+
+        adapter = self.adapters.get(Platform.TELEGRAM)
+        verify_admin = getattr(adapter, "is_group_administrator", None)
+        if not callable(verify_admin):
+            return "⛔ Telegram administrator verification is unavailable."
+        if not await verify_admin(source.chat_id, source.user_id):
+            return (
+                "⛔ Only a verified Telegram group administrator can manage "
+                "Marlow access. Make sure the bot is also a group administrator."
+            )
+
+        raw_args = event.get_command_args().strip()
+        parts = raw_args.split()
+        action = parts[0].lower() if parts else ""
+        if action not in {"grant", "revoke", "list"}:
+            return (
+                "Usage:\n"
+                "- Reply to a user's message with `/access grant`\n"
+                "- Reply with `/access revoke`\n"
+                "- Or use `/access grant <user-id>`, `/access revoke <user-id>`, "
+                "or `/access list`"
+            )
+
+        store = getattr(self, "group_access_store", None)
+        if store is None:
+            return "⛔ Runtime group access storage is unavailable."
+
+        if action == "list":
+            if len(parts) != 1:
+                return "Usage: `/access list`"
+            grants = store.list_grants("telegram", source.chat_id)
+            if not grants:
+                return "No runtime access grants exist for this group."
+            lines = ["Runtime access grants for this group:"]
+            for grant in grants:
+                user_id = str(grant.get("user_id", ""))
+                user_name = " ".join(str(grant.get("user_name", "")).split())
+                label = user_name[:80] if user_name else "Telegram user"
+                lines.append(f"- {label} (`{user_id}`)")
+            lines.append(
+                "Configured allowlists are separate and are not shown here."
+            )
+            return "\n".join(lines)
+
+        if len(parts) > 2:
+            return f"Usage: `/access {action} <user-id>` or reply to a user."
+
+        target_user_id = parts[1] if len(parts) == 2 else ""
+        target_user_name = ""
+        raw_message = getattr(event, "raw_message", None)
+        reply_message = getattr(raw_message, "reply_to_message", None)
+        reply_user = getattr(reply_message, "from_user", None)
+        if not target_user_id and reply_user is not None:
+            target_user_id = str(getattr(reply_user, "id", "") or "").strip()
+            target_user_name = str(
+                getattr(reply_user, "full_name", "")
+                or getattr(reply_user, "username", "")
+                or ""
+            ).strip()
+
+        if not target_user_id:
+            return (
+                f"Reply to the target user's message with `/access {action}`, "
+                f"or use `/access {action} <numeric-user-id>`."
+            )
+        if not target_user_id.isdigit() or int(target_user_id) <= 0:
+            return (
+                "Telegram usernames cannot be resolved reliably. Reply to the "
+                "user's message or provide their numeric Telegram user ID."
+            )
+
+        try:
+            if action == "grant":
+                created = store.grant(
+                    "telegram",
+                    source.chat_id,
+                    target_user_id,
+                    user_name=target_user_name,
+                    granted_by=source.user_id,
+                    granted_by_name=source.user_name or "",
+                )
+                logger.info(
+                    "Telegram group access %s: chat=%s user=%s admin=%s",
+                    "granted" if created else "refreshed",
+                    source.chat_id,
+                    target_user_id,
+                    source.user_id,
+                )
+                label = target_user_name or f"user `{target_user_id}`"
+                if created:
+                    return (
+                        f"✅ Granted {label} access in this group. Their future "
+                        "messages can now reach Marlow; normal mention rules still apply."
+                    )
+                return f"✅ {label} already had access; the runtime grant was refreshed."
+
+            removed = store.revoke("telegram", source.chat_id, target_user_id)
+            logger.info(
+                "Telegram group access revoke: chat=%s user=%s admin=%s removed=%s",
+                source.chat_id,
+                target_user_id,
+                source.user_id,
+                removed,
+            )
+            label = target_user_name or f"user `{target_user_id}`"
+            if removed:
+                return f"✅ Revoked {label}'s runtime access in this group."
+            return (
+                f"No runtime grant exists for {label}. Access provided by "
+                "config.yaml or environment allowlists cannot be revoked here."
+            )
+        except (OSError, ValueError) as exc:
+            logger.error(
+                "Telegram group access update failed for chat=%s user=%s: %s",
+                source.chat_id,
+                target_user_id,
+                exc,
+            )
+            return "⛔ Could not update the runtime access store. Check gateway logs."
 
 
     async def _handle_whoami_command(self, event: MessageEvent) -> str:
