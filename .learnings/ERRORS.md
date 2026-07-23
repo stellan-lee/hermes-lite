@@ -1497,6 +1497,8 @@ after mechanical pruning.
 - **Context:** Adapting retained custom-provider tests and pruning tests for removed credential stores.
 - **Error:** A combined `apply_patch` could not match a wrapped file-safety docstring; an immediate follow-up also targeted provider blocks already changed by the first partial application.
 - **Resolution:** Re-read the live files, then applied small exact hunks against their current content.
+- **Recurrence:** Confirmed on 2026-07-23 while adding the Telegram `/access`
+  trigger carve-out; split the adapter and test edits into exact hunks.
 - **Status:** Resolved
 
 ## ERR-030: Two targeted test commands referenced stale paths
@@ -1825,6 +1827,7 @@ after mechanical pruning.
 - **Context:** Starting the full repository validation suite.
 - **Error:** `scripts/run_tests.sh -q` passed `-q` to `run_tests_parallel.py`, whose CLI does not accept pytest verbosity flags.
 - **Resolution:** Restarted `scripts/run_tests.sh` without `-q`.
+- **Recurrence:** Confirmed on 2026-07-23 while validating Telegram group access; use the wrapper without pytest verbosity flags.
 - **Status:** Resolved
 
 ## ERR-067: Full TUI lint has unrelated baseline violations
@@ -2111,5 +2114,80 @@ Invoke `git rev-parse --short` once per revision when comparing several refs.
 
 - **Resolved**: 2026-07-22T14:03:00Z
 - **Notes**: Queried each revision separately and confirmed the PR should target the fork's `main` branch.
+
+---
+
+## [ERR-20260723-001] telegram-adapter-test-fixture
+
+**Logged**: 2026-07-23T11:20:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+A lightweight Telegram adapter fixture omitted the base `platform` attribute.
+
+### Error
+
+```
+AttributeError: 'TelegramAdapter' object has no attribute 'platform'
+```
+
+### Context
+
+- The test constructed `TelegramAdapter` with `object.__new__`.
+- The fail-closed administrator-verification log reads `self.name`, which derives
+  from `self.platform`.
+
+### Suggested Fix
+
+Set required base attributes when tests bypass adapter initialization.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: tests/gateway/test_telegram_group_access.py
+
+### Resolution
+
+- **Resolved**: 2026-07-23T11:20:00+08:00
+- **Notes**: Set `adapter.platform = Platform.TELEGRAM` in the fixture.
+
+---
+
+## [ERR-20260723-002] gateway-feishu-baseline
+
+**Logged**: 2026-07-23T11:30:00+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: tests
+
+### Summary
+
+The full gateway suite has 12 unrelated Feishu webhook baseline failures.
+
+### Error
+
+```
+12 failed, 189 passed in tests/gateway/test_feishu.py
+AttributeError/ImportError for Feishu webhook methods and constants absent from gateway/platforms/feishu.py
+```
+
+### Context
+
+- Reproduced by running `tests/gateway/test_feishu.py` alone.
+- The Telegram group-access change does not modify the Feishu adapter or tests.
+- The remaining 4,262 gateway tests passed or skipped.
+
+### Suggested Fix
+
+Reconcile the Feishu webhook security tests with the retained Feishu adapter in
+a separate scoped change.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: tests/gateway/test_feishu.py, gateway/platforms/feishu.py
 
 ---

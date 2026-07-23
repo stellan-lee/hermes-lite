@@ -414,6 +414,26 @@ def test_shared_group_observe_source_is_authorized_by_group_allowed_chats(monkey
     assert runner._is_user_authorized(source) is True
 
 
+def test_access_command_reaches_admin_verifier_without_mention():
+    adapter = _make_adapter(
+        require_mention=True,
+        allowed_chats=["-100"],
+    )
+
+    assert adapter._should_process_message(
+        _group_message("/access grant", chat_id=-100),
+        is_command=True,
+    ) is True
+    assert adapter._should_process_message(
+        _group_message("/stop", chat_id=-100),
+        is_command=True,
+    ) is False
+    assert adapter._should_process_message(
+        _group_message("/access grant", chat_id=-200),
+        is_command=True,
+    ) is False
+
+
 def test_unmentioned_group_observe_respects_chat_allowlist():
     async def _run():
         adapter = _make_adapter(

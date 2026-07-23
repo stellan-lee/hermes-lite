@@ -114,6 +114,14 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="[text | remove N | clear]"),
     CommandDef("status", "Show session info", "Session"),
     CommandDef("whoami", "Show your slash command access (admin / user)", "Info"),
+    CommandDef(
+        "access",
+        "Manage Telegram group access",
+        "Configuration",
+        gateway_only=True,
+        args_hint="<grant|revoke|list> [user-id]",
+        subcommands=("grant", "revoke", "list"),
+    ),
     CommandDef("profile", "Show active profile name and home directory", "Info"),
     CommandDef("sethome", "Set this chat as the home channel", "Session",
                gateway_only=True, aliases=("set-home",)),
@@ -529,6 +537,7 @@ _TELEGRAM_MENU_PRIORITY = (
     "platform",
     "profile",
     "whoami",
+    "access",
 )
 """Built-in commands that should stay visible in Telegram's capped menu.
 

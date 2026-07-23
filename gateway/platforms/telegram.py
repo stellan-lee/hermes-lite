@@ -579,6 +579,50 @@ class TelegramAdapter(BasePlatformAdapter):
         allowed_ids = {uid.strip() for uid in allowed_csv.split(",") if uid.strip()}
         return "*" in allowed_ids or normalized_user_id in allowed_ids
 
+    async def is_group_administrator(self, chat_id: str, user_id: str) -> bool:
+        """Ask Telegram whether *user_id* administers the exact group.
+
+        This method deliberately fails closed.  Telegram only guarantees
+        ``getChatMember`` results for other users when the bot is an
+        administrator in the chat, so operators must promote the bot before
+        using in-chat access management.
+        """
+        bot_user_id = getattr(self._bot, "id", None) if self._bot else None
+        if not bot_user_id:
+            return False
+
+        def _is_admin(member: Any) -> bool:
+            status = str(getattr(member, "status", "")).split(".")[-1].lower()
+            return status in {"administrator", "creator", "owner"}
+
+        try:
+            bot_member = await self._bot.get_chat_member(
+                chat_id=int(chat_id),
+                user_id=int(bot_user_id),
+            )
+            if not _is_admin(bot_member):
+                logger.warning(
+                    "[%s] Telegram /access denied because the bot is not an "
+                    "administrator in group %s",
+                    self.name,
+                    chat_id,
+                )
+                return False
+            member = await self._bot.get_chat_member(
+                chat_id=int(chat_id),
+                user_id=int(user_id),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[%s] Could not verify Telegram group administrator %s in %s: %s",
+                self.name,
+                user_id,
+                chat_id,
+                exc,
+            )
+            return False
+        return _is_admin(member)
+
     @classmethod
     def _metadata_thread_id(cls, metadata: Optional[Dict[str, Any]]) -> Optional[str]:
         if not metadata:
@@ -4810,6 +4854,15 @@ class TelegramAdapter(BasePlatformAdapter):
         chat_type = str(getattr(chat, "type", "")).split(".")[-1].lower()
         return chat_type in {"group", "supergroup"}
 
+    @staticmethod
+    def _is_group_access_command(message: Message) -> bool:
+        """Return whether *message* invokes the exact ``/access`` command."""
+        text = str(getattr(message, "text", "") or "").strip()
+        if not text.startswith("/"):
+            return False
+        token = text.split(maxsplit=1)[0][1:].lower()
+        return token.split("@", 1)[0] == "access"
+
     def _is_reply_to_bot(self, message: Message) -> bool:
         if not self._bot or not getattr(message, "reply_to_message", None):
             return False
@@ -5261,6 +5314,13 @@ class TelegramAdapter(BasePlatformAdapter):
         allowed = self._telegram_allowed_chats()
         if allowed and chat_id_str not in allowed:
             return guest_mention
+
+        # Access management is its own fail-closed trust bootstrap: the runner
+        # verifies the caller's live Telegram administrator role before doing
+        # anything. Let this one exact command bypass the mention requirement,
+        # while still respecting explicit chat and topic response gates above.
+        if self._is_group_access_command(message):
+            return True
 
         if guest_mention:
             return True
