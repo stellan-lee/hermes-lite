@@ -125,9 +125,12 @@ class InsightsEngine:
         sessions = self._get_sessions(cutoff, source)
         tool_usage = self._get_tool_usage(cutoff, source)
         skill_usage = self._get_skill_usage(cutoff, source)
+        usage_events = self._get_usage_events(cutoff, source)
+        tracking_started_at = self._usage_tracking_started_at()
+        experience = self._get_experience_usage(cutoff, usage_events, source=source)
         message_stats = self._get_message_stats(cutoff, source)
 
-        if not sessions:
+        if not sessions and not usage_events and not experience.get("summary", {}).get("retrieval_attempts"):
             return {
                 "days": days,
                 "source_filter": source,
@@ -136,6 +139,9 @@ class InsightsEngine:
                 "models": [],
                 "platforms": [],
                 "tools": [],
+                "mcp": self._empty_mcp_breakdown(),
+                "memory": self._empty_memory_breakdown(),
+                "experience": self._empty_experience_breakdown(),
                 "skills": {
                     "summary": {
                         "total_skill_loads": 0,
@@ -147,14 +153,21 @@ class InsightsEngine:
                 },
                 "activity": {},
                 "top_sessions": [],
+                "usage_tracking_started_at": tracking_started_at,
             }
 
         # Compute insights
         overview = self._compute_overview(sessions, message_stats)
         models = self._compute_model_breakdown(sessions)
         platforms = self._compute_platform_breakdown(sessions)
-        tools = self._compute_tool_breakdown(tool_usage)
-        skills = self._compute_skill_breakdown(skill_usage)
+        tools = self._compute_tool_breakdown(
+            self._merge_regular_tool_usage(tool_usage, usage_events)
+        )
+        skills = self._compute_skill_breakdown(
+            self._merge_skill_usage(skill_usage, usage_events)
+        )
+        mcp = self._compute_mcp_breakdown(tool_usage, usage_events)
+        memory = self._compute_memory_breakdown(usage_events)
         activity = self._compute_activity_patterns(sessions)
         top_sessions = self._compute_top_sessions(sessions)
 
@@ -168,8 +181,12 @@ class InsightsEngine:
             "platforms": platforms,
             "tools": tools,
             "skills": skills,
+            "mcp": mcp,
+            "memory": memory,
+            "experience": experience,
             "activity": activity,
             "top_sessions": top_sessions,
+            "usage_tracking_started_at": tracking_started_at,
         }
 
     # =========================================================================
@@ -203,6 +220,18 @@ class InsightsEngine:
         else:
             cursor = self._conn.execute(self._GET_SESSIONS_ALL, (cutoff,))
         return [dict(row) for row in cursor.fetchall()]
+
+    def _get_usage_events(self, cutoff: float, source: str = None) -> List[Dict]:
+        try:
+            return self.db.list_usage_events(since=cutoff, source=source)
+        except Exception:
+            return []
+
+    def _usage_tracking_started_at(self) -> float | None:
+        try:
+            return self.db.usage_tracking_started_at()
+        except Exception:
+            return None
 
     def _get_tool_usage(self, cutoff: float, source: str = None) -> List[Dict]:
         """Get tool call counts from messages.
@@ -372,6 +401,232 @@ class InsightsEngine:
 
         return list(skill_counts.values())
 
+    @staticmethod
+    def _event_count(event: Dict[str, Any]) -> int:
+        try:
+            return max(0, int(event.get("value") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _merge_regular_tool_usage(
+        self,
+        legacy_usage: List[Dict],
+        events: List[Dict],
+    ) -> List[Dict]:
+        """Combine historical message counts with source-aware tool events.
+
+        Session history already contains newly instrumented calls, so event
+        counts replace (rather than add to) the overlapping per-tool slice.
+        This preserves historical totals while providing success/failure
+        metadata from the tracking start onward.
+        """
+        counts = Counter()
+        for row in legacy_usage:
+            name = row.get("tool_name")
+            if not name or name in {"skill_view", "skill_manage", "memory"}:
+                continue
+            if str(name).startswith("mcp_"):
+                continue
+            counts[str(name)] += int(row.get("count") or 0)
+
+        event_counts = Counter()
+        success_counts = Counter()
+        failure_counts = Counter()
+        for event in events:
+            if event.get("subsystem") != "tool" or event.get("action") != "call":
+                continue
+            name = str(event.get("item_name") or "unknown")
+            amount = self._event_count(event) or 1
+            event_counts[name] += amount
+            if event.get("success") == 0:
+                failure_counts[name] += amount
+            elif event.get("success") == 1:
+                success_counts[name] += amount
+        for name, amount in event_counts.items():
+            counts[name] = max(counts.get(name, 0), amount)
+
+        return [
+            {
+                "tool_name": name,
+                "count": count,
+                "success_count": success_counts.get(name, 0),
+                "failure_count": failure_counts.get(name, 0),
+            }
+            for name, count in counts.most_common()
+        ]
+
+    def _merge_skill_usage(
+        self,
+        legacy_usage: List[Dict],
+        events: List[Dict],
+    ) -> List[Dict]:
+        merged: Dict[str, Dict[str, Any]] = {}
+        for row in legacy_usage:
+            name = str(row.get("skill") or "").strip()
+            if not name:
+                continue
+            merged[name] = {
+                **row,
+                "task_load_count": int(row.get("view_count") or 0),
+                "slash_load_count": 0,
+                "curator_load_count": 0,
+            }
+
+        event_rows: Dict[str, Dict[str, Any]] = {}
+        for event in events:
+            if event.get("subsystem") != "skill":
+                continue
+            name = str(event.get("item_name") or "").strip()
+            if not name:
+                continue
+            entry = event_rows.setdefault(
+                name,
+                {
+                    "skill": name,
+                    "view_count": 0,
+                    "manage_count": 0,
+                    "task_load_count": 0,
+                    "slash_load_count": 0,
+                    "curator_load_count": 0,
+                    "last_used_at": None,
+                },
+            )
+            amount = self._event_count(event) or 1
+            action = event.get("action")
+            source = event.get("source")
+            if action == "load":
+                entry["view_count"] += amount
+                if source == "curator":
+                    entry["curator_load_count"] += amount
+                elif source == "slash_command":
+                    entry["slash_load_count"] += amount
+                else:
+                    entry["task_load_count"] += amount
+            elif action == "edit":
+                entry["manage_count"] += amount
+            timestamp = event.get("created_at")
+            if timestamp is not None and (
+                entry["last_used_at"] is None or timestamp > entry["last_used_at"]
+            ):
+                entry["last_used_at"] = timestamp
+
+        for name, event_row in event_rows.items():
+            current = merged.get(name)
+            if current is None:
+                merged[name] = event_row
+                continue
+            # Tool-call events overlap session-history rows. Preserve the
+            # larger total, while slash-command loads are event-only.
+            non_slash_event_loads = (
+                event_row["task_load_count"] + event_row["curator_load_count"]
+            )
+            historical_loads = int(current.get("view_count") or 0)
+            current["view_count"] = max(historical_loads, non_slash_event_loads)
+            current["view_count"] += event_row["slash_load_count"]
+            current["manage_count"] = max(
+                int(current.get("manage_count") or 0),
+                event_row["manage_count"],
+            )
+            current["task_load_count"] = max(
+                event_row["task_load_count"],
+                historical_loads - event_row["curator_load_count"],
+            )
+            current["slash_load_count"] = event_row["slash_load_count"]
+            current["curator_load_count"] = event_row["curator_load_count"]
+            current["last_used_at"] = max(
+                current.get("last_used_at") or 0,
+                event_row.get("last_used_at") or 0,
+            ) or None
+        return list(merged.values())
+
+    def _get_experience_usage(
+        self,
+        cutoff: float,
+        events: List[Dict],
+        *,
+        source: str | None = None,
+    ) -> Dict[str, Any]:
+        result = self._empty_experience_breakdown()
+        if source is None:
+            try:
+                retrieval = self._conn.execute(
+                    """
+                    SELECT COUNT(*) AS attempts
+                    FROM experience_retrievals WHERE created_at >= ?
+                    """,
+                    (cutoff,),
+                ).fetchone()
+                matched = self._conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT ri.retrieval_id) AS matched_attempts,
+                           COUNT(*) AS lessons_returned
+                    FROM experience_retrieval_items ri
+                    JOIN experience_retrievals r ON r.id = ri.retrieval_id
+                    WHERE r.created_at >= ?
+                    """,
+                    (cutoff,),
+                ).fetchone()
+                top_rows = self._conn.execute(
+                    """
+                    SELECT ri.item_id, COUNT(*) AS recall_count,
+                           MAX(r.created_at) AS last_recalled_at
+                    FROM experience_retrieval_items ri
+                    JOIN experience_retrievals r ON r.id = ri.retrieval_id
+                    WHERE r.created_at >= ?
+                    GROUP BY ri.item_id
+                    ORDER BY recall_count DESC, last_recalled_at DESC
+                    LIMIT 10
+                    """,
+                    (cutoff,),
+                ).fetchall()
+                result["summary"].update(
+                    {
+                        "retrieval_attempts": int(retrieval["attempts"] or 0),
+                        "attempts_with_matches": int(matched["matched_attempts"] or 0),
+                        "lessons_returned": int(matched["lessons_returned"] or 0),
+                    }
+                )
+                result["top_lessons"] = [dict(row) for row in top_rows]
+            except Exception:
+                pass
+
+        attempts = [
+            event
+            for event in events
+            if event.get("subsystem") == "experience"
+            and event.get("action") == "recall_attempt"
+        ]
+        hits = [
+            event
+            for event in events
+            if event.get("subsystem") == "experience"
+            and event.get("action") == "recall_hit"
+        ]
+        result["summary"]["retrieval_attempts"] = max(
+            result["summary"]["retrieval_attempts"],
+            sum(self._event_count(event) or 1 for event in attempts),
+        )
+        result["summary"]["attempts_with_matches"] = max(
+            result["summary"]["attempts_with_matches"],
+            len(hits),
+        )
+        result["summary"]["lessons_returned"] = max(
+            result["summary"]["lessons_returned"],
+            sum(self._event_count(event) for event in hits),
+        )
+
+        injections = [
+            event
+            for event in events
+            if event.get("subsystem") == "experience"
+            and event.get("action") == "context_injected"
+        ]
+        result["summary"]["context_injections"] = len(injections)
+        result["summary"]["lessons_injected"] = sum(
+            self._event_count(event) for event in injections
+        )
+        return result
+
     def _get_message_stats(self, cutoff: float, source: str = None) -> Dict:
         """Get aggregate message statistics."""
         if source:
@@ -407,6 +662,154 @@ class InsightsEngine:
     # =========================================================================
     # Computation
     # =========================================================================
+
+    @staticmethod
+    def _empty_mcp_breakdown() -> Dict[str, Any]:
+        return {
+            "summary": {
+                "total_calls": 0,
+                "successful_calls": 0,
+                "failed_calls": 0,
+                "distinct_servers": 0,
+                "distinct_tools": 0,
+            },
+            "top_servers": [],
+            "top_tools": [],
+        }
+
+    @staticmethod
+    def _empty_memory_breakdown() -> Dict[str, Any]:
+        return {
+            "summary": {
+                "recall_attempts": 0,
+                "recall_hits": 0,
+                "context_injections": 0,
+                "hit_rate": 0.0,
+                "writes": 0,
+                "explicit_calls": 0,
+            },
+            "top_providers": [],
+        }
+
+    @staticmethod
+    def _empty_experience_breakdown() -> Dict[str, Any]:
+        return {
+            "summary": {
+                "retrieval_attempts": 0,
+                "attempts_with_matches": 0,
+                "lessons_returned": 0,
+                "context_injections": 0,
+                "lessons_injected": 0,
+            },
+            "top_lessons": [],
+        }
+
+    def _compute_mcp_breakdown(
+        self,
+        legacy_usage: List[Dict],
+        events: List[Dict],
+    ) -> Dict[str, Any]:
+        tool_counts = Counter()
+        for row in legacy_usage:
+            name = str(row.get("tool_name") or "")
+            if name.startswith("mcp_"):
+                tool_counts[name] += int(row.get("count") or 0)
+
+        event_tool_counts = Counter()
+        server_counts = Counter()
+        success = failure = 0
+        tool_servers: Dict[str, str] = {}
+        for event in events:
+            if event.get("subsystem") != "mcp" or event.get("action") != "call":
+                continue
+            name = str(event.get("item_name") or "unknown")
+            server = str(event.get("parent_name") or "unknown")
+            amount = self._event_count(event) or 1
+            event_tool_counts[name] += amount
+            server_counts[server] += amount
+            tool_servers[name] = server
+            if event.get("success") == 0:
+                failure += amount
+            elif event.get("success") == 1:
+                success += amount
+        for name, amount in event_tool_counts.items():
+            tool_counts[name] = max(tool_counts.get(name, 0), amount)
+
+        # Historical MCP calls predate exact server provenance. Keep them in
+        # the tool ranking and group only their unmatched remainder as legacy.
+        legacy_unknown = max(0, sum(tool_counts.values()) - sum(event_tool_counts.values()))
+        if legacy_unknown:
+            server_counts["historical/unknown"] += legacy_unknown
+        total = sum(tool_counts.values())
+        return {
+            "summary": {
+                "total_calls": total,
+                "successful_calls": success,
+                "failed_calls": failure,
+                "distinct_servers": len(server_counts),
+                "distinct_tools": len(tool_counts),
+            },
+            "top_servers": [
+                {"server": name, "count": count}
+                for name, count in server_counts.most_common(10)
+            ],
+            "top_tools": [
+                {
+                    "tool": name,
+                    "server": tool_servers.get(name, "historical/unknown"),
+                    "count": count,
+                }
+                for name, count in tool_counts.most_common(10)
+            ],
+        }
+
+    def _compute_memory_breakdown(self, events: List[Dict]) -> Dict[str, Any]:
+        summary = self._empty_memory_breakdown()["summary"]
+        providers: Dict[str, Counter] = defaultdict(Counter)
+        for event in events:
+            if event.get("subsystem") != "memory":
+                continue
+            action = str(event.get("action") or "")
+            provider = str(
+                event.get("parent_name")
+                or event.get("item_name")
+                or "unknown"
+            )
+            amount = self._event_count(event) or 1
+            if action == "recall_attempt":
+                summary["recall_attempts"] += amount
+                providers[provider]["attempts"] += amount
+            elif action == "recall_hit":
+                summary["recall_hits"] += amount
+                providers[provider]["hits"] += amount
+            elif action == "context_injected":
+                summary["context_injections"] += amount
+                providers[provider]["injections"] += amount
+            elif action == "write":
+                summary["writes"] += amount
+            elif action == "call":
+                summary["explicit_calls"] += amount
+        if summary["recall_attempts"]:
+            summary["hit_rate"] = (
+                summary["recall_hits"] / summary["recall_attempts"] * 100
+            )
+        top_providers = []
+        for provider, counts in providers.items():
+            attempts = counts["attempts"]
+            top_providers.append(
+                {
+                    "provider": provider,
+                    "attempts": attempts,
+                    "hits": counts["hits"],
+                    "injections": counts["injections"],
+                    "hit_rate": counts["hits"] / attempts * 100 if attempts else 0.0,
+                }
+            )
+        top_providers.sort(
+            key=lambda row: (row["injections"], row["hits"], row["attempts"]),
+            reverse=True,
+        )
+        return {"summary": summary, "top_providers": top_providers[:10]}
 
     def _compute_overview(self, sessions: List[Dict], message_stats: Dict) -> Dict:
         """Compute high-level overview statistics."""
@@ -560,6 +963,8 @@ class InsightsEngine:
                 "tool": t["tool_name"],
                 "count": t["count"],
                 "percentage": pct,
+                "success_count": t.get("success_count", 0),
+                "failure_count": t.get("failure_count", 0),
             })
         return result
 
@@ -568,15 +973,27 @@ class InsightsEngine:
         total_skill_loads = sum(s["view_count"] for s in skill_usage) if skill_usage else 0
         total_skill_edits = sum(s["manage_count"] for s in skill_usage) if skill_usage else 0
         total_skill_actions = total_skill_loads + total_skill_edits
+        task_loads = sum(int(s.get("task_load_count") or 0) for s in skill_usage)
+        slash_loads = sum(int(s.get("slash_load_count") or 0) for s in skill_usage)
+        curator_loads = sum(int(s.get("curator_load_count") or 0) for s in skill_usage)
+        meaningful_actions = task_loads + slash_loads + total_skill_edits
 
         top_skills = []
         for skill in skill_usage:
-            total_count = skill["view_count"] + skill["manage_count"]
-            percentage = (total_count / total_skill_actions * 100) if total_skill_actions else 0
+            task_count = int(skill.get("task_load_count") or 0)
+            slash_count = int(skill.get("slash_load_count") or 0)
+            curator_count = int(skill.get("curator_load_count") or 0)
+            # Curator inspection is visible but excluded from the ranking's
+            # meaningful-use total.
+            total_count = task_count + slash_count + skill["manage_count"]
+            percentage = (total_count / meaningful_actions * 100) if meaningful_actions else 0
             top_skills.append({
                 "skill": skill["skill"],
                 "view_count": skill["view_count"],
                 "manage_count": skill["manage_count"],
+                "task_load_count": task_count,
+                "slash_load_count": slash_count,
+                "curator_load_count": curator_count,
                 "total_count": total_count,
                 "percentage": percentage,
                 "last_used_at": skill.get("last_used_at"),
@@ -599,6 +1016,9 @@ class InsightsEngine:
                 "total_skill_edits": total_skill_edits,
                 "total_skill_actions": total_skill_actions,
                 "distinct_skills_used": len(skill_usage),
+                "task_loads": task_loads,
+                "slash_loads": slash_loads,
+                "curator_inspections": curator_loads,
             },
             "top_skills": top_skills,
         }
@@ -798,6 +1218,30 @@ class InsightsEngine:
                 lines.append(f"  ... and {len(report['tools']) - 15} more tools")
             lines.append("")
 
+        mcp = report.get("mcp", {})
+        mcp_summary = mcp.get("summary", {})
+        if mcp_summary.get("total_calls"):
+            lines.append("  🔌 MCP Usage")
+            lines.append("  " + "─" * 56)
+            lines.append(
+                f"  Calls: {mcp_summary.get('total_calls', 0):,}  "
+                f"Servers: {mcp_summary.get('distinct_servers', 0)}  "
+                f"Tools: {mcp_summary.get('distinct_tools', 0)}  "
+                f"Tracked failures: {mcp_summary.get('failed_calls', 0):,}"
+            )
+            if mcp.get("top_servers"):
+                lines.append("  Top servers: " + ", ".join(
+                    f"{row['server']} ({row['count']})"
+                    for row in mcp["top_servers"][:5]
+                ))
+            if mcp.get("top_tools"):
+                lines.append("  Top MCP tools:")
+                for row in mcp["top_tools"][:5]:
+                    lines.append(
+                        f"    {row['tool'][:34]:<34} {row['count']:>7,}  [{row['server']}]"
+                    )
+            lines.append("")
+
         # Skill usage
         skills = report.get("skills", {})
         top_skills = skills.get("top_skills", [])
@@ -817,6 +1261,66 @@ class InsightsEngine:
                 f"  Distinct skills: {summary.get('distinct_skills_used', 0)}  "
                 f"Loads: {summary.get('total_skill_loads', 0):,}  "
                 f"Edits: {summary.get('total_skill_edits', 0):,}"
+            )
+            if summary.get("slash_loads") or summary.get("curator_inspections"):
+                lines.append(
+                    f"  Task loads: {summary.get('task_loads', 0):,}  "
+                    f"Slash loads: {summary.get('slash_loads', 0):,}  "
+                    f"Curator inspections: {summary.get('curator_inspections', 0):,}"
+                )
+            lines.append("")
+
+        memory = report.get("memory", {})
+        memory_summary = memory.get("summary", {})
+        if any(memory_summary.values()):
+            lines.append("  🧠 Memory Recall")
+            lines.append("  " + "─" * 56)
+            lines.append(
+                f"  Attempts: {memory_summary.get('recall_attempts', 0):,}  "
+                f"Hits: {memory_summary.get('recall_hits', 0):,}  "
+                f"Hit rate: {memory_summary.get('hit_rate', 0.0):.1f}%  "
+                f"Injections: {memory_summary.get('context_injections', 0):,}"
+            )
+            if memory_summary.get("writes") or memory_summary.get("explicit_calls"):
+                lines.append(
+                    f"  Writes: {memory_summary.get('writes', 0):,}  "
+                    f"Explicit memory calls: {memory_summary.get('explicit_calls', 0):,}"
+                )
+            for row in memory.get("top_providers", [])[:5]:
+                lines.append(
+                    f"    {row['provider'][:24]:<24} attempts={row['attempts']:<5,} "
+                    f"hits={row['hits']:<5,} injected={row['injections']:<5,}"
+                )
+            lines.append("")
+
+        experience = report.get("experience", {})
+        experience_summary = experience.get("summary", {})
+        if any(experience_summary.values()):
+            lines.append("  🧭 Work Experience")
+            lines.append("  " + "─" * 56)
+            lines.append(
+                f"  Retrievals: {experience_summary.get('retrieval_attempts', 0):,}  "
+                f"With matches: {experience_summary.get('attempts_with_matches', 0):,}  "
+                f"Lessons returned: {experience_summary.get('lessons_returned', 0):,}"
+            )
+            lines.append(
+                f"  Context injections: {experience_summary.get('context_injections', 0):,}  "
+                f"Lessons injected: {experience_summary.get('lessons_injected', 0):,}"
+            )
+            if experience.get("top_lessons"):
+                lines.append("  Top recalled lessons:")
+                for row in experience["top_lessons"][:5]:
+                    lines.append(
+                        f"    {row['item_id'][:36]:<36} {row['recall_count']:>7,}"
+                    )
+            lines.append("  Recall is diagnostic; it does not prove application or benefit.")
+            lines.append("")
+
+        tracking_started = report.get("usage_tracking_started_at")
+        if tracking_started:
+            lines.append(
+                "  Detailed source/recall tracking since "
+                + datetime.fromtimestamp(tracking_started).strftime("%b %d, %Y %H:%M")
             )
             lines.append("")
 
@@ -903,6 +1407,17 @@ class InsightsEngine:
                 lines.append(f"  {t['tool']} — {t['count']:,} calls ({t['percentage']:.1f}%)")
             lines.append("")
 
+        mcp = report.get("mcp", {})
+        if mcp.get("summary", {}).get("total_calls"):
+            ms = mcp["summary"]
+            lines.append(
+                f"**🔌 MCP:** {ms['total_calls']:,} calls across "
+                f"{ms['distinct_servers']} servers / {ms['distinct_tools']} tools"
+            )
+            for row in mcp.get("top_servers", [])[:3]:
+                lines.append(f"  {row['server']} — {row['count']:,} calls")
+            lines.append("")
+
         skills = report.get("skills", {})
         if skills.get("top_skills"):
             lines.append("**🧠 Top Skills:**")
@@ -913,6 +1428,25 @@ class InsightsEngine:
                 lines.append(
                     f"  {skill['skill']} — {skill['view_count']:,} loads, {skill['manage_count']:,} edits{suffix}"
                 )
+            lines.append("")
+
+        memory = report.get("memory", {})
+        if any(memory.get("summary", {}).values()):
+            ms = memory["summary"]
+            lines.append(
+                f"**🧠 Memory:** {ms['recall_hits']:,}/{ms['recall_attempts']:,} "
+                f"recall hits ({ms['hit_rate']:.1f}%), {ms['context_injections']:,} injections"
+            )
+            lines.append("")
+
+        experience = report.get("experience", {})
+        if any(experience.get("summary", {}).values()):
+            es = experience["summary"]
+            lines.append(
+                f"**🧭 Work Experience:** {es['retrieval_attempts']:,} retrievals, "
+                f"{es['lessons_returned']:,} lessons returned, "
+                f"{es['context_injections']:,} injections"
+            )
             lines.append("")
 
         # Activity summary

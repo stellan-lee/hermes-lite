@@ -7261,7 +7261,10 @@ class GatewayRunner:
                             )
                     user_instruction = event.get_command_args().strip()
                     msg = build_skill_invocation_message(
-                        cmd_key, user_instruction, task_id=_quick_key
+                        cmd_key,
+                        user_instruction,
+                        task_id=_quick_key,
+                        usage_db=getattr(self, "_session_db", None),
                     )
                     if msg:
                         event.text = msg

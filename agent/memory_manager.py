@@ -319,6 +319,7 @@ class MemoryManager:
         self._providers: List[MemoryProvider] = []
         self._tool_to_provider: Dict[str, MemoryProvider] = {}
         self._has_external: bool = False  # True once a non-builtin provider is added
+        self._prefetch_stats: List[Dict[str, Any]] = []
 
     # -- Registration --------------------------------------------------------
 
@@ -380,6 +381,21 @@ class MemoryManager:
                 return p
         return None
 
+    def provider_name_for_tool(self, tool_name: str) -> Optional[str]:
+        """Return exact provider provenance for a memory tool."""
+        provider = self._tool_to_provider.get(tool_name)
+        return provider.name if provider is not None else None
+
+    def reset_prefetch_stats(self) -> None:
+        """Start a fresh per-turn prefetch telemetry window."""
+        self._prefetch_stats = []
+
+    def consume_prefetch_stats(self) -> List[Dict[str, Any]]:
+        """Return and clear safe per-provider prefetch metadata."""
+        stats = list(self._prefetch_stats)
+        self._prefetch_stats = []
+        return stats
+
     # -- System prompt -------------------------------------------------------
 
     def build_system_prompt(self) -> str:
@@ -415,6 +431,12 @@ class MemoryManager:
             try:
                 result = provider.prefetch(query, session_id=session_id)
                 if result and result.strip():
+                    self._prefetch_stats.append({
+                        "provider": provider.name,
+                        "hit": True,
+                        "failed": False,
+                        "result_len": len(result),
+                    })
                     logger.debug(
                         "Memory provider '%s' prefetch hit query_hash=%s session_hash=%s result_len=%d",
                         provider.name,
@@ -424,6 +446,12 @@ class MemoryManager:
                     )
                     parts.append(result)
                 else:
+                    self._prefetch_stats.append({
+                        "provider": provider.name,
+                        "hit": False,
+                        "failed": False,
+                        "result_len": 0,
+                    })
                     logger.debug(
                         "Memory provider '%s' prefetch miss query_hash=%s session_present=%s",
                         provider.name,
@@ -431,6 +459,12 @@ class MemoryManager:
                         bool(session_id),
                     )
             except Exception as e:
+                self._prefetch_stats.append({
+                    "provider": provider.name,
+                    "hit": False,
+                    "failed": True,
+                    "result_len": 0,
+                })
                 logger.debug(
                     "Memory provider '%s' prefetch failed (non-fatal): %s",
                     provider.name, type(e).__name__,

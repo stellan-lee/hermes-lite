@@ -836,6 +836,7 @@ def run_conversation(
     # injected skill content that bloats / breaks provider queries.
     _ext_prefetch_cache = ""
     if agent._memory_manager:
+        agent._memory_manager.reset_prefetch_stats()
         try:
             _raw_query = (
                 original_user_message
@@ -913,6 +914,84 @@ def run_conversation(
                         _ext_prefetch_cache = _merged_single.text
         except Exception:
             pass
+        try:
+            from agent.usage_events import record_event
+
+            _prefetch_stats = agent._memory_manager.consume_prefetch_stats()
+            _turn_usage_key = f"{agent.session_id or 'session'}:{agent._user_turn_count}"
+            _providers_with_hits: set[str] = set()
+            for _prefetch_index, _prefetch_stat in enumerate(_prefetch_stats):
+                _provider_name = str(_prefetch_stat.get("provider") or "unknown")
+                _attempt_key = (
+                    f"memory:{_turn_usage_key}:{_prefetch_index}:{_provider_name}:attempt"
+                )
+                record_event(
+                    agent,
+                    subsystem="memory",
+                    action="recall_attempt",
+                    item_name=_provider_name,
+                    success=not bool(_prefetch_stat.get("failed")),
+                    value=1,
+                    metadata={"result_chars": int(_prefetch_stat.get("result_len") or 0)},
+                    event_key=_attempt_key,
+                )
+                if _prefetch_stat.get("hit"):
+                    _providers_with_hits.add(_provider_name)
+                    record_event(
+                        agent,
+                        subsystem="memory",
+                        action="recall_hit",
+                        item_name=_provider_name,
+                        success=True,
+                        value=1,
+                        metadata={"result_chars": int(_prefetch_stat.get("result_len") or 0)},
+                        event_key=_attempt_key.replace(":attempt", ":hit"),
+                    )
+            if _ext_prefetch_cache:
+                for _provider_name in sorted(_providers_with_hits):
+                    record_event(
+                        agent,
+                        subsystem="memory",
+                        action="context_injected",
+                        item_name=_provider_name,
+                        success=True,
+                        value=1,
+                        event_key=f"memory:{_turn_usage_key}:{_provider_name}:injected",
+                    )
+        except Exception:
+            pass
+
+    # Built-in MEMORY.md / USER.md are static prompt context rather than a
+    # search provider. Record one injection per turn when either snapshot is
+    # present, without retaining entry text or counts.
+    try:
+        _builtin_memory_present = False
+        if agent._memory_store:
+            if agent._memory_enabled:
+                _builtin_memory_present = bool(
+                    agent._memory_store.format_for_system_prompt("memory")
+                )
+            if agent._user_profile_enabled:
+                _builtin_memory_present = _builtin_memory_present or bool(
+                    agent._memory_store.format_for_system_prompt("user")
+                )
+        if _builtin_memory_present:
+            from agent.usage_events import record_event
+
+            record_event(
+                agent,
+                subsystem="memory",
+                action="context_injected",
+                item_name="builtin",
+                success=True,
+                value=1,
+                event_key=(
+                    f"memory:{agent.session_id or 'session'}:"
+                    f"{agent._user_turn_count}:builtin:injected"
+                ),
+            )
+    except Exception:
+        pass
 
     # Optional opt-in runtime: if api_mode == codex_app_server, hand the
     # turn to the codex app-server subprocess (terminal/file ops/patching
@@ -1315,10 +1394,65 @@ def run_conversation(
                             copy_messages_with_experience_context,
                         )
 
-                        _experience_context = _experience_turn.context_for_request(
-                            provider=getattr(agent, "provider", None),
-                            base_url=getattr(agent, "base_url", None),
+                        _context_details = getattr(
+                            _experience_turn,
+                            "context_for_request_details",
+                            None,
                         )
+                        if callable(_context_details):
+                            (
+                                _experience_context,
+                                _experience_injected_items,
+                            ) = _context_details(
+                                provider=getattr(agent, "provider", None),
+                                base_url=getattr(agent, "base_url", None),
+                            )
+                        else:
+                            # Preserve the small compatibility protocol used
+                            # by custom/test runtime adapters. Production turns
+                            # expose details and therefore report exact counts.
+                            _experience_context = (
+                                _experience_turn.context_for_request(
+                                    provider=getattr(agent, "provider", None),
+                                    base_url=getattr(agent, "base_url", None),
+                                )
+                            )
+                            _experience_injected_items = int(bool(_experience_context))
+                        if _experience_context:
+                            try:
+                                from agent.usage_events import record_event
+
+                                _diagnostic = getattr(
+                                    getattr(_experience_turn, "result", None),
+                                    "diagnostic",
+                                    None,
+                                )
+                                _retrieval_id = str(
+                                    getattr(_diagnostic, "id", "") or "unknown"
+                                )
+                                record_event(
+                                    agent,
+                                    subsystem="experience",
+                                    action="context_injected",
+                                    item_name="work-experience",
+                                    success=True,
+                                    value=_experience_injected_items,
+                                    metadata={
+                                        "mode": str(
+                                            getattr(
+                                                getattr(_experience_turn, "mode", None),
+                                                "value",
+                                                "assist",
+                                            )
+                                        )
+                                    },
+                                    event_key=(
+                                        f"experience:{agent.session_id or 'session'}:"
+                                        f"{_retrieval_id}:injected"
+                                    ),
+                                )
+                            except Exception:
+                                pass
                         request_api_messages = copy_messages_with_experience_context(
                             api_messages,
                             current_user_index=_experience_user_api_index,

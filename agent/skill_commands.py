@@ -430,6 +430,7 @@ def build_skill_invocation_message(
     user_instruction: str = "",
     task_id: str | None = None,
     runtime_note: str = "",
+    usage_db: Any = None,
 ) -> Optional[str]:
     """Build the user message content for a skill slash command invocation.
 
@@ -457,6 +458,18 @@ def build_skill_invocation_message(
         bump_use(skill_name)
     except Exception:
         pass  # Non-critical — skill invocation proceeds regardless
+    if usage_db is not None:
+        try:
+            usage_db.record_usage_event(
+                subsystem="skill",
+                action="load",
+                session_id=task_id,
+                source="slash_command",
+                item_name=skill_name,
+                success=True,
+            )
+        except Exception:
+            pass
 
     activation_note = (
         f'[IMPORTANT: The user has invoked the "{skill_name}" skill, indicating they want '

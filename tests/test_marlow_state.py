@@ -335,6 +335,87 @@ class TestSessionLifecycle:
 # Message storage
 # =========================================================================
 
+class TestUsageEvents:
+    def test_records_metadata_only_events_and_deduplicates_retries(self, db):
+        db.create_session(session_id="s1", source="cli")
+
+        assert db.record_usage_event(
+            subsystem="memory",
+            action="recall_attempt",
+            session_id="s1",
+            item_name="honcho",
+            success=True,
+            value=1,
+            metadata={"result_chars": 42},
+            event_key="memory:s1:1:honcho:attempt",
+            created_at=123.0,
+        ) is True
+        assert db.record_usage_event(
+            subsystem="memory",
+            action="recall_attempt",
+            session_id="s1",
+            item_name="honcho",
+            success=True,
+            event_key="memory:s1:1:honcho:attempt",
+            created_at=124.0,
+        ) is False
+
+        rows = db.list_usage_events(since=0)
+        assert len(rows) == 1
+        assert rows[0]["source"] == "user_task"
+        assert rows[0]["metadata_json"] == '{"result_chars":42}'
+        assert db.usage_tracking_started_at() == 123.0
+
+    def test_source_filters_support_platform_and_semantic_sources(self, db):
+        db.create_session(session_id="cli-session", source="cli")
+        db.create_session(session_id="telegram-session", source="telegram")
+        db.record_usage_event(
+            subsystem="skill",
+            action="load",
+            session_id="cli-session",
+            source="slash_command",
+            item_name="debugging",
+        )
+        db.record_usage_event(
+            subsystem="tool",
+            action="call",
+            session_id="telegram-session",
+            source="user_task",
+            item_name="web_search",
+        )
+
+        assert [row["item_name"] for row in db.list_usage_events(source="cli")] == [
+            "debugging"
+        ]
+        assert [
+            row["item_name"] for row in db.list_usage_events(source="slash_command")
+        ] == ["debugging"]
+
+    def test_rejects_content_shaped_or_invalid_usage_payloads(self, db):
+        with pytest.raises(ValueError, match="unsupported action"):
+            db.record_usage_event(subsystem="tool", action="prompt", value=1)
+        with pytest.raises(ValueError, match="metadata key"):
+            db.record_usage_event(
+                subsystem="memory",
+                action="recall_hit",
+                metadata={"query": "must not be retained"},
+            )
+        with pytest.raises(TypeError, match="scalar"):
+            db.record_usage_event(
+                subsystem="memory",
+                action="recall_hit",
+                metadata={"mode": {"nested": "payload"}},
+            )
+        with pytest.raises(ValueError, match="non-negative"):
+            db.record_usage_event(subsystem="tool", action="call", value=-1)
+        with pytest.raises(ValueError, match="bounded identifier"):
+            db.record_usage_event(
+                subsystem="skill",
+                action="load",
+                item_name="retain this whole private sentence",
+            )
+
+
 class TestMessageStorage:
     def test_append_and_get_messages(self, db):
         db.create_session(session_id="s1", source="cli")

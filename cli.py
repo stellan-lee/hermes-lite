@@ -8517,7 +8517,10 @@ class MarlowCLI:
             elif base_cmd in skill_commands:
                 user_instruction = cmd_original[len(base_cmd):].strip()
                 msg = build_skill_invocation_message(
-                    base_cmd, user_instruction, task_id=self.session_id
+                    base_cmd,
+                    user_instruction,
+                    task_id=self.session_id,
+                    usage_db=self._session_db,
                 )
                 if msg:
                     skill_name = skill_commands[base_cmd]["name"]

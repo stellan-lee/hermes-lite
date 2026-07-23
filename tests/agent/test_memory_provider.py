@@ -221,6 +221,43 @@ class TestMemoryManager:
         result = mgr.prefetch_all("query")
         assert result == "Has memories"
 
+    def test_prefetch_exposes_metadata_only_hit_miss_and_failure_stats(self):
+        mgr = MemoryManager()
+        hit = FakeMemoryProvider("builtin")
+        hit._prefetch_result = "remembered"
+        failed = FakeMemoryProvider("external")
+        failed.prefetch = MagicMock(side_effect=RuntimeError("private details"))
+        mgr.add_provider(hit)
+        mgr.add_provider(failed)
+
+        assert mgr.prefetch_all("private query", session_id="s1") == "remembered"
+        assert mgr.consume_prefetch_stats() == [
+            {
+                "provider": "builtin",
+                "hit": True,
+                "failed": False,
+                "result_len": 10,
+            },
+            {
+                "provider": "external",
+                "hit": False,
+                "failed": True,
+                "result_len": 0,
+            },
+        ]
+        assert mgr.consume_prefetch_stats() == []
+
+    def test_memory_tool_reports_provider_provenance(self):
+        mgr = MemoryManager()
+        provider = FakeMemoryProvider(
+            "honcho",
+            tools=[{"name": "honcho_search", "parameters": {}}],
+        )
+        mgr.add_provider(provider)
+
+        assert mgr.provider_name_for_tool("honcho_search") == "honcho"
+        assert mgr.provider_name_for_tool("missing") is None
+
     def test_queue_prefetch_all(self):
         mgr = MemoryManager()
         p1 = FakeMemoryProvider("builtin")

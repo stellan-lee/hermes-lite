@@ -414,7 +414,7 @@ def test_agent_created_report_excludes_bundled(skills_home):
     assert "bundled" not in names
 
 
-def test_agent_created_report_derives_activity_from_view_and_patch(skills_home, monkeypatch):
+def test_agent_created_report_deduplicates_view_and_use_for_one_load(skills_home, monkeypatch):
     import tools.skill_usage as skill_usage
 
     skills_dir = skills_home / "skills"
@@ -424,16 +424,18 @@ def test_agent_created_report_derives_activity_from_view_and_patch(skills_home, 
         "2026-04-30T11:00:00+00:00",
         "2026-04-30T12:00:00+00:00",
         "2026-04-30T13:00:00+00:00",
+        "2026-04-30T14:00:00+00:00",
     ])
     monkeypatch.setattr(skill_usage, "_now_iso", lambda: next(timestamps))
 
     skill_usage.mark_agent_created("mine")
     skill_usage.bump_view("mine")
+    skill_usage.bump_use("mine")
     skill_usage.bump_patch("mine")
 
     row = next(r for r in skill_usage.agent_created_report() if r["name"] == "mine")
     assert row["activity_count"] == 2
-    assert row["last_activity_at"] == "2026-04-30T12:00:00+00:00"
+    assert row["last_activity_at"] == "2026-04-30T13:00:00+00:00"
 
 
 # ---------------------------------------------------------------------------
