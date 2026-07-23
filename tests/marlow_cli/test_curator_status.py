@@ -32,6 +32,7 @@ def test_status_uses_last_activity_not_only_last_used(monkeypatch, capsys):
     monkeypatch.setattr(curator_state, "get_interval_hours", lambda: 168)
     monkeypatch.setattr(curator_state, "get_stale_after_days", lambda: 30)
     monkeypatch.setattr(curator_state, "get_archive_after_days", lambda: 90)
+    monkeypatch.setattr(skill_usage, "list_archived_skill_names", lambda: [])
     monkeypatch.setattr(skill_usage, "agent_created_report", lambda: [
         {
             "name": "recently-viewed",
@@ -171,10 +172,23 @@ def test_status_hides_most_active_when_all_zero(curator_status_env):
 def test_status_no_skills_produces_clean_empty_output(curator_status_env):
     env = curator_status_env
     out = _capture_status(env["curator_cli"])
-    assert "no agent-created skills" in out
+    assert "no curator-managed skills" in out
     # None of the ranking sections render
     assert "most active" not in out
     assert "least active" not in out
+
+
+def test_status_counts_archived_skills_outside_live_total(curator_status_env):
+    env = curator_status_env
+    env["make_skill"]("live")
+    env["skill_usage"].mark_agent_created("live")
+    archived = env["skills"] / ".archive" / "old-skill"
+    archived.mkdir(parents=True)
+    (archived / "SKILL.md").write_text("# archived\n", encoding="utf-8")
+
+    out = _capture_status(env["curator_cli"])
+    assert "curator-managed live skills: 1 total" in out
+    assert "archived   1 (recoverable, outside live set)" in out
 
 
 def test_status_marks_missing_last_report_path(monkeypatch, capsys, tmp_path):
@@ -194,6 +208,7 @@ def test_status_marks_missing_last_report_path(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(curator_state, "get_interval_hours", lambda: 168)
     monkeypatch.setattr(curator_state, "get_stale_after_days", lambda: 30)
     monkeypatch.setattr(curator_state, "get_archive_after_days", lambda: 90)
+    monkeypatch.setattr(skill_usage, "list_archived_skill_names", lambda: [])
     monkeypatch.setattr(skill_usage, "agent_created_report", lambda: [])
 
     assert curator_cli._cmd_status(SimpleNamespace()) == 0

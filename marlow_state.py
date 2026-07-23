@@ -29,6 +29,16 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 logger = logging.getLogger(__name__)
 
+_USAGE_ACTIONS = {
+    "skill": {"load", "edit"},
+    "tool": {"call"},
+    "mcp": {"call"},
+    "memory": {"recall_attempt", "recall_hit", "context_injected", "write", "call"},
+    "experience": {"recall_attempt", "recall_hit", "context_injected"},
+}
+_USAGE_METADATA_KEYS = {"mode", "result_chars"}
+_USAGE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,254}$")
+
 
 def workspace_key(row: Dict[str, Any]) -> Optional[str]:
     """Return a session's repo root, falling back to its working directory."""
@@ -43,7 +53,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_marlow_home() / "state.db"
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 COMPRESSION_CONTINUATION = "compression"
 
@@ -307,11 +317,31 @@ CREATE TABLE IF NOT EXISTS compression_locks (
     expires_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS usage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_key TEXT UNIQUE,
+    session_id TEXT,
+    subsystem TEXT NOT NULL,
+    action TEXT NOT NULL,
+    source TEXT NOT NULL,
+    item_name TEXT,
+    parent_name TEXT,
+    success INTEGER,
+    value INTEGER NOT NULL DEFAULT 1,
+    duration_ms INTEGER,
+    metadata_json TEXT,
+    created_at REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
+CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_events_subsystem_action
+    ON usage_events(subsystem, action, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_events_session ON usage_events(session_id, created_at DESC);
 """
 
 # Indexes that reference columns added in later schema versions must be
@@ -1459,6 +1489,189 @@ class SessionDB:
             )
             row = cursor.fetchone()
         return dict(row) if row else None
+
+    # ──────────────────────────────────────────────────────────────────
+    # Usage telemetry
+    # ──────────────────────────────────────────────────────────────────
+
+    def record_usage_event(
+        self,
+        *,
+        subsystem: str,
+        action: str,
+        session_id: Optional[str] = None,
+        source: Optional[str] = None,
+        item_name: Optional[str] = None,
+        parent_name: Optional[str] = None,
+        success: Optional[bool] = None,
+        value: int = 1,
+        duration_ms: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        event_key: Optional[str] = None,
+        created_at: Optional[float] = None,
+    ) -> bool:
+        """Persist one metadata-only usage event.
+
+        This table intentionally forbids arbitrary nested payloads.  Event
+        producers may store only short identifiers and scalar diagnostic
+        metadata; prompts, queries, arguments, results, and recalled content
+        never belong here.  Duplicate ``event_key`` values are ignored so
+        retries cannot inflate counts.
+        """
+        valid_subsystems = set(_USAGE_ACTIONS)
+        valid_sources = {"user_task", "slash_command", "curator", "system"}
+        subsystem = str(subsystem or "").strip().lower()
+        action = str(action or "").strip().lower()
+        if subsystem not in valid_subsystems:
+            raise ValueError(f"unsupported usage subsystem: {subsystem!r}")
+        if action not in _USAGE_ACTIONS[subsystem]:
+            raise ValueError(
+                f"unsupported action {action!r} for usage subsystem {subsystem!r}"
+            )
+        if source is not None:
+            source = str(source).strip().lower()
+            if source not in valid_sources:
+                raise ValueError(f"unsupported usage source: {source!r}")
+
+        def _short(value_: Optional[str], field: str) -> Optional[str]:
+            if value_ is None:
+                return None
+            result = str(value_).strip()
+            if len(result) > 255:
+                raise ValueError(f"{field} exceeds 255 characters")
+            return result or None
+
+        safe_item = _short(item_name, "item_name")
+        safe_parent = _short(parent_name, "parent_name")
+        safe_session = _short(session_id, "session_id")
+        safe_key = _short(event_key, "event_key")
+        for field, identifier in (("item_name", safe_item), ("parent_name", safe_parent)):
+            if identifier is not None and not _USAGE_IDENTIFIER_RE.fullmatch(identifier):
+                raise ValueError(f"{field} must be a bounded identifier")
+        safe_value = int(value)
+        if safe_value < 0:
+            raise ValueError("usage event value must be non-negative")
+        safe_duration = None if duration_ms is None else max(0, int(duration_ms))
+
+        safe_metadata: Dict[str, Any] = {}
+        for key, raw_value in (metadata or {}).items():
+            safe_key_name = str(key).strip()
+            if safe_key_name not in _USAGE_METADATA_KEYS:
+                raise ValueError(f"unsupported usage metadata key: {safe_key_name!r}")
+            if raw_value is not None and not isinstance(raw_value, (bool, int, float, str)):
+                raise TypeError("usage metadata values must be scalar")
+            if isinstance(raw_value, str) and len(raw_value) > 255:
+                raise ValueError("usage metadata strings exceed 255 characters")
+            if safe_key_name == "mode" and raw_value not in {
+                "off",
+                "capture",
+                "shadow",
+                "assist",
+            }:
+                raise ValueError("unsupported usage mode")
+            if safe_key_name == "result_chars" and (
+                isinstance(raw_value, bool)
+                or not isinstance(raw_value, int)
+                or raw_value < 0
+            ):
+                raise ValueError("result_chars must be a non-negative integer")
+            safe_metadata[safe_key_name] = raw_value
+        metadata_json = (
+            json.dumps(safe_metadata, sort_keys=True, separators=(",", ":"))
+            if safe_metadata
+            else None
+        )
+        timestamp = float(created_at if created_at is not None else time.time())
+
+        def _do(conn):
+            resolved_source = source
+            if resolved_source is None and safe_session:
+                row = conn.execute(
+                    "SELECT source FROM sessions WHERE id = ?", (safe_session,)
+                ).fetchone()
+                session_source = row[0] if row is not None else None
+                resolved_source = (
+                    "curator" if session_source == "curator" else "user_task"
+                )
+            resolved_source = resolved_source or "system"
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO usage_events(
+                    event_key, session_id, subsystem, action, source,
+                    item_name, parent_name, success, value, duration_ms,
+                    metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    safe_key,
+                    safe_session,
+                    subsystem,
+                    action,
+                    resolved_source,
+                    safe_item,
+                    safe_parent,
+                    None if success is None else int(bool(success)),
+                    safe_value,
+                    safe_duration,
+                    metadata_json,
+                    timestamp,
+                ),
+            )
+            # Keep telemetry bounded without adding work to every call.  The
+            # first event in each 1,000-write block performs cheap indexed
+            # retention cleanup.
+            if self._write_count and self._write_count % 1000 == 0:
+                cutoff = time.time() - 365 * 86400
+                conn.execute("DELETE FROM usage_events WHERE created_at < ?", (cutoff,))
+                conn.execute(
+                    """
+                    DELETE FROM usage_events
+                    WHERE id NOT IN (
+                        SELECT id FROM usage_events
+                        ORDER BY created_at DESC, id DESC LIMIT 250000
+                    )
+                    """
+                )
+            return cursor.rowcount > 0
+
+        return bool(self._execute_write(_do))
+
+    def list_usage_events(
+        self,
+        *,
+        since: float = 0.0,
+        source: Optional[str] = None,
+        subsystem: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return usage events for Insights without exposing content."""
+        clauses = ["ue.created_at >= ?"]
+        params: List[Any] = [float(since)]
+        if source:
+            if source in {"user_task", "slash_command", "curator", "system"}:
+                clauses.append("ue.source = ?")
+            else:
+                clauses.append("s.source = ?")
+            params.append(source)
+        if subsystem:
+            clauses.append("ue.subsystem = ?")
+            params.append(subsystem)
+        sql = (
+            "SELECT ue.* FROM usage_events ue "
+            "LEFT JOIN sessions s ON s.id = ue.session_id WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY ue.created_at, ue.id"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def usage_tracking_started_at(self) -> Optional[float]:
+        """Return the first durable usage-event timestamp, if any."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MIN(created_at) FROM usage_events"
+            ).fetchone()
+        return None if row is None or row[0] is None else float(row[0])
 
     def resolve_session_id(self, session_id_or_prefix: str) -> Optional[str]:
         """Resolve an exact or uniquely prefixed session ID to the full ID.

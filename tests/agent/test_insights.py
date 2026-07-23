@@ -342,6 +342,90 @@ class TestInsightsPopulated:
         skill_names = [s["skill"] for s in skills["top_skills"]]
         assert "systematic-debugging" not in skill_names
 
+    def test_detailed_usage_sections_and_source_aware_tops(self, populated_db):
+        now = time.time()
+        events = [
+            ("skill", "load", "github-pr-workflow", None, "user_task", "s1", 1, True),
+            ("skill", "load", "github-pr-workflow", None, "curator", "s4", 1, True),
+            ("skill", "load", "github-pr-workflow", None, "slash_command", "s1", 1, True),
+            ("tool", "call", "terminal", None, "user_task", "s3", 1, True),
+            ("mcp", "call", "mcp_github_search", "github", "user_task", "s1", 1, True),
+            ("mcp", "call", "mcp_github_search", "github", "user_task", "s1", 1, False),
+            ("memory", "recall_attempt", "honcho", None, "user_task", "s1", 1, True),
+            ("memory", "recall_hit", "honcho", None, "user_task", "s1", 1, True),
+            ("memory", "context_injected", "honcho", None, "user_task", "s1", 1, True),
+            ("experience", "recall_attempt", "work-experience", None, "user_task", "s1", 1, True),
+            ("experience", "recall_hit", "work-experience", None, "user_task", "s1", 2, True),
+            ("experience", "context_injected", "work-experience", "openai", "user_task", "s1", 1, True),
+        ]
+        for index, (
+            subsystem,
+            action,
+            item_name,
+            parent_name,
+            source,
+            session_id,
+            value,
+            success,
+        ) in enumerate(events):
+            populated_db.record_usage_event(
+                subsystem=subsystem,
+                action=action,
+                item_name=item_name,
+                parent_name=parent_name,
+                source=source,
+                session_id=session_id,
+                value=value,
+                success=success,
+                event_key=f"insights-event-{index}",
+                created_at=now,
+            )
+
+        engine = InsightsEngine(populated_db)
+        report = engine.generate(days=30)
+
+        # The durable event overlaps one historical terminal call and does not
+        # inflate the two calls already present in session history.
+        terminal = next(row for row in report["tools"] if row["tool"] == "terminal")
+        assert terminal["count"] == 2
+
+        assert report["mcp"]["summary"] == {
+            "total_calls": 2,
+            "successful_calls": 1,
+            "failed_calls": 1,
+            "distinct_servers": 1,
+            "distinct_tools": 1,
+        }
+        assert report["mcp"]["top_servers"][0] == {"server": "github", "count": 2}
+
+        memory = report["memory"]["summary"]
+        assert memory["recall_attempts"] == 1
+        assert memory["recall_hits"] == 1
+        assert memory["context_injections"] == 1
+        assert memory["hit_rate"] == 100.0
+
+        experience = report["experience"]["summary"]
+        assert experience["retrieval_attempts"] == 1
+        assert experience["attempts_with_matches"] == 1
+        assert experience["lessons_returned"] == 2
+        assert experience["context_injections"] == 1
+        assert experience["lessons_injected"] == 1
+
+        skills = report["skills"]["summary"]
+        assert skills["task_loads"] == 2
+        assert skills["slash_loads"] == 1
+        assert skills["curator_inspections"] == 1
+
+        terminal_text = engine.format_terminal(report)
+        gateway_text = engine.format_gateway(report)
+        for label in ("MCP Usage", "Memory Recall", "Work Experience"):
+            assert label in terminal_text
+        for label in ("MCP", "Memory", "Work Experience"):
+            assert label in gateway_text
+
+        cli_report = engine.generate(days=30, source="cli")
+        assert cli_report["experience"]["summary"]["retrieval_attempts"] == 1
+
     def test_activity_patterns(self, populated_db):
         engine = InsightsEngine(populated_db)
         report = engine.generate(days=30)

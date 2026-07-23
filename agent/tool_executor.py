@@ -470,6 +470,20 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                 logging.debug(f"Tool {function_name} completed in {tool_duration:.2f}s")
                 logging.debug(f"Tool result ({len(function_result)} chars): {function_result}")
 
+        try:
+            from agent.usage_events import record_tool_usage_event
+
+            record_tool_usage_event(
+                agent,
+                tool_name=name,
+                args=args,
+                tool_call_id=tc.id,
+                failed=(True if r is None else bool(is_error or blocked)),
+                duration_seconds=tool_duration,
+            )
+        except Exception:
+            pass
+
         # Print cute message per tool
         if agent._should_emit_quiet_tool_messages():
             cute_msg = _get_cute_tool_message_impl(name, args, tool_duration, result=function_result)
@@ -895,6 +909,19 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         # Log tool errors to the persistent error log so [error] tags
         # in the UI always have a corresponding detailed entry on disk.
         _is_error_result, _ = _detect_tool_failure(function_name, function_result)
+        try:
+            from agent.usage_events import record_tool_usage_event
+
+            record_tool_usage_event(
+                agent,
+                tool_name=function_name,
+                args=function_args,
+                tool_call_id=tool_call.id,
+                failed=bool(_is_error_result or _execution_blocked),
+                duration_seconds=tool_duration,
+            )
+        except Exception:
+            pass
         if not _execution_blocked:
             function_result = agent._append_guardrail_observation(
                 function_name,

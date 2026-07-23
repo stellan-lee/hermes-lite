@@ -115,14 +115,20 @@ def latest_activity_at(record: Dict[str, Any]) -> Optional[str]:
 
 
 def activity_count(record: Dict[str, Any]) -> int:
-    """Return the total observed activity count across use/view/patch events."""
-    total = 0
+    """Return de-duplicated load/edit activity.
+
+    ``skill_view`` intentionally bumps both ``view_count`` and ``use_count``:
+    it is simultaneously a read and an active prompt load. Summing those two
+    counters made one load look like two activities. Use their maximum, then
+    add patches, so slash-only loads and legacy view-only records still count.
+    """
+    values: Dict[str, int] = {}
     for key in ("use_count", "view_count", "patch_count"):
         try:
-            total += int(record.get(key) or 0)
+            values[key] = int(record.get(key) or 0)
         except (TypeError, ValueError):
-            continue
-    return total
+            values[key] = 0
+    return max(values["use_count"], values["view_count"]) + values["patch_count"]
 
 
 # ---------------------------------------------------------------------------

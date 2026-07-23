@@ -1,5 +1,86 @@
 # Errors
 
+## [ERR-20260722-002] skill-usage-test-timestamp-exhaustion
+
+**Logged**: 2026-07-22T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+A strengthened skill-usage test exhausted its mocked timestamp iterator while
+the report builder backfilled a record.
+
+### Error
+
+```
+StopIteration in tools.skill_usage._empty_record()
+```
+
+### Context
+
+- The test added a separate `bump_use()` call to model one real `skill_view`
+  load, which increments both view and use counters.
+- The iterator covered the four mutations but not the report builder's
+  defensive `_empty_record()` call.
+
+### Suggested Fix
+
+When mocking shared time helpers with iterators, include reads performed by
+normalization/backfill code as well as explicit mutations.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: tests/tools/test_skill_usage.py, tools/skill_usage.py
+
+### Resolution
+
+- **Resolved**: 2026-07-22T00:00:00+08:00
+- **Notes**: Added the fifth timestamp and retained the stronger de-duplication assertion.
+
+---
+
+## [ERR-20260722-001] validation-python-command-recurrence
+
+**Logged**: 2026-07-22T00:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+A validation command again assumed a bare `python` executable was available.
+
+### Error
+
+```
+zsh:1: command not found: python
+```
+
+### Context
+
+- The syntax probe invoked `python -m py_compile` directly.
+- This checkout exposes `python3`; the project test wrapper remains preferred.
+
+### Suggested Fix
+
+Default standalone probes to `python3` and use `scripts/run_tests.sh` for tests.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: scripts/run_tests.sh
+- See Also: ERR-20260720-001, ERR-20260717-002
+
+### Resolution
+
+- **Resolved**: 2026-07-22T00:00:00+08:00
+- **Notes**: Switched subsequent syntax validation to `python3` and the repository test wrapper.
+
+---
+
 ## [ERR-20260719-002] marlow-tools-selector-keyword
 
 **Logged**: 2026-07-19T17:00:00+08:00
@@ -1735,6 +1816,7 @@ after mechanical pruning.
 - **Context:** Reloading repository instructions after an updated `AGENTS.md` was supplied.
 - **Error:** `rules/workflow.md`, `rules/agent-usage.md`, and `rules/task-tracking.md` do not exist in the worktree or the Codex configuration tree.
 - **Resolution:** Continued under the complete workflow and quality requirements stated directly in `AGENTS.md`; no referenced rule content could be loaded.
+- **Recurrence:** Confirmed again on 2026-07-23 while preparing the usage-metrics PR; the inline project instructions remain authoritative.
 - **Status:** Resolved
 
 ## ERR-066: Parallel test wrapper does not accept pytest verbosity flags

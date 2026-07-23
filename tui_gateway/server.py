@@ -5885,7 +5885,10 @@ def _(rid, params: dict) -> dict:
         key = f"/{name}"
         if key in cmds:
             msg = build_skill_invocation_message(
-                key, arg, task_id=session.get("session_key", "") if session else ""
+                key,
+                arg,
+                task_id=session.get("session_key", "") if session else "",
+                usage_db=_get_db(),
             )
             if msg:
                 return _ok(

@@ -91,16 +91,30 @@ class ExperienceRuntimeTurn:
     ) -> str:
         """Return provider-authorized context, or an empty fail-closed result."""
 
+        context, _selected_count = self.context_for_request_details(
+            provider=provider,
+            base_url=base_url,
+        )
+        return context
+
+    def context_for_request_details(
+        self,
+        *,
+        provider: str | None,
+        base_url: str | None,
+    ) -> tuple[str, int]:
+        """Return authorized context and the exact number of disclosed items."""
+
         if self.mode is not ExperienceMode.ASSIST:
-            return ""
+            return "", 0
         if not bool(getattr(self.policy, "recall_allowed", False)) or not bool(
             getattr(self.policy, "injection_allowed", False)
         ):
-            return ""
+            return "", 0
         identity = provider_identity(provider=provider, base_url=base_url)
         disclosures = tuple(getattr(self.result, "disclosures", ()) or ())
         if identity is None or not disclosures:
-            return ""
+            return "", 0
 
         from agent.experience.safety import is_egress_allowed
 
@@ -122,7 +136,7 @@ class ExperienceRuntimeTurn:
             if (item.item_id, item.item_revision) in allowed
         )[: self.max_primary_lessons]
         if not selected:
-            return ""
+            return "", 0
         selected_result = replace(self.result, items=selected)
         # The concrete service performs a fresh DB-backed authorization check
         # using the identity of this exact request. Lightweight test/dry-run
@@ -130,12 +144,16 @@ class ExperienceRuntimeTurn:
         from agent.experience.service import ExperienceService
 
         if isinstance(self.service, ExperienceService):
-            return self.service.format_context(
+            context = self.service.format_context(
                 selected_result,
                 provider_trust_domain=identity.trust_domain,
                 provider_is_local=identity.is_local,
             )
-        return self.service.format_context(selected_result)
+        else:
+            context = self.service.format_context(selected_result)
+        if not context:
+            return "", 0
+        return context, len(selected)
 
 
 def normalize_turn_origin(value: TurnOrigin | str | None) -> TurnOrigin:
@@ -323,6 +341,43 @@ def prepare_experience_turn(
                 work_id=work_id,
                 require_injection_allowed=effective_mode is ExperienceMode.ASSIST,
             )
+
+        # Keep source attribution in the shared usage stream while retaining
+        # the existing experience tables as the detailed diagnostic source.
+        # No query text, paths, lesson content, or provider URL is persisted.
+        try:
+            from agent.usage_events import record_event
+
+            diagnostic = getattr(result, "diagnostic", None)
+            retrieval_id = str(getattr(diagnostic, "id", "") or turn_id)
+            result_count = len(tuple(getattr(result, "items", ()) or ()))
+            event_prefix = (
+                f"experience:{getattr(agent, 'session_id', None) or 'session'}:"
+                f"{retrieval_id}"
+            )
+            record_event(
+                agent,
+                subsystem="experience",
+                action="recall_attempt",
+                item_name="work-experience",
+                success=True,
+                value=1,
+                metadata={"mode": effective_mode.value},
+                event_key=f"{event_prefix}:attempt",
+            )
+            if result_count:
+                record_event(
+                    agent,
+                    subsystem="experience",
+                    action="recall_hit",
+                    item_name="work-experience",
+                    success=True,
+                    value=result_count,
+                    metadata={"mode": effective_mode.value},
+                    event_key=f"{event_prefix}:hit",
+                )
+        except Exception:
+            pass
 
         # Ranking is frozen for retry stability. Formatting and declarations
         # reopen this explicit DB path briefly to recheck current governance.

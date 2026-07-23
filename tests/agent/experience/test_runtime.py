@@ -196,6 +196,41 @@ def test_fallback_provider_rechecks_egress_before_injection() -> None:
     )
 
 
+def test_context_details_reports_only_items_actually_disclosed() -> None:
+    matches = tuple(
+        SimpleNamespace(item_id=f"lesson-{index}", item_revision=1)
+        for index in range(1, 4)
+    )
+    disclosures = tuple(
+        SimpleNamespace(
+            item_id=match.item_id,
+            item_revision=1,
+            sensitivity="normal",
+            egress_policy="explicit_any_provider",
+            producer_trust_domain=None,
+        )
+        for match in matches
+    )
+    turn = ExperienceRuntimeTurn(
+        mode=ExperienceMode.ASSIST,
+        policy=SimpleNamespace(
+            recall_allowed=True,
+            injection_allowed=True,
+            max_egress_policy="explicit_any_provider",
+        ),
+        service=_FormattingService(),
+        result=_Result(items=matches, disclosures=disclosures),
+        max_primary_lessons=2,
+    )
+
+    context, count = turn.context_for_request_details(
+        provider="any",
+        base_url="https://any.example",
+    )
+    assert context == "lesson-1,lesson-2"
+    assert count == 2
+
+
 def test_shadow_turn_never_formats_or_injects() -> None:
     service = _FormattingService()
     turn = ExperienceRuntimeTurn(

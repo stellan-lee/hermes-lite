@@ -79,8 +79,9 @@ def _cmd_status(args) -> int:
     print(f"  archive after:  {curator.get_archive_after_days()}d unused")
 
     rows = skill_usage.agent_created_report()
-    if not rows:
-        print("\nno agent-created skills")
+    archived_names = skill_usage.list_archived_skill_names()
+    if not rows and not archived_names:
+        print("\nno curator-managed skills")
         return 0
 
     by_state = {"active": [], "stale": [], "archived": []}
@@ -91,10 +92,11 @@ def _cmd_status(args) -> int:
         if r.get("pinned"):
             pinned.append(r["name"])
 
-    print(f"\nagent-created skills: {len(rows)} total")
-    for state_name in ("active", "stale", "archived"):
+    print(f"\ncurator-managed live skills: {len(rows)} total")
+    for state_name in ("active", "stale"):
         bucket = by_state.get(state_name, [])
         print(f"  {state_name:10s} {len(bucket)}")
+    print(f"  {'archived':10s} {len(archived_names)} (recoverable, outside live set)")
 
     if pinned:
         print(f"\npinned ({len(pinned)}): {', '.join(pinned)}")
@@ -119,8 +121,8 @@ def _cmd_status(args) -> int:
                 f"last_activity={last}"
             )
 
-    # Show top 5 most-active and least-active skills by activity_count
-    # (use + view + patch). This is a different signal from
+    # Show top 5 most-active and least-active skills by de-duplicated
+    # activity_count (max(use, view) + patch). This is a different signal from
     # least-recently-active: activity_count reflects frequency,
     # last_activity_at reflects recency. A skill touched 30 times a year
     # ago is high-frequency but stale; a skill touched once yesterday is
