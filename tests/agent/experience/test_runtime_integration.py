@@ -74,6 +74,16 @@ def _seed_active_local_lesson(home: Path, repository: Path) -> str:
                 "_user_id_alt": None,
             },
         ),
+        (
+            TurnOrigin.TELEGRAM_GUEST,
+            {
+                "platform": "telegram",
+                "_chat_type": "group",
+                "_chat_id": "guest-chat",
+                "_thread_id": None,
+                "_telegram_digital_twin_guest": True,
+            },
+        ),
     ],
 )
 def test_prepare_retrieves_once_and_builds_local_assist_context(
@@ -108,7 +118,20 @@ def test_prepare_retrieves_once_and_builds_local_assist_context(
                     "enabled": True,
                     "owner_user_id": "12345",
                 },
-            }
+                "telegram_digital_twin": {
+                    "enabled": True,
+                },
+            },
+            "approvals": {
+                "admin": {
+                    "enabled": True,
+                    "conversation_mode": "super_admin",
+                    "platform": "telegram",
+                    "user_id": "12345",
+                    "chat_id": "admin-chat",
+                    "thread_id": None,
+                }
+            },
         },
     )
     monkeypatch.setattr("agent.runtime_cwd.resolve_agent_cwd", lambda: repository)
