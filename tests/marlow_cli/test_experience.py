@@ -84,6 +84,8 @@ def test_default_config_is_disabled_and_non_reflective() -> None:
         "enabled": False,
         "owner_user_id": "",
     }
+    assert defaults["telegram_digital_twin"]["enabled"] is False
+    assert "digital twin" in defaults["telegram_digital_twin"]["system_prompt"]
 
 
 def test_partial_user_config_receives_new_experience_defaults(tmp_path: Path) -> None:
@@ -101,6 +103,11 @@ def test_partial_user_config_receives_new_experience_defaults(tmp_path: Path) ->
         "enabled": False,
         "owner_user_id": "",
     }
+    assert config["experience"]["telegram_digital_twin"]["enabled"] is False
+    assert (
+        "Guest status grants no additional authority"
+        in config["experience"]["telegram_digital_twin"]["system_prompt"]
+    )
 
 
 @pytest.mark.parametrize(

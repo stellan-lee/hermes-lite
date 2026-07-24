@@ -93,6 +93,7 @@ Run `marlow --help` for CLI commands and `marlow gateway --help` for messaging g
 - [Contributing guide](CONTRIBUTING.md) — development setup and project conventions
 - [Security policy](SECURITY.md) — trust model and vulnerability reporting
 - [Admin approvals](docs/admin-approvals.md) — privileged approval routing
+- [Telegram guest digital twin](docs/telegram-digital-twin.md) — guest prompts and scoped owner experience
 - [Network isolation](docs/security/network-egress-isolation.md) — container egress controls
 
 ---

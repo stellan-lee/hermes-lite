@@ -101,6 +101,14 @@ skills:
   template_vars: true
   inline_shell: false
 
+experience:
+  mode: off  # off | capture | shadow | assist
+  telegram_digital_twin:
+    enabled: false
+    system_prompt: >-
+      Represent the profile owner's established working style for guests.
+      Be transparent that you are an AI assistant, not the human.
+
 checkpoints:
   enabled: false
   max_snapshots: 20

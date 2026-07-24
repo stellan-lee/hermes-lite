@@ -8,6 +8,7 @@ from agent.experience.runtime import (
     ExperienceRuntimeTurn,
     TurnOrigin,
     _effective_mode,
+    _telegram_guest_recall_authorized,
     _telegram_recall_authorized,
     copy_messages_with_experience_context,
     normalize_experience_mode,
@@ -27,13 +28,19 @@ class _FormattingService:
         return ",".join(item.item_id for item in result.items)
 
 
-def test_only_classic_cli_and_telegram_origins_are_experience_eligible() -> None:
+def test_only_explicit_owner_and_guest_origins_are_experience_eligible() -> None:
     assert TurnOrigin.CLASSIC_CLI.experience_eligible is True
     assert TurnOrigin.TELEGRAM.experience_eligible is True
+    assert TurnOrigin.TELEGRAM_GUEST.experience_eligible is True
     assert all(
         not origin.experience_eligible
         for origin in TurnOrigin
-        if origin not in {TurnOrigin.CLASSIC_CLI, TurnOrigin.TELEGRAM}
+        if origin
+        not in {
+            TurnOrigin.CLASSIC_CLI,
+            TurnOrigin.TELEGRAM,
+            TurnOrigin.TELEGRAM_GUEST,
+        }
     )
     assert normalize_turn_origin("not-a-runtime") is TurnOrigin.UNKNOWN
 
@@ -64,6 +71,95 @@ def test_telegram_recall_requires_exact_configured_owner_dm() -> None:
     assert _telegram_recall_authorized(
         owner_dm,
         {"telegram_recall": {"enabled": False, "owner_user_id": "12345"}},
+    ) is False
+
+
+def test_telegram_guest_recall_requires_non_admin_destination_and_gateway_role() -> None:
+    config = {
+        "experience": {
+            "telegram_digital_twin": {
+                "enabled": True,
+            }
+        },
+        "approvals": {
+            "admin": {
+                "enabled": True,
+                "conversation_mode": "super_admin",
+                "platform": "telegram",
+                "user_id": "admin-user",
+                "chat_id": "admin-chat",
+                "thread_id": "admin-topic",
+            }
+        },
+    }
+    guest = SimpleNamespace(
+        platform="telegram",
+        _chat_id="guest-chat",
+        _thread_id=None,
+        _user_id="guest-user",
+        _user_id_alt=None,
+        _telegram_digital_twin_guest=True,
+    )
+
+    assert _telegram_guest_recall_authorized(guest, config) is True
+    assert _telegram_guest_recall_authorized(
+        SimpleNamespace(
+            **{
+                **guest.__dict__,
+                "_chat_id": "admin-chat",
+                "_thread_id": "sibling-topic",
+            }
+        ),
+        config,
+    ) is True
+    assert _telegram_guest_recall_authorized(
+        SimpleNamespace(
+            **{
+                **guest.__dict__,
+                "_chat_id": "admin-chat",
+                "_thread_id": "admin-topic",
+                "_user_id": "admin-user",
+            }
+        ),
+        config,
+    ) is False
+    assert _telegram_guest_recall_authorized(
+        SimpleNamespace(**{**guest.__dict__, "_telegram_digital_twin_guest": False}),
+        config,
+    ) is False
+    assert _telegram_guest_recall_authorized(
+        guest,
+        {
+            **config,
+            "experience": {
+                "telegram_digital_twin": {
+                    "enabled": False,
+                }
+            },
+        },
+    ) is False
+    assert _telegram_guest_recall_authorized(
+        SimpleNamespace(
+            **{
+                **guest.__dict__,
+                "_chat_id": "admin-chat",
+                "_thread_id": "sibling-topic",
+                "_user_id": "admin-user",
+            }
+        ),
+        {
+            **config,
+            "approvals": {
+                "admin": {
+                    "enabled": True,
+                    "conversation_mode": "super_admin",
+                    "platform": "telegram",
+                    "user_id": "admin-user",
+                    "chat_id": "admin-chat",
+                    "thread_id": None,
+                }
+            },
+        },
     ) is False
 
 

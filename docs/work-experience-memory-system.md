@@ -1,6 +1,7 @@
 # Work Experience Memory for Marlow
 
-Status: Retrieval-first validation MVP implemented on 2026-07-18. Automatic
+Status: Retrieval-first validation MVP implemented on 2026-07-18, with the
+Telegram guest digital-twin extension added on 2026-07-24. Automatic
 retrospective capture and closed-loop learning remain deferred.
 
 ## Implementation boundary (authoritative)
@@ -19,11 +20,13 @@ Implemented now:
   consent filters before lesson text is returned;
 - explainable structured/FTS5 recall with realistic term-overlap matching,
   shadow diagnostics, and bounded assist-mode injection;
-- classic foreground CLI and explicitly owner-bound Telegram DM integration,
-  using a wire-only copy of the current user turn;
+- classic foreground CLI, explicitly owner-bound Telegram DM integration, and
+  opt-in guest recall for authorized non-super-admin Telegram sources, using a
+  wire-only copy of the current user turn;
 - project-scoped MCP recall and lesson management through `marlow mcp serve`,
   with explicit tool annotations and external-boundary content filtering;
-  unbound and unsupported automatic-injection frontends fail closed;
+  unbound, unconfigured, and unsupported automatic-injection frontends fail
+  closed;
 - CLI governance through `marlow experience ...`; and
 - redaction and echo isolation for persistence, provider fallbacks, prompt
   caching, hooks, debug dumps, model reasoning state, tool-call arguments,
@@ -326,10 +329,13 @@ Profile isolation is already available through `get_marlow_home()`
 (`marlow_constants.py:43-100`). This is a storage boundary, but not a complete
 authorization boundary: one gateway profile may serve multiple users or group
 threads. Automatic recall therefore remains fail-closed for general gateways.
-Telegram is the narrow exception: a direct-message turn may bind one exact,
+Telegram is the narrow exception. A direct-message turn may bind one exact,
 locally configured Telegram user ID to the existing `local-owner` principal.
-Groups, channels, anonymous senders, and other gateway identities remain
-ineligible.
+Separately, an opt-in digital-twin mode may expose scoped, approved experience
+to already-authorized Telegram sources outside the exact configured
+super-admin conversation. That guest path independently revalidates its role
+before opening the store and removes personal-memory and cross-session-search
+surfaces. Other gateway identities remain ineligible.
 
 ## 3. Problem definition
 
@@ -1319,6 +1325,9 @@ experience:
   telegram_recall:
     enabled: false             # direct messages only
     owner_user_id: ""          # exact Telegram user ID bound to local-owner
+  telegram_digital_twin:
+    enabled: false             # authorized non-super-admin Telegram sources
+    system_prompt: ""          # global guest role; channel prompt is additive
 ```
 
 Per-project capture, recall, injection, reflection, and provider-trust consent
@@ -1329,7 +1338,12 @@ recall and injection. Telegram recall additionally requires both fields under
 to Work Experience. The Telegram turn supplies the untouched inbound text as
 the retrieval query, while attachment expansion and synthetic gateway notes are
 excluded. These config keys are additive; no `_config_version` migration is
-needed.
+needed. When `telegram_digital_twin.enabled` is true and a valid Telegram
+`approvals.admin` super-admin conversation is configured, every other
+authorized Telegram source may use the same scoped retrieval pipeline.
+Guest recall remains relevance-bounded and subject to project and provider
+egress policy; guest turns never capture or govern experience. See
+`docs/telegram-digital-twin.md` for prompt ordering and destination matching.
 
 ### 10.5 Database migration and retention
 
@@ -1486,7 +1500,7 @@ behavior.
 | Expanded attachments enter task signatures | Typed raw/synthetic turn input; assist disabled where a frontend cannot supply raw request text |
 | Local storage is mistaken for local processing | Separate capture/recall/injection/reflection consent and item-level provider-egress policy |
 | Similar text or a model declaration is mistaken for influence | Separate retrieval/declaration/observation events; paired behavioral outcomes remain primary |
-| Cross-project/user leakage | Hard profile-owner/repository/project filters before ranking; Telegram recall requires an exact local-owner DM binding and other gateways remain disabled |
+| Cross-project/user leakage | Hard profile-owner/repository/project filters before ranking; owner DM recall requires an exact binding; opt-in guest recall excludes the exact Telegram super-admin source and strips personal memory/session search; other gateways remain disabled |
 | Reflection delays responses or leaks data | Disabled in MVP0; later bounded synchronous call with immediate consent/egress re-check and fail-open timeout |
 | Existing memory systems conflict | No automatic mirroring; distinct context tag, precedence, config, and governance |
 | Purge is overstated | Distinguish logical retraction from best-effort physical purge and disclose backups/filesystem/provider copies |
@@ -1501,9 +1515,9 @@ behavior.
    immediately, or still require approval in the MVP?
 3. What bounded, observable signal can show that a recalled lesson changed
    behavior without introducing a mandatory self-report ritual?
-4. How should the single `local-owner` Telegram DM binding evolve into stable
-   multi-user gateway principals without leaking across direct messages,
-   channels, and group threads?
+4. How should opt-in `local-owner` guest recall evolve into per-audience sharing
+   policies or stable multi-user principals without leaking across direct
+   messages, channels, and group threads?
 5. What user-approved portable repository identity should support path moves,
    cross-clone sharing, forks, and intentionally related repositories beyond
    the MVP's profile-local Git-common-dir key?

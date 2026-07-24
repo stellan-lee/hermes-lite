@@ -37,6 +37,7 @@ class TurnOrigin(StrEnum):
 
     CLASSIC_CLI = "classic_cli"
     TELEGRAM = "telegram"
+    TELEGRAM_GUEST = "telegram_guest"
     CLI_BACKGROUND = "cli_background"
     TUI = "tui"
     GATEWAY = "gateway"
@@ -49,7 +50,11 @@ class TurnOrigin(StrEnum):
     def experience_eligible(self) -> bool:
         """Whether the MVP may read experience for this origin."""
 
-        return self in {TurnOrigin.CLASSIC_CLI, TurnOrigin.TELEGRAM}
+        return self in {
+            TurnOrigin.CLASSIC_CLI,
+            TurnOrigin.TELEGRAM,
+            TurnOrigin.TELEGRAM_GUEST,
+        }
 
 
 class ExperienceMode(StrEnum):
@@ -260,12 +265,20 @@ def prepare_experience_turn(
     try:
         from marlow_cli.config import load_config
 
-        raw_config = load_config().get("experience", {})
+        loaded_config = load_config()
+        if not isinstance(loaded_config, Mapping):
+            return None
+        raw_config = loaded_config.get("experience", {})
         if not isinstance(raw_config, Mapping):
             return None
         if origin is TurnOrigin.TELEGRAM and not _telegram_recall_authorized(
             agent,
             raw_config,
+        ):
+            return None
+        if (
+            origin is TurnOrigin.TELEGRAM_GUEST
+            and not _telegram_guest_recall_authorized(agent, loaded_config)
         ):
             return None
         global_mode = normalize_experience_mode(raw_config.get("mode", "off"))
@@ -434,6 +447,85 @@ def _telegram_recall_authorized(
         if value is not None and str(value).strip()
     }
     return owner_user_id in caller_ids
+
+
+def _telegram_guest_recall_authorized(
+    agent: Any,
+    config: Mapping[str, Any],
+) -> bool:
+    """Authorize one non-admin Telegram destination as a guest digital twin.
+
+    The gateway classifies the turn before agent creation. This runtime check
+    independently validates the local configuration and destination before
+    opening the Work Experience store, so prompt composition cannot become an
+    authorization mechanism.
+    """
+
+    experience_config = config.get("experience", {})
+    if not isinstance(experience_config, Mapping):
+        return False
+    guest_config = experience_config.get("telegram_digital_twin", {})
+    if not isinstance(guest_config, Mapping):
+        return False
+    if guest_config.get("enabled") is not True:
+        return False
+
+    approvals_config = config.get("approvals", {})
+    if not isinstance(approvals_config, Mapping):
+        return False
+    admin_config = approvals_config.get("admin", {})
+    if not isinstance(admin_config, Mapping):
+        return False
+    if admin_config.get("enabled") is not True:
+        return False
+    if (
+        str(admin_config.get("conversation_mode") or "")
+        .strip()
+        .casefold()
+        != "super_admin"
+    ):
+        return False
+    if str(admin_config.get("platform") or "").strip().casefold() != "telegram":
+        return False
+    admin_user_id = str(admin_config.get("user_id") or "").strip()
+    if not admin_user_id:
+        return False
+    admin_chat_id = str(admin_config.get("chat_id") or "").strip()
+    if not admin_chat_id:
+        return False
+
+    if str(getattr(agent, "platform", "") or "").strip().casefold() != "telegram":
+        return False
+    if getattr(agent, "_telegram_digital_twin_guest", False) is not True:
+        return False
+    chat_id = str(getattr(agent, "_chat_id", "") or "").strip()
+    if not chat_id:
+        return False
+
+    admin_thread_value = admin_config.get("thread_id")
+    admin_thread_id = (
+        str(admin_thread_value).strip()
+        if admin_thread_value not in (None, "")
+        else None
+    )
+    thread_value = getattr(agent, "_thread_id", None)
+    thread_id = (
+        str(thread_value).strip() if thread_value not in (None, "") else None
+    )
+    caller_ids = {
+        str(value).strip()
+        for value in (
+            getattr(agent, "_user_id", None),
+            getattr(agent, "_user_id_alt", None),
+        )
+        if value is not None and str(value).strip()
+    }
+    is_super_admin_source = (
+        admin_user_id in caller_ids
+        and chat_id == admin_chat_id
+        and (admin_thread_id is None or thread_id == admin_thread_id)
+    )
+    return not is_super_admin_source
 
 
 def _effective_mode(

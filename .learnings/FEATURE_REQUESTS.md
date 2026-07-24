@@ -118,3 +118,48 @@ Reuse the exact `approvals.admin` identity and destination, add an explicit `sup
   background-task propagation, local-only configuration, and focused tests.
 
 ---
+
+## [FEAT-20260724-001] telegram-guest-digital-twin
+
+**Logged**: 2026-07-24T09:00:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Requested Capability
+
+Make every non-super-admin Telegram source a guest-facing digital twin that
+combines dedicated system prompts with the administrator's applicable Work
+Experience.
+
+### User Context
+
+Guests should receive the administrator's established working knowledge and
+style without gaining personal memory, private session history, secrets, or
+administrator permissions.
+
+### Complexity Estimate
+
+complex
+
+### Suggested Implementation
+
+Classify authorized Telegram sources against the exact configured super-admin
+conversation, compose a global guest prompt with existing channel prompts, add
+an explicit guest Work Experience origin with independent runtime
+authorization, and strip personal-memory surfaces from guest agents.
+
+### Metadata
+
+- Frequency: first_time
+- Related Features: administrator-routed approvals, Telegram channel prompts,
+  Work Experience
+
+### Resolution
+
+- **Resolved**: 2026-07-24T09:12:00+08:00
+- **Notes**: Added Telegram guest classification, prompt composition, scoped
+  experience recall, memory/session-search isolation, documentation, and
+  focused regression coverage.
+
+---
